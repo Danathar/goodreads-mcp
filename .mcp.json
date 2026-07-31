@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "goodreads": {
+      "command": "uv",
+      "args": ["--directory", "/home/dbaggett/github/apps/goodreads-mcp", "run", "goodreads-mcp"]
+    }
+  }
+}
