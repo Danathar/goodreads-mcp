@@ -20,7 +20,8 @@ get_book routes around it via the .xml path. The client raises WAFChallenge
 if it ever gets a challenge body so failures are obvious, not silent.
 
 get_reviews uses Goodreads' AppSync GraphQL endpoint; the client resolves the
-public api key from the web bundle at runtime (see client.graphql_config).
+public API key from page-level Next data and the endpoint from the web bundle
+at runtime (see client.graphql_config).
 """
 
 from __future__ import annotations
@@ -29,11 +30,20 @@ import html as html_mod
 import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import unquote
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from .client import BASE, GoodreadsClient
 from .config import load_user_id
+
+_READ_ONLY = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=True,
+)
 
 SERVER_INSTRUCTIONS = """\
 This server returns public Goodreads data (books, reviews, shelves) for research.
@@ -392,7 +402,7 @@ def _node_summary(node: dict[str, Any]) -> dict[str, Any]:
 # ===================================================================== READ
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def search_books(query: str, max_results: int = 10) -> list[dict[str, Any]]:
     """Search Goodreads for books by title/author/ISBN.
 
@@ -411,7 +421,7 @@ def search_books(query: str, max_results: int = 10) -> list[dict[str, Any]]:
                 "ratings_count": b.get("ratingsCount"),
                 "pages": b.get("numPages"),
                 "cover": b.get("imageUrl"),
-                "url": BASE + b.get("bookUrl", ""),
+                "url": BASE + (b.get("bookUrl") or ""),
                 "description": html_mod.unescape(
                     re.sub(r"<[^>]+>", "", (b.get("description") or {}).get("html", ""))
                 )[:400],
@@ -420,7 +430,7 @@ def search_books(query: str, max_results: int = 10) -> list[dict[str, Any]]:
     return results
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def get_book(book_id: str, review_language_limit: int = 5) -> dict[str, Any]:
     """Get full details for a book by its Goodreads id (numeric, or numeric-slug
     like '11870085-the-fault-in-our-stars').
@@ -504,7 +514,7 @@ def get_book(book_id: str, review_language_limit: int = 5) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def get_reviews(
     book_id: str,
     limit: int = 10,
@@ -589,7 +599,7 @@ def get_reviews(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def similar_books(book_id: str, limit: int = 10) -> dict[str, Any]:
     """"Readers also enjoyed" — books similar to the given one.
 
@@ -613,7 +623,7 @@ def similar_books(book_id: str, limit: int = 10) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def author_books(book_id: str, limit: int = 20) -> dict[str, Any]:
     """List an author's works (bibliography), given any of their books.
 
@@ -644,7 +654,7 @@ def author_books(book_id: str, limit: int = 20) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def series_books(
     book_id: str, limit: int = 20, series_index: int = 0
 ) -> dict[str, Any]:
@@ -701,7 +711,7 @@ def series_books(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def get_editions(book_id: str, limit: int = 20) -> dict[str, Any]:
     """List published editions of a book (formats, ISBNs, publishers, dates).
 
@@ -741,7 +751,7 @@ def get_editions(book_id: str, limit: int = 20) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def book_lists(book_id: str, limit: int = 10) -> dict[str, Any]:
     """List the Listopia lists a book appears on (e.g. "Best Dystopian
     Fiction"), ordered by popularity.
@@ -774,7 +784,7 @@ def book_lists(book_id: str, limit: int = 10) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def popular_books(
     year: int,
     month: int | None = None,
@@ -837,7 +847,7 @@ def popular_books(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def compare_books(book_ids: list[str]) -> dict[str, Any]:
     """Compare several books side by side by rating and rating distribution.
 
@@ -875,17 +885,19 @@ def compare_books(book_ids: list[str]) -> dict[str, Any]:
             }
         )
 
-    rated = [r for r in results if r.get("average_rating") is not None]
+    ok = [r for r in results if "error" not in r]
     errored = [r for r in results if "error" in r]
+    rated = [r for r in ok if r.get("average_rating") is not None]
+    unrated = [r for r in ok if r.get("average_rating") is None]
     rated.sort(key=lambda r: r["average_rating"], reverse=True)
     return {
-        "compared": len(rated),
+        "compared": len(ok),
         "ranked_by": "average_rating (desc)",
-        "books": rated + errored,
+        "books": rated + unrated + errored,
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def get_shelf(
     shelf: str = "to-read",
     user_id: str | None = None,
@@ -904,7 +916,7 @@ def get_shelf(
     return gr.parse_shelf_rss(resp.text)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def list_shelves(user_id: str | None = None) -> list[str]:
     """List a user's shelf names (scraped from their review-list page; best
     effort). Defaults to the configured user."""
@@ -913,7 +925,7 @@ def list_shelves(user_id: str | None = None) -> list[str]:
     names = re.findall(r'[?&]shelf=([A-Za-z0-9_%\-]+)', page)
     seen: dict[str, None] = {}
     for n in names:
-        seen.setdefault(html_mod.unescape(n), None)
+        seen.setdefault(unquote(html_mod.unescape(n)), None)
     return list(seen)
 
 
