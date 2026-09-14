@@ -7,19 +7,23 @@ A **read-only** MCP server for Goodreads — built without the Goodreads API, be
 | tool | stability |
 |---|---|
 | `search_books` | stable (JSON endpoint) |
-| `get_book` | stable (`__NEXT_DATA__` via `.xml` path) — details, ratings histogram, series, review-language breakdown |
+| `get_book` | stable (`__NEXT_DATA__` via `.xml` path) — details, cover, ratings histogram, all series memberships, review-language breakdown |
 | `get_reviews` | GraphQL — paginated reader reviews (text, rating, likes, date, spoiler flag, permalink) with server-side `min_rating` / `max_rating` and `exclude_spoilers`; `limit` up to 100 |
-| `similar_books` | GraphQL — "readers also enjoyed" recommendations |
-| `author_books` | GraphQL — an author's bibliography (from any of their books) |
-| `series_books` | GraphQL — books in a series with reading-order placement |
-| `get_editions` | GraphQL — published editions (format, ISBN, publisher, date) |
-| `book_lists` | GraphQL — Listopia lists a book appears on (title, votes, size) |
+| `similar_books` | GraphQL — paginated "readers also enjoyed" recommendations |
+| `author_books` | GraphQL — paginated author bibliography (from any of their books) |
+| `series_books` | GraphQL — paginated series books with reading-order placement; selectable membership for books in multiple series |
+| `get_editions` | GraphQL — paginated editions (format, ISBN, publisher, date) |
+| `book_lists` | GraphQL — paginated Listopia lists a book appears on (title, votes, size) |
 | `popular_books` | GraphQL — most popular books by release year (or year+month), ranked |
 | `compare_books` | takes several book ids, ranks them by rating with positive/critical share |
 | `get_shelf` | stable (RSS) — public shelves |
 | `list_shelves` | best effort (HTML) — public profiles |
 
 The discovery tools all take a `book_id` and return results carrying `book_id`/title/author/rating/url, so an agent can chain them — e.g. `similar_books` → `get_reviews` on a recommendation. This is the structured book graph a general web search can't assemble.
+
+GraphQL discovery tools page in batches of 20 and accept a total `limit` up to
+100. Responses include `returned` and `has_more`, keeping larger lookups useful
+without allowing unbounded traffic.
 
 > **WAF note:** Goodreads book HTML pages now sit behind an AWS WAF JavaScript
 > challenge (HTTP 202) that plain HTTP clients can't solve. `get_book` routes
@@ -93,8 +97,9 @@ GOODREADS_LIVE=1 .venv/bin/pytest      # + live network smoke tests
 
 ## shipped since v0.1
 
-- **richer book data** — `get_book` now includes the ratings histogram, series/position, and review-language breakdown; `series_books` and `similar_books` cover series and recommendations; `get_reviews` returns paginated, filterable reader reviews.
+- **richer book data** — `get_book` includes covers, the ratings histogram, every series membership, normalized publication dates, and configurable review-language depth; `series_books` can traverse any listed membership, and `get_reviews` returns paginated, filterable reader reviews.
 - **author bibliography** — `author_books` returns an author's works (ranked by popularity) plus a link to their author page (`author_url`).
+- **bounded discovery pagination** — similar books, bibliographies, series, editions, and Listopia memberships can return up to 100 results with `has_more` metadata.
 
 ## ideas for v2
 
