@@ -1,0 +1,6 @@
+{
+  "tool": "pytest-cov",
+  "scope": "goodreads_mcp",
+  "min_line_coverage_percent": 55,
+  "note": "Offline suite (tests/, excluding tests/e2e) is ~61% as of 2026-09. Threshold is set below that with headroom, not at the ceiling."
+}
