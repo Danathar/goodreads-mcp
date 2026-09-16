@@ -34,8 +34,15 @@ This is where this project actually breaks, so it gets the most weight.
 
 - [ ] Single shared client, backoff on 429/503, browser-faithful headers intact.
 - [ ] No new concurrency that multiplies request rate.
-- [ ] New pagination uses `_paginated_graphql_edges` and respects the caps
-      (`_MAX_DISCOVERY`, `_DISCOVERY_PAGE_SIZE`, and the tighter per-tool ones).
+- [ ] A new **standard discovery connection** uses `_paginated_graphql_edges`
+      and respects the caps (`_MAX_DISCOVERY`, `_DISCOVERY_PAGE_SIZE`).
+      The helper only handles Goodreads' standard `PaginationInput`/`PageInfo`
+      shape — don't demand it where it doesn't fit. Two tools legitimately
+      paginate by hand and should stay that way:
+      `get_reviews` (client-side spoiler filtering changes the returned count,
+      so it needs its own loop) and `popular_books` (passes `after` and `limit`
+      as top-level variables, with its own `_MAX_POPULAR` / `_POPULAR_PAGE_SIZE`
+      caps). `compare_books` likewise has its own `_MAX_COMPARE` fan-out cap.
 
 ## 4. Tool contract
 
