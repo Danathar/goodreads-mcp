@@ -215,17 +215,20 @@ def test_graphql_config_falls_back_to_the_bundle_pair_when_the_page_key_is_absen
 # --------------------------------------------------------------- graphql
 
 
-def _graphql_client(graphql_handler, configs: list[int] | None = None):
-    """A client whose config discovery is canned, so graphql() is isolated."""
+def _graphql_client(graphql_handler) -> tuple[GoodreadsClient, list[bool]]:
+    """A client whose config discovery is canned, so graphql() is isolated.
+
+    Returns (client, one `force` flag per graphql_config call).
+    """
     client = _client(graphql_handler)
-    calls = configs if configs is not None else []
+    config_calls: list[bool] = []
 
     def graphql_config(force: bool = False):
-        calls.append(1 if force else 0)
+        config_calls.append(force)
         return ENDPOINT_PROD, "da2-prodkey0000000000000000"
 
     client.graphql_config = graphql_config  # type: ignore[method-assign]
-    return client, calls
+    return client, config_calls
 
 
 def test_graphql_propagates_a_500_without_rediscovering_the_key(monkeypatch):
@@ -241,7 +244,7 @@ def test_graphql_propagates_a_500_without_rediscovering_the_key(monkeypatch):
     assert excinfo.value.response.status_code == 500
     # A 500 is not key rotation. Re-discovering would burn a round-trip and
     # mask a server-side outage as a config problem.
-    assert config_calls == [0]
+    assert config_calls == [False]
 
 
 def test_graphql_raises_when_data_is_absent():
