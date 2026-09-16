@@ -124,8 +124,8 @@ That matters more than usual here. This server rides on endpoints Goodreads neve
 
 Each pass is meant to leave the next one starting from a better position:
 
-- **The gates ratchet.** A coverage floor is enforced on every pull request; [`.github/auto-qa-tuning.json`](.github/auto-qa-tuning.json) records when raising it is warranted, and the raise is proposed rather than applied automatically.
-- **Risk is classified, not guessed.** Every pull request gets a [risk tier](docs/risk-tiers.md) from the paths it touches, so a change to the client or the GraphQL config discovery is held to a different standard than a change to a doc.
+- **The gates ratchet.** A coverage floor is enforced on every pull request (`ci.yml`, via `--cov-fail-under`). [`.github/auto-qa-tuning.json`](.github/auto-qa-tuning.json) records the rule for when raising it is warranted — sustained headroom over a full release cycle — but nothing applies the raise automatically; that stays a human decision.
+- **Risk is classified, not guessed.** Every pull request declares a [risk tier](docs/risk-tiers.md) in its description — a judgment call a reviewer can disagree with, not an automated verdict. The [labeler](.github/labeler.yml) applies path labels (`client`, `server`, `live-tests`, `ci`) that inform that call without determining it. Either way a change to the client or the GraphQL config discovery is held to a different standard than a change to a doc.
 - **Lessons are written down where the next pass will read them.** [`docs/reflections/`](docs/reflections/) holds what a piece of work taught about this codebase, [docs/review-rubric.md](docs/review-rubric.md) is the review checklist, and [AGENTS.md](AGENTS.md) is the standing brief.
 - **The measurement is of outcomes, not activity.** [`docs/metrics.md`](docs/metrics.md) tracks acceptance rate, time to merge and review rounds — not lines written or PRs opened.
 
@@ -144,6 +144,6 @@ Learn more: [Hive](https://github.com/hivecommons/hive) · [the full ACMM policy
 
 ## license
 
-This fork is licensed under the [GNU General Public License v3.0](LICENSE).
+This fork is licensed under the [GNU General Public License v3.0](LICENSE), version 3 only (`GPL-3.0-only`) — no automatic upgrade to later versions.
 
 It incorporates code from [`shreeyachand/goodreads-mcp`](https://github.com/shreeyachand/goodreads-mcp), Copyright (c) 2026 Shreeya Chand, released under the MIT License. That code remains under MIT; its licence text and copyright notice are preserved in [LICENSE.MIT](LICENSE.MIT) as the MIT licence requires. The combined work — upstream code together with this fork's changes — is distributed under GPL-3.0.
