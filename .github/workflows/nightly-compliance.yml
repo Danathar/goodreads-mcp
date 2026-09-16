@@ -38,13 +38,33 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[test]"
 
+      - name: Read QA tuning thresholds
+        id: tuning
+        run: |
+          cfg=.github/auto-qa-tuning.json
+          echo "retries=$(jq -r '.live.retries // 1' "$cfg")" >> "$GITHUB_OUTPUT"
+          echo "delay=$(jq -r '.live.retry_delay_seconds // 60' "$cfg")" >> "$GITHUB_OUTPUT"
+
       - name: Run live suite against real Goodreads endpoints
         id: live
         env:
           GOODREADS_LIVE: "1"
+          RETRIES: ${{ steps.tuning.outputs.retries }}
+          DELAY: ${{ steps.tuning.outputs.delay }}
         run: |
           set -o pipefail
-          pytest tests/e2e -q 2>&1 | tee live.log
+          attempt=0
+          # A single failure isn't proof of upstream drift -- transient network
+          # errors and rate limiting look the same. Retry before alarming.
+          until pytest tests/e2e -q 2>&1 | tee live.log; do
+            attempt=$((attempt + 1))
+            if [ "$attempt" -gt "${RETRIES:-1}" ]; then
+              echo "live suite failed after $attempt attempt(s)"
+              exit 1
+            fi
+            echo "attempt $attempt failed; retrying in ${DELAY:-60}s"
+            sleep "${DELAY:-60}"
+          done
 
       - name: Summarize
         if: always()

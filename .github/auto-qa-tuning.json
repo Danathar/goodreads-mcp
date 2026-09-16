@@ -1,0 +1,14 @@
+{
+  "$comment": "Tunable QA thresholds. Read by .github/workflows/nightly-compliance.yml. Review cadence and adjustment rules are in docs/quality.md.",
+  "coverage": {
+    "floor_percent": 55,
+    "observed_percent": 61,
+    "raise_floor_when_headroom_exceeds": 15,
+    "note": "floor is enforced in ci.yml via --cov-fail-under. Raise it only when headroom (observed - floor) stays above the threshold for a full release cycle, and never above observed minus 5."
+  },
+  "live": {
+    "retries": 1,
+    "retry_delay_seconds": 60,
+    "note": "The live suite hits a third party, so a single failure is not proof of upstream drift -- transient network errors and rate limiting look identical. Retry before alarming. Raise retries only if false alarms recur; each retry is another round of traffic to an unofficial endpoint."
+  }
+}
