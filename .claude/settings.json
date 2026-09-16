@@ -10,10 +10,15 @@
     ],
     "ask": [
       "Bash(git push *)",
-      "Edit(./.github/workflows/**)"
+      "Edit(./.github/workflows/**)",
+      "Write(./.github/workflows/**)"
     ],
     "deny": [
+      "Bash(git push --force)",
       "Bash(git push --force *)",
+      "Bash(git push -f)",
+      "Bash(git push -f *)",
+      "Bash(git reset --hard)",
       "Bash(git reset --hard *)",
       "Read(./.env)",
       "Read(./.env.*)"
