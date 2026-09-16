@@ -5,7 +5,7 @@ description: Verify the unofficial Goodreads endpoints this server depends on ar
 
 # Check live endpoints
 
-This server rides four unofficial Goodreads surfaces. They break without
+This server rides five unofficial Goodreads surfaces. They break without
 notice, and the offline test suite runs on fixtures so it cannot detect it.
 This skill checks the real thing.
 
@@ -15,8 +15,16 @@ This skill checks the real thing.
 GOODREADS_LIVE=1 pytest tests/e2e -v
 ```
 
-Offline passing + live failing means Goodreads changed, not that the code is
-wrong.
+Offline passing + live failing *suggests* an upstream change, but it isn't
+proof — the offline suite runs on fixtures, so it can equally miss a local
+regression in request construction or parsing. Before concluding Goodreads
+moved, rule out:
+
+- **a recent local change** — `git log` the tool's code path; re-run the live
+  test at the previous commit if there's any doubt
+- **transient network failure** — re-run once
+- **rate limiting** — repeated 429/503 can exhaust the retries and surface as
+  a parse failure downstream
 
 ## Read the failure by surface
 
@@ -27,6 +35,7 @@ wrong.
 | `ValueError: No __NEXT_DATA__ blob` | page JSON | page is no longer Next.js, or is WAF-gated |
 | fields present but `None` | page JSON / GraphQL | Apollo state keys or schema fields renamed |
 | RSS returns no items | shelf RSS | shelf went private, or feed shape changed |
+| `list_shelves` returns `[]` | scraped HTML | `shelf=` links gone from `/review/list/{uid}`, or profile is private |
 
 ## Confirm GraphQL config still resolves
 

@@ -12,8 +12,13 @@ cookies, or writes, say it's out of scope instead of implementing it.
 ## Pick the surface
 
 In order of robustness: shelf RSS → JSON autocomplete → `__NEXT_DATA__` →
-AppSync GraphQL. Parse the embedded JSON, never the DOM. Fetch book pages via
-the `.xml`-suffixed path — the plain HTML page is WAF-gated.
+AppSync GraphQL. On Next.js book pages parse the embedded JSON, not the
+markup, and fetch those pages via the `.xml`-suffixed path — the plain HTML
+page is WAF-gated.
+
+Scraping HTML is a last resort, not a pattern to copy. `list_shelves` does it
+only because shelf *names* have no structured surface; if the data you need is
+reachable from any surface above, use that instead.
 
 ## Write the tool
 
