@@ -1,0 +1,50 @@
+# Path-based PR labels for actions/labeler v5.
+# Paths match this repo's actual layout -- verify against `git ls-files`
+# before adding a rule for a directory that doesn't exist yet.
+
+server:
+  - changed-files:
+      - any-glob-to-any-file: 'goodreads_mcp/**'
+
+client:
+  - changed-files:
+      - any-glob-to-any-file: 'goodreads_mcp/client.py'
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file: 'tests/**'
+
+live-tests:
+  - changed-files:
+      - any-glob-to-any-file: 'tests/e2e/**'
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/workflows/**'
+          - '.github/auto-qa-tuning.json'
+          - '.coverage-thresholds.json'
+
+agent-config:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'AGENTS.md'
+          - 'CLAUDE.md'
+          - '.claude/**'
+          - '.cursor/**'
+          - '.github/copilot-instructions.md'
+          - 'prompts/**'
+
+docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'docs/**'
+          - 'README.md'
+          - 'CONTRIBUTING.md'
+
+packaging:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'pyproject.toml'
+          - 'manifest.json'
+          - '.mcpbignore'
