@@ -4,6 +4,21 @@ Guidance for AI coding agents working in this repo. Other agent config files
 (`CLAUDE.md`, `.github/copilot-instructions.md`, `.cursor/rules/`) point here —
 edit this file, not the copies.
 
+## Start and end of a session
+
+**Read [`.claude/session-summary.md`](.claude/session-summary.md) first.** It
+carries the state of play — what landed, what's in flight, what's blocked —
+that would otherwise have to be rediscovered. **Overwrite it before you
+finish**, so the next session starts where this one stopped.
+
+Three layers, don't mix them up:
+
+| file | holds | lifetime |
+|---|---|---|
+| `AGENTS.md` (this file) | standing rules | durable |
+| [`.claude/memory/corrections.md`](.claude/memory/corrections.md) | things learned by getting them wrong | append-only |
+| [`.claude/session-summary.md`](.claude/session-summary.md) | current state | overwritten each session |
+
 ## What this is
 
 A read-only MCP server exposing public Goodreads data. Goodreads has had no
