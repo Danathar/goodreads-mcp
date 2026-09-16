@@ -24,8 +24,8 @@ jobs:
       - name: Install package and test deps
         run: pip install -e ".[test]"
 
-      - name: Run tests
-        run: pytest -q
+      - name: Run tests with coverage gate
+        run: pytest -q --cov=goodreads_mcp --cov-report=term-missing --cov-fail-under=55
 
       # Optional: verify the MCPB bundle can be packed (validates manifest)
       - name: Set up Node for mcpb validation
