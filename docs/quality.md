@@ -1,0 +1,73 @@
+# Quality
+
+The state of quality assurance in this repo: what's enforced mechanically,
+what's known-weak, and where the real risk sits.
+
+**Last reviewed:** 2026-09-16
+
+## What runs automatically
+
+| gate | where | blocking |
+|---|---|---|
+| offline test suite | `ci.yml` on every push/PR to `main` | yes |
+| coverage floor, 55% | `ci.yml` (`--cov-fail-under`) | yes |
+| MCPB manifest validation | `ci.yml` | yes |
+| version sync (`pyproject` vs `manifest`) | `release.yml` | yes, at release |
+| automated code review | Codex, every PR | advisory |
+| offline tests on source edit | `.claude/settings.json` hook | advisory, local |
+
+## Current numbers
+
+| | |
+|---|---|
+| offline tests | 33 passing, 22 skipped (live, opt-in) |
+| coverage | ~61% overall — `config.py` 100%, `client.py` 87%, `server.py` 48% |
+| CI, last 30 runs | 28 success |
+
+Recompute:
+
+```bash
+pytest -q --cov=goodreads_mcp --cov-report=term-missing
+```
+
+## The honest weak spot
+
+**Coverage is not the risk here, and raising it would not reduce the risk.**
+
+Every offline test runs against fixtures. The failure this project actually
+suffers is Goodreads changing its markup, schema, WAF posture, or GraphQL
+config — and no fixture-backed test can detect that at any coverage
+percentage. The offline suite tells you the code is internally consistent. It
+does not tell you the code works.
+
+The suite that answers that question is opt-in and not in CI:
+
+```bash
+GOODREADS_LIVE=1 pytest tests/e2e -v
+```
+
+It is not in CI on purpose — it hits a third party on every run, which would
+be both unreliable as a gate and impolite to an unofficial endpoint. The
+tradeoff is real and accepted: **this repo can be fully green and still
+broken in production.**
+
+The mitigation is procedural, not mechanical: run the live suite after any
+parsing change ([review rubric](review-rubric.md) §2), and before a release.
+
+`server.py` at 48% is the second-order version of the same thing — the
+uncovered lines are mostly GraphQL tool bodies whose behavior is only
+meaningfully exercised against live data.
+
+## What would actually improve quality
+
+In rough order of value:
+
+1. **Recorded-response tests.** Capture real Goodreads responses and replay
+   them, refreshed periodically. Closes the fixtures-drift-from-reality gap
+   without hitting the network on every CI run.
+2. **A scheduled live run.** The live suite on a timer rather than per-commit
+   — catches upstream drift without coupling CI to a third party.
+3. Fixture coverage of the `server.py` tool bodies.
+
+Not on the list: raising the coverage gate. It would be satisfied by testing
+paths that are already understood, and would not move the number that matters.
