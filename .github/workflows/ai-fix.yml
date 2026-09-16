@@ -1,0 +1,83 @@
+name: AI fix requested
+
+# Human-triggered, never automatic. Runs only when someone explicitly asks:
+# either by applying the `ai-fix-requested` label to an issue/PR, or by
+# commenting `/ai-fix` on one.
+#
+# Why not automatic: review findings need verifying before they're applied.
+# In this repo's own history, 1 of 13 automated findings was factually wrong
+# and 6 more were correct but not actionable (they flagged cross-PR ordering,
+# which needed a merge order, not a code change). A workflow that applied
+# findings unattended would have committed a bad fix and churned on the rest.
+# The verification step is the value, so a human asks for it deliberately.
+
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+
+# No pull_request_target: paired with write permissions it is the classic
+# privilege-escalation shape. issue_comment fires on pull requests too, so
+# `/ai-fix` reaches a PR without it.
+
+concurrency:
+  group: ai-fix-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  requested:
+    # Only maintainers, and only on an explicit request.
+    if: >-
+      (
+        github.event_name == 'issues' &&
+        github.event.label.name == 'ai-fix-requested'
+      ) || (
+        github.event_name == 'issue_comment' &&
+        startsWith(github.event.comment.body, '/ai-fix')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check requester is a maintainer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          role=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" \
+                   --jq '.permission' 2>/dev/null || echo none)
+          case "$role" in
+            admin|write) echo "$ACTOR has $role — proceeding" ;;
+            *) echo "::error::$ACTOR lacks write access (got '$role'); refusing." ; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Acknowledge the request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.issue.number }}
+        run: |
+          gh issue comment "$NUM" --body "$(printf 'AI fix requested by @%s — [run](%s/%s/actions/runs/%s).\n\nBefore applying anything, read `AGENTS.md` and `docs/review-rubric.md`. Two constraints that override any finding:\n\n- This server is **read-only and unauthenticated**. A change adding auth or writes is out of scope, not a fix.\n- A green offline suite proves nothing about parsing. Run `GOODREADS_LIVE=1 pytest tests/e2e -v` before claiming a parsing change works.\n' \
+            "$GITHUB_ACTOR" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+
+      # The agent step is intentionally left unconfigured. Wiring it up needs a
+      # deliberate decision and an ANTHROPIC_API_KEY secret — see the PR that
+      # added this file. Until then the workflow gates and acknowledges the
+      # request without acting on it, which is the safe default.
+      - name: Agent step (not configured)
+        run: |
+          {
+            echo "## AI fix requested"
+            echo
+            echo "Gating and acknowledgement ran. No agent is wired up yet."
+            echo
+            echo "To enable: add an \`ANTHROPIC_API_KEY\` secret and replace this"
+            echo "step with \`anthropics/claude-code-action\`."
+          } >> "$GITHUB_STEP_SUMMARY"
