@@ -4,7 +4,7 @@ These hit the network and can break when Goodreads changes its markup or
 WAF posture — exactly the failures worth catching. They're skipped unless
 GOODREADS_LIVE=1 so the default test run stays offline and deterministic.
 
-    GOODREADS_LIVE=1 pytest tests/test_smoke_live.py -v
+    GOODREADS_LIVE=1 pytest tests/e2e/test_smoke_live.py -v
 """
 
 from __future__ import annotations
