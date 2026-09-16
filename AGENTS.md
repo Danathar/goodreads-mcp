@@ -24,15 +24,19 @@ rather than implementing them.
 client and its session, keep exponential backoff on 429/503, keep the
 browser-faithful headers. Don't add concurrency that multiplies request rate.
 
-## The four data surfaces
+## The data surfaces
 
 In rough order of robustness:
 
 1. **Shelf RSS** — `/review/list_rss/{user_id}?shelf=...`, structured XML
 2. **Search autocomplete** — `/book/auto_complete?format=json&q=...`
 3. **Embedded page JSON** — book pages are Next.js; `__NEXT_DATA__` carries
-   the full Apollo state. **Parse that, never the DOM.**
+   the full Apollo state. **On these pages, parse the blob, never the markup.**
 4. **AppSync GraphQL** — the discovery and review tools
+5. **Scraped HTML** — `list_shelves` only, and explicitly best-effort: it
+   regexes `shelf=` params out of `/review/list/{uid}`. There's no structured
+   equivalent for shelf *names*, which is why this one exists. Don't extend
+   this approach to anything that has a surface above it.
 
 ## Two things that will bite you
 

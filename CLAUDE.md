@@ -12,9 +12,11 @@ pytest -q                               # offline suite (what CI runs)
 GOODREADS_LIVE=1 pytest tests/e2e -v    # live suite (run after parsing changes)
 ```
 
-Non-negotiables: read-only (no auth, no writes), parse `__NEXT_DATA__` not the
-DOM, fetch book pages via the `.xml` path (WAF), never hardcode the GraphQL
-key or endpoint.
+Non-negotiables: read-only (no auth, no writes), parse `__NEXT_DATA__` rather
+than the markup on Next.js book pages, fetch book pages via the `.xml` path
+(WAF), never hardcode the GraphQL key or endpoint.
+
+(`list_shelves` is the one deliberate HTML scrape — see AGENTS.md.)
 
 ## Running the server locally
 
