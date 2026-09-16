@@ -1,0 +1,73 @@
+name: Nightly compliance
+
+# The offline suite runs on fixtures and by construction cannot detect a
+# Goodreads markup, schema, WAF, or GraphQL-config change. This job runs the
+# live suite against the real endpoints so upstream drift surfaces within a
+# day instead of at the next release.
+#
+# Deliberately NOT part of ci.yml: it depends on a third party, which would
+# make it an unreliable gate and would hit an unofficial API on every push.
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-compliance
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package and test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+
+      - name: Run live suite against real Goodreads endpoints
+        id: live
+        env:
+          GOODREADS_LIVE: "1"
+        run: |
+          set -o pipefail
+          pytest tests/e2e -q 2>&1 | tee live.log
+
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo "## Live endpoint check"
+            echo
+            echo '```'
+            tail -30 live.log 2>/dev/null || echo "no output captured"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or update a drift issue on failure
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: "Nightly live check failing — Goodreads may have changed"
+        run: |
+          body=$(printf 'The nightly live suite failed on %s.\n\nThis usually means Goodreads changed something upstream, not that a commit broke.\nTriage with the `check-live-endpoints` skill, which maps each symptom to the surface that broke.\n\nRun: %s/%s/actions/runs/%s\n\nLast output:\n\n```\n%s\n```\n' \
+            "$(date -u +%Y-%m-%d)" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$(tail -30 live.log 2>/dev/null)")
+          existing=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi
