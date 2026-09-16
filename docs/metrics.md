@@ -15,10 +15,18 @@ recompute it. Numbers below are a snapshot — the commands are the durable part
 | median time open | ~35 min |
 
 ```bash
-gh pr list --state merged --limit 100 --json number --jq 'length'
+# scoped to the snapshot range so these stay reproducible as new PRs land
+gh pr list --state merged --limit 100 --json number \
+  --jq '[.[] | select(.number >= 31 and .number <= 40)] | length'
 gh pr list --state closed --limit 100 --json number,mergedAt \
-  --jq '[.[] | select(.mergedAt == null)] | length'
+  --jq '[.[] | select(.number >= 31 and .number <= 40 and .mergedAt == null)] | length'
 ```
+
+Note on numbering: GitHub shares one number space between issues and PRs, and
+this repo's issues occupy #1–#30. Its first PR is therefore #31 — there is no
+PR below that number. Drop the range filter and you get the all-time figure,
+which is the right query for a current snapshot but won't reproduce the table
+above once later PRs merge.
 
 **Read this one carefully.** A 100% acceptance rate is not a quality signal
 here — it reflects a single author merging their own scaffolding PRs over two
