@@ -82,10 +82,15 @@ deny entry does not cover — different tool, different rule set) and
 all pushes is the real gate" holds only for pushes issued **as tool calls**; a
 push from inside a process the allow list started is not one.
 
-No permission rule can close this — there is no way to spell "allow bare
-`pytest` but not `pytest` with a path after it", because the match is a prefix.
-It takes a `PreToolUse` hook on `Bash`, which is given the whole command string.
-See [#60](https://github.com/Danathar/goodreads-mcp/issues/60).
+A rule with no trailing `*` is an exact match, so `Bash(pytest)` allows the
+bare command and nothing else — the same pairing the deny list already uses
+(`Bash(git reset --hard)` next to `Bash(git reset --hard *)`). That closes the
+`pytest` case outright, at the cost of a prompt on every `pytest -q` and
+`pytest tests/e2e -v`. The `git` rules have no such fix: `git diff HEAD~1` and
+`git diff --no-index a b` both start with `git diff`, and no exact rule can
+admit the first while refusing the second. Where some argument forms must stay
+allowed, it takes a `PreToolUse` hook on `Bash`, which is given the whole
+command string. See [#60](https://github.com/Danathar/goodreads-mcp/issues/60).
 
 ## Workflow permissions
 
