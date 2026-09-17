@@ -67,13 +67,29 @@ the right resolution was merge ordering, not a code change.
 | metric | value |
 |---|---|
 | last 30 `ci.yml` runs | 28 success, 1 non-success, 1 in flight |
-| coverage gate | 55% (`--cov-fail-under`), actual ~61% |
+| coverage gate | 55% (`--cov-fail-under`) |
+| coverage actual | 82% at `46d64e0`, 2026-09-17 |
 
 ```bash
 gh run list --workflow ci.yml --limit 30 --json conclusion \
   --jq 'group_by(.conclusion)[] | "\(.[0].conclusion): \(length)"'
 pytest -q --cov=goodreads_mcp --cov-report=term-missing
 ```
+
+The two coverage rows age differently, which is why they are now separate rows.
+The **gate** is a constant: it lives in `.github/workflows/ci.yml` as
+`--cov-fail-under`, is mirrored in
+[`.coverage-thresholds.json`](../.coverage-thresholds.json) and
+[`.github/auto-qa-tuning.json`](../.github/auto-qa-tuning.json), and quoted by
+every doc that mentions the number; `tests/test_coverage_thresholds.py` fails
+if any copy disagrees with the workflow.
+
+The **actual** figure is a reading of HEAD, and unlike the PR-acceptance rows
+above — which are scoped to PRs #31–#40 precisely so they stay reproducible —
+it goes stale every time a test lands. It did: it was recorded as ~61% and sat
+there while four test PRs took it to 82% ([#63](https://github.com/Danathar/goodreads-mcp/issues/63)).
+Re-read it with the command above and update the commit and date; no test can
+pin it without running coverage inside the suite that measures it.
 
 ## What is deliberately not measured
 

@@ -3,7 +3,7 @@
 The state of quality assurance in this repo: what's enforced mechanically,
 what's known-weak, and where the real risk sits.
 
-**Last reviewed:** 2026-09-16
+**Last reviewed:** 2026-09-17
 
 ## What runs automatically
 
@@ -20,8 +20,8 @@ what's known-weak, and where the real risk sits.
 
 | | |
 |---|---|
-| offline tests | 33 passing, 22 skipped (live, opt-in) |
-| coverage | ~61% overall — `config.py` 100%, `client.py` 87%, `server.py` 48% |
+| offline tests | 102 passing, 22 skipped (live, opt-in) |
+| coverage | 82% overall — `config.py` 100%, `client.py` 99%, `server.py` 74% |
 | CI, last 30 runs | 28 success |
 
 Recompute:
@@ -54,7 +54,7 @@ broken in production.**
 The mitigation is procedural, not mechanical: run the live suite after any
 parsing change ([review rubric](review-rubric.md) §2), and before a release.
 
-`server.py` at 48% is the second-order version of the same thing — the
+`server.py` at 74% is the second-order version of the same thing — the
 uncovered lines are mostly GraphQL tool bodies whose behavior is only
 meaningfully exercised against live data.
 
