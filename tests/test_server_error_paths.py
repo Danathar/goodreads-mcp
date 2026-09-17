@@ -95,6 +95,11 @@ def test_paginated_graphql_edges_stops_when_a_page_token_repeats(monkeypatch):
 
     def graphql(query, variables):
         calls.append(variables)
+        # The token guard is the exit under test. Refuse a third call so a
+        # regression fails here, on the request that should never happen,
+        # instead of being masked by the limit exit or running unbounded.
+        if len(calls) > 2:
+            raise AssertionError(f"unexpected third page request: {variables!r}")
         return {
             "connection": {
                 "edges": [{"node": {"legacyId": len(calls)}}],
