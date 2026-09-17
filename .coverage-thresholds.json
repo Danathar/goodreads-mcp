@@ -2,5 +2,9 @@
   "tool": "pytest-cov",
   "scope": "goodreads_mcp",
   "min_line_coverage_percent": 55,
-  "note": "Offline suite (tests/, excluding tests/e2e) is ~61% as of 2026-09. Threshold is set below that with headroom, not at the ceiling."
+  "gate_source": ".github/workflows/ci.yml (--cov-fail-under), mirrored here and in docs/metrics.md; tests/test_coverage_thresholds.py fails if the three disagree",
+  "measured_percent": 82,
+  "measured_at": "2026-09-17 (46d64e0)",
+  "regenerate": "pytest -q --cov=goodreads_mcp --cov-report=term-missing",
+  "note": "measured_percent is a reading of HEAD and goes stale whenever a test lands — it sat at 61 while four test PRs took it to 82 (#63). Re-run `regenerate` and update measured_percent/measured_at when you touch this file. The threshold is deliberately set below the measured figure with headroom, not at the ceiling: it is a floor against regression, not a target to climb."
 }
