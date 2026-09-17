@@ -2,7 +2,7 @@
   "$comment": "Tunable QA thresholds. Read by .github/workflows/nightly-compliance.yml. Review cadence and adjustment rules are in docs/quality.md.",
   "coverage": {
     "floor_percent": 55,
-    "observed_percent": 82,
+    "observed_percent": 99,
     "raise_floor_when_headroom_exceeds": 15,
     "note": "floor is enforced in ci.yml via --cov-fail-under; observed_percent is the same reading as measured_percent in .coverage-thresholds.json, and tests/test_coverage_thresholds.py fails if either disagrees. Raise the floor only when headroom (observed - floor) stays above the threshold for a full release cycle, and never above observed minus 5."
   },

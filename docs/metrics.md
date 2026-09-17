@@ -68,7 +68,7 @@ the right resolution was merge ordering, not a code change.
 |---|---|
 | last 30 `ci.yml` runs | 28 success, 1 non-success, 1 in flight |
 | coverage gate | 55% (`--cov-fail-under`) |
-| coverage actual | 82% at `46d64e0`, 2026-09-17 |
+| coverage actual | 99% at `f388fac`, 2026-09-17 |
 
 ```bash
 gh run list --workflow ci.yml --limit 30 --json conclusion \
