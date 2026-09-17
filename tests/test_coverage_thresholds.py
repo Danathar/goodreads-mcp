@@ -1,4 +1,4 @@
-"""The coverage gate is written down three times; these keep the copies honest.
+"""The coverage gate is written down in ten places; these keep the copies honest.
 
 `.coverage-thresholds.json` records the gate and a measured snapshot, and until
 now **nothing read it** — not CI, not a test, only `.github/labeler.yml` matching
@@ -7,19 +7,24 @@ came to claim ~61% while the suite was actually at 82% (#63).
 
 Two different decay rates, so two different treatments:
 
-- **The gate** (`--cov-fail-under`) is a constant that appears in
-  `.github/workflows/ci.yml`, in `.coverage-thresholds.json`, and in
-  `docs/metrics.md`. Three copies of one number is a drift trap with an exact
-  answer, so it is pinned here: change the gate in CI and forget a doc, and this
-  goes red naming the file you missed.
+- **The gate** (`--cov-fail-under`) is a constant. `.github/workflows/ci.yml`
+  enforces it, two JSON files mirror it, and seven prose files quote it (listed
+  in `_GATE_PROSE` below). Ten copies of one number is a drift trap with an
+  exact answer, so every copy is pinned to the workflow here: change the gate
+  in CI and forget a file, and this goes red naming the file you missed. A
+  sweep over every tracked text file also catches a NEW copy that quotes the
+  flag itself, which is the form most of them take.
 - **The measured figure** is a reading of HEAD and moves whenever a test lands.
-  It cannot be pinned without running coverage inside the suite being measured,
-  which would be both slow and circular. So it is only checked for COHERENCE —
-  a snapshot below the gate would be asserting that CI ought to be failing — and
-  the durable part, the command to regenerate it, is asserted to be present.
+  It cannot be pinned to reality without running coverage inside the suite
+  being measured, which would be both slow and circular. So its copies are
+  pinned to EACH OTHER — `.coverage-thresholds.json` is the one to update, and
+  `auto-qa-tuning.json`, `docs/metrics.md` and `docs/quality.md` must agree
+  with it — and it is checked for coherence: a snapshot below the gate would
+  be asserting that CI ought to be failing. The durable part, the command to
+  regenerate it, is asserted to be present.
 
-That split is the point. Pinning the unpinnable number would produce a test that
-fails on every honest test PR, which is how a guard gets deleted.
+That split is the point. Pinning the unpinnable number to reality would produce
+a test that fails on every honest test PR, which is how a guard gets deleted.
 """
 
 from __future__ import annotations
@@ -27,21 +32,51 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+import subprocess
 
 import pytest
 
 _ROOT = Path(__file__).resolve().parent.parent
 _THRESHOLDS = _ROOT / ".coverage-thresholds.json"
+_TUNING = _ROOT / ".github" / "auto-qa-tuning.json"
 _CI = _ROOT / ".github" / "workflows" / "ci.yml"
 _METRICS = _ROOT / "docs" / "metrics.md"
 
-# `--cov-fail-under=55`, `--cov-fail-under 55`, or `--cov-fail-under=55.0`.
+# `--cov-fail-under=N`, `--cov-fail-under N`, or `--cov-fail-under=N.0`.
 _CI_GATE = re.compile(r"--cov-fail-under[= ](\d+(?:\.\d+)?)")
+
+# Every prose copy of the gate, as the exact phrase each file uses with the
+# number templated. A copy that is not in this table is not pinned, so when you
+# quote the gate in a new file, add the phrase here.
+_GATE_PROSE = {
+    "docs/metrics.md": "| coverage gate | {gate}% (`--cov-fail-under`) |",
+    "docs/quality.md": "| coverage floor, {gate}% | `ci.yml` (`--cov-fail-under`) | yes |",
+    "docs/review-rubric.md": "Coverage gate ({gate}%) still passes.",
+    "AGENTS.md": "CI enforces `--cov-fail-under={gate}` on `goodreads_mcp`.",
+    ".github/copilot-instructions.md": "CI runs it with a {gate}% coverage gate",
+    "prompts/add-discovery-tool.md": "CI enforces {gate}% coverage.",
+    ".claude/skills/add-mcp-tool/SKILL.md": "CI runs `pytest -q --cov-fail-under={gate}`.",
+}
+
+# Every prose copy of the measured snapshot, pinned to `.coverage-thresholds.json`.
+_SNAPSHOT_PROSE = {
+    "docs/metrics.md": "| coverage actual | {measured}% at",
+    "docs/quality.md": "| coverage | {measured}% overall",
+}
+
+# The tracked files the `--cov-fail-under` sweep reads. Suffix-scoped so the
+# sweep never opens a binary fixture.
+_TEXT_SUFFIXES = {".md", ".yml", ".yaml", ".json", ".py", ".toml", ".txt", ".cfg", ".ini"}
 
 
 @pytest.fixture(scope="module")
 def thresholds() -> dict:
     return json.loads(_THRESHOLDS.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def tuning() -> dict:
+    return json.loads(_TUNING.read_text(encoding="utf-8"))
 
 
 def _ci_gate() -> float:
@@ -50,6 +85,23 @@ def _ci_gate() -> float:
     assert matches, f"{_CI.name} no longer passes --cov-fail-under; the gate this file pins is gone"
     assert len(set(matches)) == 1, f"{_CI.name} passes conflicting gates: {sorted(set(matches))}"
     return float(matches[0])
+
+
+def _percent(value: float) -> str:
+    """Rendered as an integer when it is one: "55", not "55.0"."""
+    return str(int(value)) if float(value).is_integer() else str(value)
+
+
+def _prose(path: str) -> str:
+    """A file's text with whitespace collapsed, so a phrase wrapped mid-sentence still matches."""
+    return re.sub(r"\s+", " ", (_ROOT / path).read_text(encoding="utf-8"))
+
+
+def _tracked_text_files() -> list[Path]:
+    listing = subprocess.run(
+        ["git", "-C", str(_ROOT), "ls-files"], capture_output=True, text=True, check=True
+    )
+    return [_ROOT / line for line in listing.stdout.splitlines() if Path(line).suffix in _TEXT_SUFFIXES]
 
 
 def test_the_thresholds_file_is_committed_and_parses(thresholds: dict):
@@ -67,16 +119,33 @@ def test_the_gate_matches_the_workflow_that_enforces_it(thresholds: dict):
     )
 
 
-def test_metrics_doc_quotes_the_same_gate():
-    """docs/metrics.md is the third copy, and the one a human reads first."""
-    gate = _ci_gate()
-    text = _METRICS.read_text(encoding="utf-8")
-    # Rendered as an integer when it is one: "55%", not "55.0%".
-    rendered = f"{int(gate)}%" if gate.is_integer() else f"{gate}%"
-    assert f"| coverage gate | {rendered} (`--cov-fail-under`) |" in text, (
-        f"docs/metrics.md's coverage-gate row no longer reads {rendered}, which is what "
-        f"{_CI.name} enforces"
+def test_the_tuning_floor_matches_the_workflow_that_enforces_it(tuning: dict):
+    """`auto-qa-tuning.json` is the second mirror, and the one the headroom rule reads."""
+    assert tuning["coverage"]["floor_percent"] == _ci_gate(), (
+        f"{_TUNING.name} records a {tuning['coverage']['floor_percent']}% floor but "
+        f"{_CI.name} enforces {_ci_gate()}%"
     )
+
+
+@pytest.mark.parametrize("path", sorted(_GATE_PROSE))
+def test_every_prose_copy_of_the_gate_matches_the_workflow(path: str):
+    """The seven files a human reads the gate from, each pinned to what CI enforces."""
+    phrase = _GATE_PROSE[path].format(gate=_percent(_ci_gate()))
+    assert phrase in _prose(path), (
+        f"{path} no longer says {phrase!r}, which is what {_CI.name} enforces; "
+        "update the copy, or the phrase in _GATE_PROSE if the wording changed on purpose"
+    )
+
+
+def test_no_tracked_file_quotes_a_different_gate():
+    """The sweep: a new file that quotes `--cov-fail-under=N` is caught without a table entry."""
+    gate = _ci_gate()
+    wrong = {
+        str(path.relative_to(_ROOT)): sorted(set(found))
+        for path in _tracked_text_files()
+        if (found := [value for value in _CI_GATE.findall(path.read_text(encoding="utf-8")) if float(value) != gate])
+    }
+    assert not wrong, f"these files quote a --cov-fail-under other than {_CI.name}'s {_percent(gate)}: {wrong}"
 
 
 def test_the_measured_snapshot_is_at_least_the_gate(thresholds: dict):
@@ -91,6 +160,27 @@ def test_the_measured_snapshot_is_at_least_the_gate(thresholds: dict):
     assert measured >= gate, (
         f"measured_percent {measured} is below the {gate}% gate — either the snapshot is "
         "wrong or CI should be red"
+    )
+
+
+def test_the_tuning_snapshot_matches_the_thresholds_snapshot(thresholds: dict, tuning: dict):
+    """The headroom rule in `auto-qa-tuning.json` reads `observed_percent`; it must be the same reading.
+
+    Pinned to the thresholds file, not to reality: both go stale together, but they
+    cannot tell a maintainer two different headrooms.
+    """
+    assert tuning["coverage"]["observed_percent"] == thresholds["measured_percent"], (
+        f"{_TUNING.name} observed_percent {tuning['coverage']['observed_percent']} disagrees with "
+        f"{_THRESHOLDS.name} measured_percent {thresholds['measured_percent']}"
+    )
+
+
+@pytest.mark.parametrize("path", sorted(_SNAPSHOT_PROSE))
+def test_every_prose_copy_of_the_snapshot_matches_the_thresholds_file(path: str, thresholds: dict):
+    phrase = _SNAPSHOT_PROSE[path].format(measured=_percent(thresholds["measured_percent"]))
+    assert phrase in _prose(path), (
+        f"{path} no longer says {phrase!r}; {_THRESHOLDS.name} is the copy to update first, "
+        "then the prose that quotes it"
     )
 
 
