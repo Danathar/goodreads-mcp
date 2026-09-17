@@ -24,22 +24,28 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-16 — ACMM L3 scaffolding
+## 2026-09-17 — #60, the allow-list guard
 
-**Done:** L0 (#1–#6) and L2 (#7–#11, #13, #14) complete and merged; #12 closed
-as already satisfied by `.editorconfig` from #35.
+**Done:** `.claude/hooks/guard-bash.py`, a `PreToolUse` hook on `Bash`, denies
+what the allow list cannot refuse — `pytest` outside `tests/` or with a
+code-loading option, `--no-index` / `--output` on `git diff` and `git log`,
+redirections on the allowed verbs. Registered in `settings.json`; tables of
+denied and permitted spellings plus a registration check in
+`tests/test_agent_permissions.py`; `.claude/README.md` and
+`docs/SECURITY-AI.md` corrected. Verified against a real `claude -p` session:
+`pytest -q /var/tmp/.../notatest.py` denied with the reason, marker file not
+written; `pytest -q tests/... -k registered` and `git log --oneline -3` ran
+without a prompt. Closes #60 once merged (PR on `sec/60-guard-bash-hook`).
 
-**In flight:** L3 PRs open — #41 `.claude/settings.json` (closes #18, #19, #21),
-#42 metrics, #43 review rubric, #44 quality doc, and this one (#20).
+**In flight:** that PR.
 
 **Blocked on:** nothing.
 
 **Watch:**
-- `client.py`'s module docstring says "four unofficial-but-stable read
-  surfaces" and omits the HTML scrape that `list_shelves` uses. The agent docs
-  were corrected in #37; the source comment still under-counts. Small, real,
-  unfixed.
-- L4 (#22–#30) is untouched. Several of those criteria want working GitHub
-  Actions and self-tuning scripts, which is a different proposition from the
-  docs-and-config work L0–L3 turned out to be. Worth deciding whether the
-  machinery is wanted before generating it.
+- The guard does not follow `cd`, so `cd tests && pytest .` is refused; write
+  `pytest tests`. Documented in `.claude/README.md`.
+- The guard's pytest option safe list is an allowlist. A plugin option nobody
+  has used yet (e.g. from pytest-xdist) will be refused until it is added to
+  `_PYTEST_LONG` / `_PYTEST_SHORT` — add it with a note on what it reaches.
+- `client.py`'s module docstring still says "four unofficial-but-stable read
+  surfaces" and omits the HTML scrape that `list_shelves` uses. Unfixed.
