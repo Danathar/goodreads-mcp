@@ -69,8 +69,28 @@ one case a confidently-worded finding was factually wrong.
 ask (consequential: pushes, workflow edits), deny (history destruction, `.env`
 reads). See [`.claude/README.md`](../.claude/README.md), which also documents
 what the deny list structurally **cannot** catch: rules are prefix matches, so
-a flag placed after other arguments slips through. The `ask` on all pushes is
-the real gate.
+a flag placed after other arguments slips through.
+
+The prefix limit cuts both ways, and the **allow** side is the sharper edge. A
+rule's prefix stops at the verb, so everything after it is unconstrained:
+`Bash(pytest *)` allows `pytest <any path>`, and pytest imports what it
+collects, so module-level code runs — inside a Python process, where no
+permission rule is consulted at all. `Bash(git diff *)` allows
+`git diff --no-index <any two paths>` (reads any file, which the `Read(./.env)`
+deny entry does not cover — different tool, different rule set) and
+`--output=<path>` on either `diff` or `log` (writes any file). So "the `ask` on
+all pushes is the real gate" holds only for pushes issued **as tool calls**; a
+push from inside a process the allow list started is not one.
+
+A rule with no trailing `*` is an exact match, so `Bash(pytest)` allows the
+bare command and nothing else — the same pairing the deny list already uses
+(`Bash(git reset --hard)` next to `Bash(git reset --hard *)`). That closes the
+`pytest` case outright, at the cost of a prompt on every `pytest -q` and
+`pytest tests/e2e -v`. The `git` rules have no such fix: `git diff HEAD~1` and
+`git diff --no-index a b` both start with `git diff`, and no exact rule can
+admit the first while refusing the second. Where some argument forms must stay
+allowed, it takes a `PreToolUse` hook on `Bash`, which is given the whole
+command string. See [#60](https://github.com/Danathar/goodreads-mcp/issues/60).
 
 ## Workflow permissions
 
