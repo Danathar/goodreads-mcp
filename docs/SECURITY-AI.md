@@ -65,11 +65,12 @@ one case a confidently-worded finding was factually wrong.
 
 ## Agent permissions
 
-`.claude/settings.json` sets a three-layer model — allow (read-only, routine),
-ask (consequential: pushes, workflow edits), deny (history destruction, `.env`
-reads). See [`.claude/README.md`](../.claude/README.md), which also documents
-what the deny list structurally **cannot** catch: rules are prefix matches, so
-a flag placed after other arguments slips through.
+`.claude/settings.json` sets a three-layer model — allow (routine: `pytest`
+and the git verbs `status`, `diff`, `log`), ask (consequential: pushes,
+workflow edits), deny (history destruction, `.env` reads). See
+[`.claude/README.md`](../.claude/README.md), which also documents what the
+deny list structurally **cannot** catch: rules are prefix matches, so a flag
+placed after other arguments slips through.
 
 The prefix limit cuts both ways, and the **allow** side is the sharper edge. A
 rule's prefix stops at the verb, so everything after it is unconstrained:
@@ -90,7 +91,16 @@ bare command and nothing else — the same pairing the deny list already uses
 `git diff --no-index a b` both start with `git diff`, and no exact rule can
 admit the first while refusing the second. Where some argument forms must stay
 allowed, it takes a `PreToolUse` hook on `Bash`, which is given the whole
-command string. See [#60](https://github.com/Danathar/goodreads-mcp/issues/60).
+command string.
+
+That hook is [`.claude/hooks/guard-bash.py`](../.claude/hooks/guard-bash.py).
+It denies `pytest` with a path outside `tests/` or an option that loads code,
+`--no-index` / `--output` on `git diff` and `git log`, and a shell redirection
+on any of the allowed verbs; it stays silent on everything else, so it never
+widens what the rules grant. `tests/test_agent_permissions.py` holds the table
+of denied spellings, the table of ordinary invocations that must pass, and the
+check that the hook is registered — a guard that is not registered guards
+nothing. See [#60](https://github.com/Danathar/goodreads-mcp/issues/60).
 
 ## Workflow permissions
 
