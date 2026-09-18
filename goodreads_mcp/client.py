@@ -1,7 +1,7 @@
 """Goodreads HTTP client (read-only).
 
 Goodreads has had no public API since Dec 2020, so everything here rides
-on four unofficial-but-stable read surfaces, in order of robustness:
+on five unofficial-but-stable read surfaces, in order of robustness:
 
   1. Shelf RSS feeds   — /review/list_rss/{user_id}?shelf=... (public
                           shelves; structured XML)
@@ -11,6 +11,9 @@ on four unofficial-but-stable read surfaces, in order of robustness:
                           the DOM.
   4. AppSync GraphQL     — page-level __NEXT_DATA__ carries the anonymous
                           API key; the _app bundle carries the endpoint.
+  5. Scraped HTML        — list_shelves only, and explicitly best-effort:
+                          shelf *names* have no structured surface. Don't
+                          extend this to anything a surface above covers.
 
 No auth, no cookies, no writes — this server only reads public data.
 
