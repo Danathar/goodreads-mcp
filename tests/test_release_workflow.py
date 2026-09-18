@@ -35,12 +35,14 @@ Three contracts here are load-bearing and were asserted by nothing:
 A `run:` step that is not in `_EXECUTED` below fails the last test in the file,
 so a new step cannot be added without either running it or saying out loud that
 it is not run.
+
+The reader and the runner themselves live in `tests/_workflow_steps.py`, which
+this file and `tests/test_nightly_compliance_workflow.py` share.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import re
 import shutil
@@ -49,6 +51,8 @@ import sys
 import tomllib
 
 import pytest
+
+import _workflow_steps
 
 _ROOT = Path(__file__).resolve().parent.parent
 _RELEASE = _ROOT / ".github" / "workflows" / "release.yml"
@@ -80,165 +84,19 @@ _EXECUTED = {
 # The condition the five release-gated steps share, verbatim.
 _GATE_IF = "steps.check_tag.outputs.exists == 'false' && steps.check_tag.outputs.remote_exists == 'false'"
 
-_EXPR = re.compile(r"\$\{\{\s*(.+?)\s*\}\}")
-_OUTPUT_REF = re.compile(r"steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)")
+_OUTPUT_REF = _workflow_steps.OUTPUT_REF
 
-
-# --------------------------------------------------------------------------
-# Reading the workflow
-# --------------------------------------------------------------------------
-
-
-class _Step:
-    """One entry of the `steps:` list, with only the keys these tests need."""
-
-    def __init__(self, keys: dict[str, str]):
-        self.name = keys.get("name", "").strip().strip("\"'")
-        self.id = keys.get("id", "").strip()
-        self.if_ = keys.get("if", "").strip()
-        self.uses = keys.get("uses", "").strip()
-        self.run = keys.get("run")
-
-    def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return f"<step {self.name or self.uses!r}>"
-
-
-def _dedent(lines: list[str]) -> str:
-    body = [line for line in lines]
-    widths = [len(line) - len(line.lstrip()) for line in body if line.strip()]
-    if not widths:
-        return ""
-    cut = min(widths)
-    return "\n".join(line[cut:] if line.strip() else "" for line in body).rstrip() + "\n"
-
-
-def _parse_step(block: list[str], item_indent: int) -> _Step:
-    """A step block, already sliced out of the file, as a key table.
-
-    The block is normalised so the step's own keys sit at column 0: the first
-    line loses its `- `, every other line loses the same indent.
-    """
-    norm: list[str] = []
-    for i, line in enumerate(block):
-        cut = item_indent + 2
-        if not line.strip():
-            norm.append("")
-        elif i == 0:
-            norm.append(line[cut:])
-        else:
-            norm.append(line[cut:] if len(line) >= cut else line.lstrip())
-
-    keys: dict[str, str] = {}
-    i = 0
-    while i < len(norm):
-        line = norm[i]
-        i += 1
-        if not line.strip() or line.startswith(" "):
-            continue
-        match = re.match(r"([A-Za-z_-]+):\s*(.*)$", line)
-        if not match:
-            continue
-        key, value = match.group(1), match.group(2)
-        if key == "run" and value.strip() in {"|", "|-", "|+", ">", ">-"}:
-            body: list[str] = []
-            while i < len(norm) and (not norm[i].strip() or norm[i].startswith(" ")):
-                body.append(norm[i])
-                i += 1
-            keys[key] = _dedent(body)
-        elif key == "run":
-            keys[key] = value.rstrip() + "\n"
-        else:
-            keys[key] = value
-    return _Step(keys)
-
-
-def _read_steps() -> list[_Step]:
-    lines = _RELEASE.read_text(encoding="utf-8").splitlines()
-    starts = [i for i, line in enumerate(lines) if line.strip() == "steps:"]
-    assert len(starts) == 1, f"{_RELEASE.name} no longer has exactly one steps: list"
-    start = starts[0]
-    list_indent = len(lines[start]) - len(lines[start].lstrip())
-
-    blocks: list[list[str]] = []
-    item_indent: int | None = None
-    for line in lines[start + 1 :]:
-        if not line.strip():
-            if blocks:
-                blocks[-1].append(line)
-            continue
-        indent = len(line) - len(line.lstrip())
-        if indent <= list_indent:
-            break
-        if line.lstrip().startswith("- "):
-            if item_indent is None:
-                item_indent = indent
-            if indent == item_indent:
-                blocks.append([line])
-                continue
-        assert blocks, f"{_RELEASE.name}: content before the first step entry"
-        blocks[-1].append(line)
-
-    assert item_indent is not None, f"{_RELEASE.name}: steps: list is empty"
-    return [_parse_step(block, item_indent) for block in blocks]
-
-
-_STEPS = _read_steps()
-
-
-def _step(name: str) -> _Step:
-    matches = [step for step in _STEPS if step.name == name]
-    assert len(matches) == 1, f"{_RELEASE.name} has {len(matches)} steps named {name!r}"
-    return matches[0]
+_WORKFLOW = _workflow_steps.Workflow(_RELEASE)
+_STEPS = _WORKFLOW.steps
+_step = _WORKFLOW.step
+_write_stub = _workflow_steps.write_stub
+_recorder = _workflow_steps.recorder
+_argv = _workflow_steps.argv
+_outputs = _workflow_steps.outputs
 
 
 def _body(name: str, values: dict[str, str] | None = None) -> str:
-    """The step's shell, with GitHub's expressions substituted.
-
-    An expression this table does not name raises instead of being left in the
-    script, so a new `${{ }}` cannot silently become literal text in a test.
-    """
-    values = values or {}
-    body = _step(name).run
-    assert body, f"step {name!r} has no run: body"
-
-    def replace(match: re.Match[str]) -> str:
-        expression = match.group(1)
-        if expression not in values:
-            raise AssertionError(
-                f"step {name!r} uses ${{{{ {expression} }}}}, which this test does not supply"
-            )
-        return values[expression]
-
-    return _EXPR.sub(replace, body)
-
-
-# --------------------------------------------------------------------------
-# Running a step the way the runner would
-# --------------------------------------------------------------------------
-
-
-def _write_stub(directory: Path, name: str, script: str) -> Path:
-    path = directory / name
-    path.write_text("#!/bin/sh\n" + script, encoding="utf-8")
-    path.chmod(0o755)
-    return path
-
-
-def _recorder(log: Path) -> str:
-    """Shell that appends one NUL-separated record per invocation, `$0` first."""
-    return f'printf \'%s\\0\' "$0" "$@" >> "{log}"\nprintf \'\\n\' >> "{log}"\n'
-
-
-def _argv(log: Path) -> list[list[str]]:
-    if not log.exists():
-        return []
-    records = []
-    for line in log.read_text(encoding="utf-8").splitlines():
-        if not line:
-            continue
-        fields = [field for field in line.split("\0") if field]
-        records.append(fields)
-    return records
+    return _WORKFLOW.body(name, values)
 
 
 @pytest.fixture(scope="module")
@@ -261,32 +119,14 @@ def _run(
     env: dict[str, str] | None = None,
     github_output: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    script = cwd / "_step.sh"
-    script.write_text(body, encoding="utf-8")
-    environ = dict(os.environ)
-    environ.pop("PYTHONPATH", None)
-    if path_dirs:
-        environ["PATH"] = os.pathsep.join(str(d) for d in path_dirs) + os.pathsep + environ["PATH"]
-    if github_output is not None:
-        github_output.touch()
-        environ["GITHUB_OUTPUT"] = str(github_output)
-    environ.update(env or {})
-    return subprocess.run(
-        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", str(script)],
-        cwd=cwd,
-        env=environ,
-        capture_output=True,
-        text=True,
+    return _workflow_steps.run(
+        body,
+        cwd,
+        path_dirs=path_dirs,
+        env=env,
+        github_output=github_output,
+        pipefail=True,
     )
-
-
-def _outputs(github_output: Path) -> dict[str, str]:
-    result = {}
-    for line in github_output.read_text(encoding="utf-8").splitlines():
-        if "=" in line:
-            key, _, value = line.partition("=")
-            result[key] = value
-    return result
 
 
 # --------------------------------------------------------------------------
