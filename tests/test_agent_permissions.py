@@ -247,6 +247,24 @@ _DENIED = [
     ("pytest `cat /tmp/x`", "cannot see"),
     ("pytest $HOME/x.py", "cannot see"),
     ("pytest -k \"it's", "could not parse"),
+    # brace expansion spells a denied flag out of a token that does not
+    # contain one -- the shell assembles it after the guard has looked
+    ("git diff --no-inde{x,x} /etc/hostname /dev/null", "cannot see"),
+    ("git diff --{n,n}o-index a b", "cannot see"),
+    ("git diff --outpu{t,t}=/tmp/W.txt HEAD~1 HEAD", "cannot see"),
+    ("git log -1 --outpu{t,t}=/tmp/L.txt", "cannot see"),
+    ("pytest tests{,/../../tmp/notatest.py}", "cannot see"),
+    # a glob standing where an option goes matches whatever is on disk
+    ("git diff --no-inde[x] a b", "glob in an option"),
+    ("git log -1 --outpu?=/tmp/L.txt", "glob in an option"),
+    ("pytest --cov-repor?=html:/tmp/cov tests", "glob in an option"),
+    # `#` is a comment to shlex wherever it appears and to a shell only at the
+    # start of a word; the guard must read the whole command either way
+    ("git diff a#b --no-index /etc/hostname /dev/null", "--no-index"),
+    ("git diff a#b --output=/tmp/W.txt HEAD~1 HEAD", "--output"),
+    ("pytest --ignore=z#z /tmp/proof/notatest.py", "outside tests/"),
+    ("pytest --deselect=z#z /tmp/proof/notatest.py", "outside tests/"),
+    ("pytest -q#q /tmp/proof/notatest.py", "not on the guard's safe list"),
     # a guarded verb hidden behind a separator is still checked
     ("git log -1; pytest /tmp/x.py", "outside tests/"),
     ("git log -1 && pytest /tmp/x.py", "outside tests/"),
@@ -279,6 +297,9 @@ _PERMITTED = [
     "pytest --co -q",
     "pytest -k 'a>b' tests",  # a quoted `>` is an argument, not a redirection
     "pytest -q 2>&1 | tail -20",  # a file-descriptor duplication writes nothing
+    "pytest tests/test_*.py",  # a glob in a path cannot leave its own directory
+    "git diff -- '*.py'",
+    "git log --grep=#60 --oneline -5",  # `#` mid-word is not a comment
     "python -m pytest -q",
     "python3 -m pytest tests/test_parsers.py",
     "git status",

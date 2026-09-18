@@ -83,9 +83,33 @@ the whole command string and **denies** the spellings above —
 - `--no-index`, `--output` and `--output-file` on `git diff` and `git log`;
 - a shell redirection on any of the three verbs (`2>&1` is fine — it names a
   file descriptor, not a file);
-- `$`, backticks, or a string the shell tokeniser rejects, in a guarded
-  command — the guard can't see what the shell would substitute, so it
-  refuses rather than guesses.
+- `$`, backticks, a brace expansion, a glob standing where an option goes, or
+  a string the shell tokeniser rejects, in a guarded command — the guard can't
+  see what the shell would substitute or expand, so it refuses rather than
+  guesses.
+
+### The guard only holds if it reads what the shell runs
+
+Two ways that came apart, both of them a bypass, both closed:
+
+- **`#` is not a comment mid-word.** `shlex` ends a token at `#` wherever it
+  appears; a shell starts a comment only at the start of a word. So
+  `pytest --ignore=z#z /tmp/evil.py` reached the guard as `pytest --ignore=z`,
+  which is clean, and reached pytest whole — arbitrary code execution with no
+  prompt. The lexer is given no comment character now. A real trailing comment
+  is then read as arguments and refused; that is the safe direction to be
+  wrong in.
+- **Brace expansion happens after the guard has looked.** It spells a denied
+  flag out of a token that does not contain one:
+  `git diff --no-inde{x,x} a b` is `git diff --no-index --no-index a b` by the
+  time git sees it, and `--outpu{t,t}=<path>` writes any file the same way.
+  Braces are refused rather than expanded, because an expander that disagreed
+  with the shell in the other direction would be this same bug again.
+
+The general shape: any construct the guard resolves differently from the shell
+is a bypass, not a cosmetic difference. Adding one that makes the guard see
+*more* than the shell runs costs a false refusal; one that makes it see *less*
+costs the whole gate.
 
 Everything else it leaves alone: it prints nothing, and the call goes through
 the normal permission flow. It never *grants* anything, so the usual commands

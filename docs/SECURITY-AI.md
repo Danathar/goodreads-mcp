@@ -102,6 +102,18 @@ of denied spellings, the table of ordinary invocations that must pass, and the
 check that the hook is registered — a guard that is not registered guards
 nothing. See [#60](https://github.com/Danathar/goodreads-mcp/issues/60).
 
+A guard that reads the command string carries a second failure mode, separate
+from being unregistered: it holds only while the string it reads is the string
+the shell runs. Two constructs broke that and are now refused outright — a `#`,
+which ends a token for `shlex` wherever it appears but starts a comment for a
+shell only at the start of a word, and a brace expansion, which assembles a
+denied flag out of a token that does not contain one. Both let an allow-listed
+command through the guard clean and reach the program whole. Any new construct
+the guard resolves differently from the shell is the same bug; see
+[#71](https://github.com/Danathar/goodreads-mcp/issues/71) and the
+"guard only holds if it reads what the shell runs" section of
+[`.claude/README.md`](../.claude/README.md).
+
 ## Workflow permissions
 
 - Scope `permissions:` to the minimum each job needs.
