@@ -48,9 +48,13 @@ print(e); print(k[:8] + '...')
 ```
 
 Expect an `appsync-api` endpoint ending in `/graphql` and a key starting
-`da2-`. If this fails, the discovery regexes in `client.py`
-(`APP_CHUNK_RE`, `APPSYNC_PAIR_RE`, `parse_page_api_key`) need updating —
-never respond by hardcoding a key or endpoint.
+`da2-`. If this fails, the discovery code in `client.py` needs updating:
+`APP_CHUNK_RE`, `NEXT_DATA_RE`, `APPSYNC_KEY_RE`, `APPSYNC_ENDPOINT_RE` and
+`APPSYNC_PAIR_RE`, plus the `parse_page_api_key`, `parse_appsync_endpoint` and
+`parse_appsync_config` parsers around them. Start with `parse_appsync_endpoint`
+— it is on the primary path, while `parse_appsync_config` and its paired
+`APPSYNC_PAIR_RE` only run as the legacy fallback. Never respond by hardcoding
+a key or endpoint.
 
 ## After fixing
 
