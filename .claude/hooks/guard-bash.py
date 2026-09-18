@@ -26,9 +26,24 @@ line CI uses, `git diff --stat HEAD~1 HEAD`, `git log --oneline -20`.
 How it reads a command: it is tokenised the way a shell would (quotes respected;
 `;`, `&&`, `||`, `|`, `&`, `(`, `)` and newlines split it into simple
 commands), and each simple command whose verb is guarded is checked on its own.
-Anything the guard cannot see through -- `$var`, `$(...)`, a backtick, a string
-that does not tokenise -- is denied rather than guessed at, but only in a
-guarded command; `echo $HOME` is not this hook's business.
+Anything the guard cannot see through -- `$var`, `$(...)`, a backtick, a brace
+expansion, a glob standing where an option goes, a string that does not
+tokenise -- is denied rather than guessed at, but only in a guarded command;
+`echo $HOME` is not this hook's business.
+
+The guard only holds while the string it reads is the string the shell runs.
+Two ways that used to come apart, both of them a bypass:
+
+* `#` starts a comment in `shlex` wherever it appears, but in a shell only at
+  the start of a word. `pytest --ignore=z#z /tmp/evil.py` reached the guard as
+  `pytest --ignore=z` -- clean -- and reached pytest whole. The lexer is given
+  no comment character now, so nothing is dropped; a real trailing comment is
+  read as arguments and refused, which is the safe direction to be wrong in.
+* Brace expansion happens after the guard has looked and spells a denied flag
+  out of tokens that do not contain it: `git diff --no-inde{x,x} a b` is
+  `git diff --no-index --no-index a b` by the time git sees it. Braces are
+  refused rather than expanded here, because an expander that disagreed with
+  the shell in the other direction would be this same bug again.
 
 Exercised by `tests/test_agent_permissions.py`. If you change what is denied
 here, change the tables there.
@@ -168,6 +183,19 @@ _GIT_DENIED = {"--no-index", "--output", "--output-file"}
 _PUNCTUATION = "();<>|&\n"
 _FD_DUP = {">&", "<&"}
 
+# Characters that make a token stand for something other than itself by the
+# time the shell has finished with it: `$` and a backtick substitute unknown
+# text, and `{` `}` brace-expand, which assembles a denied flag out of a token
+# that does not contain one.
+_OPAQUE = ("$", "`", "{", "}")
+
+# Glob metacharacters. A path may carry them -- `pytest tests/test_*.py`,
+# `git diff -- '*.py'` -- and a glob cannot walk a path out of the directory
+# its literal prefix names, so paths are left alone. An option never carries
+# them, and a glob standing where an option goes matches whatever the
+# filesystem happens to hold, including a file named after a denied flag.
+_GLOB = ("*", "?", "[", "]")
+
 
 class Denied(Exception):
     """Raised with the reason a command is refused."""
@@ -180,6 +208,10 @@ def _tokenise(command: str) -> list[str]:
     lexer = shlex.shlex(command, posix=True, punctuation_chars=_PUNCTUATION)
     lexer.whitespace = " \t\r"  # newline is a separator, not whitespace
     lexer.whitespace_split = True
+    # `shlex` treats `#` as a comment anywhere, a shell only at the start of a
+    # word. Dropping the rest of `--ignore=z#z /tmp/evil.py` would hide from
+    # the guard exactly the part the shell goes on to run.
+    lexer.commenters = ""
     return list(lexer)
 
 
@@ -344,10 +376,18 @@ def _check_command(words: list[str], cwd: Path) -> None:
         verb = f"git {verb}"
 
     for token in words:
-        if "$" in token or "`" in token:
+        opaque = next((ch for ch in _OPAQUE if ch in token), None)
+        if opaque is not None:
             raise Denied(
-                f"`{verb}` with `$` or a backtick in it: the guard cannot see "
-                "what the shell would substitute, so it cannot check the path"
+                f"`{verb}` with `{opaque}` in it: the guard cannot see what the "
+                "shell would substitute or expand, so it cannot check the "
+                "command that would actually run"
+            )
+        if token.startswith("-") and any(ch in token for ch in _GLOB):
+            raise Denied(
+                f"`{verb}` with a glob in an option (`{token}`): what it "
+                "expands to depends on what is on disk, so the guard cannot "
+                "see which option this is"
             )
 
     args = _strip_redirections(args, verb)

@@ -32,6 +32,22 @@ a hardcoded value turns a rotation into an outage.
 **Why it matters:** Upstream markup changes are this project's most common
 real failure, and they are invisible to fixture-based tests by construction.
 
+## A command-string guard must read what the shell runs, not what it parses
+**Date:** 2026-09-18
+**Wrong:** Tokenising the Bash command with a default `shlex.shlex` and
+comparing the tokens against a table of denied flags.
+**Right:** `shlex` defaults to `commenters = '#'`, so it ended the command at
+the first `#` in any position, while a shell starts a comment only at the start
+of a word — `pytest --ignore=z#z /tmp/evil.py` reached the guard as
+`pytest --ignore=z`. And brace expansion runs after the hook has decided, so
+`--no-inde{x,x}` is `--no-index` by the time git sees it. The lexer is given no
+comment character, and braces and option-position globs are refused rather than
+expanded.
+**Why it matters:** The gap between the string a guard parses and the string
+the shell executes is the whole gate. Seeing *more* than the shell runs costs a
+false refusal; seeing *less* costs everything the guard was added for — here,
+all of #60. See #71.
+
 ## Book ids may be slugs
 **Date:** 2026-09-16
 **Wrong:** Assuming `book_id` is numeric.
