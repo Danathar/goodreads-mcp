@@ -25,6 +25,17 @@ Two different decay rates, so two different treatments:
 
 That split is the point. Pinning the unpinnable number to reality would produce
 a test that fails on every honest test PR, which is how a guard gets deleted.
+
+The **test counts** in the same table are a third case, and they go the other
+way. `docs/quality.md` said 322 offline tests while the suite ran 418 (#85) —
+96 low, in the table a reader uses as the evidence for the document's argument
+that the offline suite is not this project's weak spot. Unlike coverage, the
+count can be read without running the suite: `--collect-only` is a sub-second
+subprocess and is not circular, because collecting tests does not execute them.
+So it is pinned to reality rather than to a sibling copy. That does mean a PR
+adding tests must edit the row — one line, and the failure message below prints
+the exact line to write. The `CI, last 30 runs` row has no such source, so it
+gets the pinned-to-each-other treatment against `docs/metrics.md`'s fuller copy.
 """
 
 from __future__ import annotations
@@ -33,6 +44,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 
 import pytest
 
@@ -41,6 +53,9 @@ _THRESHOLDS = _ROOT / ".coverage-thresholds.json"
 _TUNING = _ROOT / ".github" / "auto-qa-tuning.json"
 _CI = _ROOT / ".github" / "workflows" / "ci.yml"
 _METRICS = _ROOT / "docs" / "metrics.md"
+
+# The opt-in live suite. Everything else is the offline suite CI runs.
+_LIVE_DIR = "tests/e2e"
 
 # `--cov-fail-under=N`, `--cov-fail-under N`, or `--cov-fail-under=N.0`.
 _CI_GATE = re.compile(r"--cov-fail-under[= ](\d+(?:\.\d+)?)")
@@ -64,6 +79,20 @@ _SNAPSHOT_PROSE = {
     "docs/quality.md": "| coverage | {measured}% overall",
 }
 
+# The test-count row of the same table, pinned to what pytest actually collects.
+_COUNT_ROW = "| offline tests | {offline} passing, {live} skipped (live, opt-in) |"
+
+# `docs/metrics.md`'s CI row is the fuller copy: successes, non-successes, and
+# the window they were read over. `docs/quality.md` quotes the successes alone.
+_METRICS_CI_ROW = re.compile(
+    r"\|\s*last (?P<window>\d+) `ci\.yml` runs\s*\|(?P<counts>[^|]*)\|"
+)
+_QUALITY_CI_ROW = re.compile(r"\|\s*CI, last (?P<window>\d+) runs\s*\|\s*(?P<success>\d+) success\s*\|")
+_COUNT_AND_LABEL = re.compile(r"(\d+) ([a-z-]+(?: [a-z-]+)*)")
+
+# A `--collect-only -q` line is a node id: `tests/test_x.py::test_y`.
+_NODE_ID = re.compile(r"^(tests/[^\s:]+\.py)::")
+
 # The tracked files the `--cov-fail-under` sweep reads. Suffix-scoped so the
 # sweep never opens a binary fixture.
 _TEXT_SUFFIXES = {".md", ".yml", ".yaml", ".json", ".py", ".toml", ".txt", ".cfg", ".ini"}
@@ -77,6 +106,31 @@ def thresholds() -> dict:
 @pytest.fixture(scope="module")
 def tuning() -> dict:
     return json.loads(_TUNING.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def collected() -> dict[str, int]:
+    """How many tests this repo has, by suite, read from pytest's own collection.
+
+    A separate process so the outer run's options (coverage, `-k`, a single
+    file) cannot change the answer; `--collect-only` does not execute anything,
+    so this does not recurse. Sub-second: collection is a parse, not a run.
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", "tests"],
+        cwd=_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"collecting the suite failed:\n{result.stdout}\n{result.stderr}"
+    node_ids = [
+        match.group(1)
+        for line in result.stdout.replace("\\", "/").splitlines()
+        if (match := _NODE_ID.match(line.strip()))
+    ]
+    assert node_ids, f"collection returned no node ids; output was:\n{result.stdout}"
+    live = sum(1 for path in node_ids if path.startswith(f"{_LIVE_DIR}/"))
+    return {"offline": len(node_ids) - live, "live": live, "total": len(node_ids)}
 
 
 def _ci_gate() -> float:
@@ -203,3 +257,56 @@ def test_the_note_records_that_the_snapshot_decays(thresholds: dict):
     note = thresholds["note"].lower()
     assert "stale" in note, f"the note no longer warns the snapshot decays: {thresholds['note']!r}"
     assert "floor" in note, "the note lost the reason the gate sits below the measurement"
+
+
+def test_the_test_count_row_matches_what_pytest_collects(collected: dict[str, int]):
+    """#85: the row read 322 while the suite ran 418, and no test looked at it.
+
+    This is the one figure in the table that a PR adding tests has to refresh.
+    That is the trade: the alternative is a number that drifts until a reader
+    draws the wrong conclusion from it, which is what happened.
+
+    Counts, not outcomes: the row's split into passing and skipped holds because
+    `tests/e2e` is the only suite that skips itself (without `GOODREADS_LIVE`)
+    and CI would be red if an offline test failed. Add a skip outside
+    `tests/e2e` and the row's wording, not just its number, needs revisiting.
+    """
+    assert collected["live"], f"{_LIVE_DIR} collects nothing; the row's skipped half has no source"
+    row = _COUNT_ROW.format(offline=collected["offline"], live=collected["live"])
+    assert row in _prose("docs/quality.md"), (
+        f"docs/quality.md's test-count row is stale or reworded. pytest collects "
+        f"{collected['offline']} offline and {collected['live']} live tests, so the row should read:\n"
+        f"  {row}\n"
+        "If the wording changed on purpose, update _COUNT_ROW here to match."
+    )
+
+
+def test_the_two_ci_run_rows_agree_with_each_other():
+    """Two hand-maintained copies of one reading; neither was checked before (#85).
+
+    Pinned to each other, not to the API: re-reading `gh run list` here would
+    make the suite depend on the network and on a window that moves every push.
+    """
+    metrics = _METRICS_CI_ROW.search(_prose("docs/metrics.md"))
+    assert metrics, "docs/metrics.md no longer has a `last N ci.yml runs` row for quality.md to agree with"
+    quality = _QUALITY_CI_ROW.search(_prose("docs/quality.md"))
+    assert quality, "docs/quality.md no longer has a `CI, last N runs` row"
+
+    assert quality["window"] == metrics["window"], (
+        f"docs/quality.md reads the last {quality['window']} runs but docs/metrics.md reads "
+        f"the last {metrics['window']}; the same row cannot be both"
+    )
+
+    tallies = dict(
+        (label, int(count)) for count, label in _COUNT_AND_LABEL.findall(metrics["counts"])
+    )
+    assert "success" in tallies, f"docs/metrics.md's CI row records no success count: {metrics['counts']!r}"
+    assert int(quality["success"]) == tallies["success"], (
+        f"docs/quality.md says {quality['success']} successful runs but docs/metrics.md says "
+        f"{tallies['success']} over the same window; docs/metrics.md is the fuller copy, so update it "
+        "first and then the copy in docs/quality.md"
+    )
+    assert sum(tallies.values()) == int(metrics["window"]), (
+        f"docs/metrics.md's CI row tallies {sum(tallies.values())} runs over a window of "
+        f"{metrics['window']}: {tallies}. A partial refresh leaves the row describing two different reads."
+    )
