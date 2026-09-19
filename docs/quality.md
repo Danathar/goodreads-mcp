@@ -20,7 +20,7 @@ what's known-weak, and where the real risk sits.
 
 | | |
 |---|---|
-| offline tests | 322 passing, 22 skipped (live, opt-in) |
+| offline tests | 420 passing, 22 skipped (live, opt-in) |
 | coverage | 99% overall — `config.py` 100%, `client.py` 100%, `server.py` 99% |
 | CI, last 30 runs | 28 success |
 
@@ -28,7 +28,14 @@ Recompute:
 
 ```bash
 pytest -q --cov=goodreads_mcp --cov-report=term-missing
+gh run list --workflow ci.yml --limit 30 --json conclusion \
+  --jq 'group_by(.conclusion)[] | "\(.[0].conclusion): \(length)"'
 ```
+
+`tests/test_coverage_thresholds.py` reads all three rows: the test count is
+pinned to what pytest collects (so a PR that adds tests updates this row), the
+coverage figure to [`.coverage-thresholds.json`](../.coverage-thresholds.json),
+and the CI row to the fuller copy in [`metrics.md`](metrics.md#ci).
 
 ## The honest weak spot
 
