@@ -303,6 +303,56 @@ def test_the_rubric_still_promises_the_gate_this_file_exercises():
 
 
 # --------------------------------------------------------------------------
+# The manifest names this fork, not the project it was forked from (#96)
+#
+# Claude Desktop shows a bundle's author and homepage from the manifest, and
+# `mcpb validate` checks neither, so this is the only thing holding them. The
+# manifest shipped with upstream's author and links next to this fork's
+# `GPL-3.0-only`: people who installed the bundle were sent to another project
+# for support, and the relicense was attributed to an author who released
+# under MIT. Upstream's credit belongs in LICENSE.MIT and the README, where
+# the MIT licence requires it to stay.
+
+_FORK_OWNER = "Danathar"
+_FORK_URL = f"https://github.com/{_FORK_OWNER}/goodreads-mcp"
+_UPSTREAM_URL = "https://github.com/shreeyachand/goodreads-mcp"
+_README = _ROOT / "README.md"
+_LICENSE_MIT = _ROOT / "LICENSE.MIT"
+
+
+def _manifest() -> dict:
+    return json.loads(_MANIFEST.read_text(encoding="utf-8"))
+
+
+def test_the_manifest_author_is_this_forks_maintainer():
+    author = _manifest()["author"]
+    assert author["name"] == _FORK_OWNER
+    assert author["url"] == f"https://github.com/{_FORK_OWNER}"
+
+
+def test_the_manifest_homepage_and_repository_point_at_this_fork():
+    manifest = _manifest()
+    assert manifest["homepage"] == _FORK_URL
+    assert manifest["repository"] == {"type": "git", "url": _FORK_URL}
+
+
+def test_the_manifest_license_is_the_forks_and_its_links_are_not_upstreams():
+    """The pairing that was wrong: upstream's identity under this fork's licence."""
+    manifest = _manifest()
+    assert manifest["license"] == "GPL-3.0-only"
+    text = json.dumps(manifest)
+    assert "shreeyachand" not in text and "Shreeya" not in text
+
+
+def test_upstream_credit_stays_where_the_readme_says_it_lives():
+    """Moving the manifest off upstream must not move the attribution too."""
+    readme = _README.read_text(encoding="utf-8")
+    assert _UPSTREAM_URL in readme
+    assert "LICENSE.MIT" in readme
+    assert "Shreeya Chand" in _LICENSE_MIT.read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
 # Check if tag already exists
 # --------------------------------------------------------------------------
 
