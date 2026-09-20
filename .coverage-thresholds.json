@@ -3,8 +3,8 @@
   "scope": "goodreads_mcp",
   "min_line_coverage_percent": 55,
   "gate_source": ".github/workflows/ci.yml (--cov-fail-under), mirrored here, in .github/auto-qa-tuning.json and in every doc that quotes it; tests/test_coverage_thresholds.py fails if any copy disagrees",
-  "measured_percent": 99,
-  "measured_at": "2026-09-17 (f388fac)",
+  "measured_percent": 100,
+  "measured_at": "2026-09-20 (9cfcf92)",
   "regenerate": "pytest -q --cov=goodreads_mcp --cov-report=term-missing",
-  "note": "measured_percent is a reading of HEAD and goes stale whenever a test lands — it sat at 61 while four test PRs took it to 82 (#63). Re-run `regenerate` and update measured_percent/measured_at when you touch this file. The threshold is deliberately set below the measured figure with headroom, not at the ceiling: it is a floor against regression, not a target to climb."
+  "note": "measured_percent is a reading of HEAD and goes stale whenever a test lands \u2014 it sat at 61 while four test PRs took it to 82 (#63). Re-run `regenerate` and update measured_percent/measured_at when you touch this file. The threshold is deliberately set below the measured figure with headroom, not at the ceiling: it is a floor against regression, not a target to climb."
 }
