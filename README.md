@@ -63,7 +63,9 @@ Env var `GOODREADS_USER_ID` overrides the file.
 
 ## Claude Desktop config
 
-`~/Library/Application Support/Claude/claude_desktop_config.json`:
+**Bundle.** Each [release](https://github.com/Danathar/goodreads-mcp/releases) carries a `goodreads-mcp.mcpb`; open it in Claude Desktop to install. The bundle ships no dependencies — the manifest launches the server with `uv run`, and the host resolves `pyproject.toml` into a private environment on first launch — so one bundle runs on macOS, Windows and Linux with any Python ≥ 3.10.
+
+**Manual.** `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {

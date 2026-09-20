@@ -24,40 +24,40 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-18 — #71, the guard read a different command than the shell ran
+## 2026-09-20 — #89/#90, the released bundle only started on Linux x86_64 / CPython 3.11
 
-**Done (#60, earlier):** `.claude/hooks/guard-bash.py`, a `PreToolUse` hook on
-`Bash`, denies what the allow list cannot refuse — `pytest` outside `tests/` or
-with a code-loading option, `--no-index` / `--output` on `git diff` and
-`git log`, redirections on the allowed verbs. Merged.
+**Done:** `release.yml` vendored mcp's dependency closure with
+`pip install --target ./vendor` on the runner, and four of those packages
+(`pydantic-core`, `rpds-py`, `cffi`, `cryptography`) are compiled, so the
+`.mcpb` that declared `darwin`/`win32`/`linux` and `python >=3.10` started on
+exactly the runner's platform and Python (#89). `PYTHONPATH` in the manifest
+joined two entries with `:`, which Windows reads as one directory (#90).
+`manifest.json` is now `server.type: "uv"` launching
+`uv run --directory ${__dirname} python -m goodreads_mcp.server` — the MCPB
+runtime made for this (its spec: "handles compiled dependencies", "no user
+Python installation required") — with no `PYTHONPATH`; the vendor step is
+gone, and two release steps replace it: fail on a compiled module inside the
+bundle while the manifest lists more than one platform, and unpack the packed
+bundle and run its manifest's own command under a real `uv`. Verified end to
+end locally: the packed bundle is 56 kB, `uv run` on the unpacked tree
+resolved 37 packages and answered `initialize` + `tools/list` with all 12
+tools. `tests/test_release_workflow.py` and `tests/test_stdio_launch.py`
+updated (474 offline tests).
 
-**Done (#71):** two ways that guard read a shorter or different command than
-bash would run, each of them restoring all of #60 with no prompt:
-`shlex`'s default `commenters = '#'` truncated at a mid-word `#`
-(`pytest --ignore=z#z /tmp/evil.py` arrived as `pytest --ignore=z`), and brace
-expansion rebuilt a denied flag after the hook had decided
-(`git diff --no-inde{x,x} a b`). The lexer now has no comment character;
-`{`, `}` join `$` and backticks as refused, and a glob in option position is
-refused too. 16 new `_DENIED` rows and 3 new `_PERMITTED` rows in
-`tests/test_agent_permissions.py`; both reproductions verified end to end
-against real `git` 2.47.3 and real `pytest` before and after.
-
-**In flight:** the PR on `sec/guard-shell-expansion`.
+**In flight:** the PR on `fix/89-portable-mcpb-bundle`.
 
 **Blocked on:** nothing.
 
 **Watch:**
-- The guard does not follow `cd`, so `cd tests && pytest .` is refused; write
-  `pytest tests`. Documented in `.claude/README.md`.
-- The guard's pytest option safe list is an allowlist. A plugin option nobody
-  has used yet (e.g. from pytest-xdist) will be refused until it is added to
-  `_PYTEST_LONG` / `_PYTEST_SHORT` — add it with a note on what it reaches.
-- Refusing braces means a legitimate `{a,b}` in a guarded command is blocked
-  outright, not prompted. Nothing in the repo's documented invocations uses
-  one; if that changes, expand rather than refuse only with an expander tested
-  against bash in both directions.
-- `.github/workflows/ci.yml` is the one workflow with no `permissions:` block,
-  so it takes the repository default while `docs/SECURITY-AI.md` says to scope
-  every job to its minimum. Observed, not acted on.
-- `client.py`'s module docstring still says "four unofficial-but-stable read
-  surfaces" and omits the HTML scrape that `list_shelves` uses. Unfixed.
+- `uv run` writes `.venv/` and `uv.lock` into the installed extension
+  directory on first launch and needs the network then. No `uv.lock` is
+  committed, so each install resolves the newest versions inside the
+  `pyproject.toml` ranges; committing one (and `uv lock --check` in CI) would
+  make installs reproducible at the cost of a lock to maintain with pip-only
+  contributor tooling. Not done.
+- The bundle still carries `docs/`, `prompts/`, `.cursor/` and the agent
+  files — harmless, ~130 kB unpacked — because `.mcpbignore` only drops
+  tests, CI and build artefacts. Could be trimmed.
+- The guard's pytest option safe list is an allowlist (see #71). A plugin
+  option nobody has used yet will be refused until added to `_PYTEST_LONG` /
+  `_PYTEST_SHORT`.
