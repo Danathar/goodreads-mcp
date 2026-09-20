@@ -21,7 +21,7 @@ what's known-weak, and where the real risk sits.
 | | |
 |---|---|
 | offline tests | 457 passing, 22 skipped (live, opt-in) |
-| coverage | 99% overall — `config.py` 100%, `client.py` 100%, `server.py` 99% |
+| coverage | 100% overall — `config.py` 100%, `client.py` 100%, `server.py` 100% |
 | CI, last 30 runs | 28 success |
 
 Recompute:
