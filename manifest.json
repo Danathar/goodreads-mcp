@@ -7,13 +7,13 @@
   "display_name": "Goodreads MCP",
   "long_description": "Read-only MCP server for Goodreads — search books, fetch details/ratings histogram/series/review languages, paginated reviews via GraphQL, similar books, author bibliography, series order, editions, Listopia lists, popular by date, shelf RSS. No API key or login required; public data only.",
   "author": {
-    "name": "Shreeya Chand",
-    "url": "https://github.com/shreeyachand"
+    "name": "Danathar",
+    "url": "https://github.com/Danathar"
   },
-  "homepage": "https://github.com/shreeyachand/goodreads-mcp",
+  "homepage": "https://github.com/Danathar/goodreads-mcp",
   "repository": {
     "type": "git",
-    "url": "https://github.com/shreeyachand/goodreads-mcp"
+    "url": "https://github.com/Danathar/goodreads-mcp"
   },
   "license": "GPL-3.0-only",
   "keywords": ["goodreads", "books", "mcp", "reading"],
