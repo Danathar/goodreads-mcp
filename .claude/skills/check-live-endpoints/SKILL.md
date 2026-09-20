@@ -31,11 +31,12 @@ moved, rule out:
 | symptom | surface | what happened |
 |---|---|---|
 | `WAFChallenge` raised | HTML pages | AWS WAF now gates that path (HTTP 202) |
+| `LoginRequired` raised | HTML pages | the path redirected to `/user/sign_in` (the review-list page did in Sep 2026, #91), or the profile is private |
 | `GraphQLError`, or 401/403 | AppSync GraphQL | key or endpoint rotated |
 | `ValueError: No __NEXT_DATA__ blob` | page JSON | page is no longer Next.js, or is WAF-gated |
 | fields present but `None` | page JSON / GraphQL | Apollo state keys or schema fields renamed |
 | RSS returns no items | shelf RSS | shelf went private, or feed shape changed |
-| `list_shelves` returns `[]` | scraped HTML | `shelf=` links gone from `/review/list/{uid}`, or profile is private |
+| `list_shelves` returns `[]` | scraped HTML | `shelf=`/`tag=` links gone from the bookshelves module of `/user/show/{uid}` |
 
 ## Confirm GraphQL config still resolves
 

@@ -49,7 +49,12 @@ import pytest
 
 from goodreads_mcp import client as client_mod
 from goodreads_mcp import server
-from goodreads_mcp.client import GoodreadsClient, GraphQLError, WAFChallenge
+from goodreads_mcp.client import (
+    GoodreadsClient,
+    GraphQLError,
+    LoginRequired,
+    WAFChallenge,
+)
 
 _ROOT = Path(__file__).resolve().parent.parent
 _SKILL_DIR = _ROOT / ".claude" / "skills" / "check-live-endpoints"
@@ -241,9 +246,13 @@ def mock_goodreads(monkeypatch):
     """
 
     def install(handler):
+        # follow_redirects matches the real client: a login-gated path is a
+        # 302 the client follows to a 200 form, and the check for it reads
+        # where the response landed (#91).
         transport = httpx.Client(
             base_url="https://www.goodreads.com",
             transport=httpx.MockTransport(handler),
+            follow_redirects=True,
         )
         monkeypatch.setattr(
             GoodreadsClient, "client", property(lambda self: transport)
@@ -392,7 +401,7 @@ def test_a_bare_pytest_run_collects_the_offline_suite():
 def test_the_symptom_table_has_a_row_per_way_a_surface_can_break():
     rows = _table(_sections()["Read the failure by surface"])
     assert rows[0] == ["symptom", "surface", "what happened"]
-    assert len(rows) == 7, "header plus six symptoms"
+    assert len(rows) == 8, "header plus seven symptoms"
     assert all(len(row) == 3 for row in rows)
 
 
@@ -441,6 +450,64 @@ def test_the_waf_row_would_be_wrong_for_any_other_status(mock_goodreads):
         )
     )
     assert GoodreadsClient().get("/book/show/1").status_code == 200
+
+
+def test_the_login_row_names_the_path_and_exception_the_client_actually_uses(
+    mock_goodreads,
+):
+    """#91: a login-gated path is a 302 the client follows to a 200 sign-in
+    form, so status alone cannot tell it from content. The row names the path
+    the response lands on; provoke exactly that and expect the exception."""
+    symptom = _symptom("LoginRequired")
+    row = [r for r in _table(_sections()["Read the failure by surface"])[1:]
+           if r[0] == symptom][0]
+    path = re.search(r"`(/user/[a-z_]+)`", row[2]).group(1)
+    assert path == client_mod.SIGN_IN_PATH
+
+    landed: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        landed.append(request.url.path)
+        if request.url.path == "/review/list/1":
+            return httpx.Response(
+                302, headers={"location": f"{path}?returnurl=%2Freview%2Flist%2F1"}
+            )
+        return httpx.Response(200, text="<html><form id='signIn'></form></html>")
+
+    mock_goodreads(handler)
+    with pytest.raises(LoginRequired):
+        GoodreadsClient().get("/review/list/1")
+    assert landed == ["/review/list/1", path], "the redirect was not followed"
+
+
+def test_the_login_row_would_be_wrong_for_a_page_that_merely_links_sign_in(
+    mock_goodreads,
+):
+    """Every Goodreads page links /user/sign_in in its header. The check is on
+    where the response landed, not on the body, or every page would raise."""
+    mock_goodreads(
+        lambda request: httpx.Response(
+            200, text='<html><a href="/user/sign_in">Sign in</a></html>'
+        )
+    )
+    assert GoodreadsClient().get("/review/list/1").status_code == 200
+
+
+def test_the_login_row_is_true_of_a_private_profile(mock_goodreads):
+    """The row's second cause: a private profile is a normal 200 whose
+    bookshelves module is replaced by a marker box, and `list_shelves` raises
+    the same exception rather than returning `[]`."""
+    row = [r for r in _table(_sections()["Read the failure by surface"])[1:]
+           if r[0] == _symptom("LoginRequired")][0]
+    assert "profile is private" in row[2]
+
+    mock_goodreads(
+        lambda request: httpx.Response(
+            200, text=f"<html><div {server._PRIVATE_PROFILE_MARKER}></div></html>"
+        )
+    )
+    with pytest.raises(LoginRequired):
+        server.list_shelves("1234")
 
 
 def test_the_graphql_row_names_the_exception_a_dataless_body_raises(mock_goodreads):
@@ -512,12 +579,24 @@ def test_the_rss_row_is_true_of_a_feed_with_no_items():
 
 
 def test_the_list_shelves_row_is_true_of_a_page_with_no_shelf_links(monkeypatch):
-    """The row promises `[]`, not an exception -- that is what makes it a symptom."""
+    """The row promises `[]`, not an exception -- that is what makes it a
+    symptom -- and names the page and the link params the tool reads."""
     assert "`list_shelves` returns `[]`" in _symptom("list_shelves")
-    monkeypatch.setattr(
-        server.gr, "get", lambda url, **kw: httpx.Response(200, text="<html></html>")
-    )
+    row = [r for r in _table(_sections()["Read the failure by surface"])[1:]
+           if r[0] == _symptom("list_shelves")][0]
+    page = re.search(r"`(/user/show/\{uid\})`", row[2]).group(1)
+    params = set(re.findall(r"`(\w+)=`", row[2]))
+    assert params == {"shelf", "tag"}
+
+    fetched: list[str] = []
+
+    def get(url, **kw):
+        fetched.append(url)
+        return httpx.Response(200, text="<html></html>")
+
+    monkeypatch.setattr(server.gr, "get", get)
     assert server.list_shelves("1234") == []
+    assert fetched == [page.replace("{uid}", "1234")]
 
 
 def test_the_rate_limiting_note_names_the_statuses_the_client_backs_off_on():
