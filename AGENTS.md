@@ -38,6 +38,9 @@ rather than implementing them.
 **Be a polite guest.** These endpoints are unofficial. Keep the single shared
 client and its session, keep exponential backoff on 429/503, keep the
 browser-faithful headers. Don't add concurrency that multiplies request rate.
+Tool calls run in worker threads so the server can answer pings mid-call
+(`OffLoopFastMCP` in `server.py`, #92); `client.MAX_IN_FLIGHT` is what keeps
+parallel calls from becoming parallel load. Raise it only with a reason.
 
 ## The data surfaces
 
