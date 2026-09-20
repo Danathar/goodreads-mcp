@@ -6,6 +6,13 @@ on:
   push:
     branches: [main]
 
+# Least privilege: this job reads the repository and fetches from PyPI and npm.
+# It calls no GitHub API, so read on contents is the whole requirement. Pinning
+# it here also stops the token's scope from depending on a repository setting
+# that is not visible in the tree.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
