@@ -15,8 +15,10 @@ import httpx
 import pytest
 
 from goodreads_mcp.client import (
+    SIGN_IN_PATH,
     GoodreadsClient,
     GraphQLError,
+    LoginRequired,
     parse_appsync_endpoint,
     parse_page_api_key,
 )
@@ -106,6 +108,73 @@ def test_request_guard_fires_if_the_retry_loop_never_runs():
 
     with pytest.raises(RuntimeError, match="unreachable"):
         _client(handler, max_retries=-1).get("/anything")
+
+
+# ------------------------------------------------------- sign-in redirects
+
+
+def _sign_in_wall(gated: str):
+    """A handler that login-gates one path the way Goodreads does (#91):
+    302 to /user/sign_in?returnurl=..., then a 200 login form."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == gated:
+            return httpx.Response(
+                302, headers={"location": f"/user/sign_in?returnurl={gated}"}
+            )
+        if request.url.path == SIGN_IN_PATH:
+            return httpx.Response(200, text="<html><form>sign in</form></html>")
+        return httpx.Response(200, text=f"<html>{request.url.path}</html>")
+
+    return handler
+
+
+def _following_client(handler) -> GoodreadsClient:
+    """`_client` with the redirect-following the real transport is built with,
+    which is what makes a login wall arrive as a 200 rather than a 302."""
+    client = GoodreadsClient()
+    client._client = httpx.Client(
+        base_url="https://www.goodreads.com",
+        transport=httpx.MockTransport(handler),
+        follow_redirects=True,
+    )
+    return client
+
+
+def test_request_raises_when_a_redirect_lands_on_the_sign_in_page():
+    client = _following_client(_sign_in_wall("/review/list/1"))
+    with pytest.raises(LoginRequired) as excinfo:
+        client.get("/review/list/1")
+    # The message names the path that was asked for, not the login page it
+    # ended up on, so the reader knows which surface went behind a login.
+    assert "/review/list/1" in str(excinfo.value)
+
+
+def test_request_passes_a_redirect_that_lands_somewhere_else():
+    """Goodreads 301s bare ids to slugs (/user/show/1 -> /user/show/1-otis);
+    only the sign-in destination is a wall."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/user/show/1":
+            return httpx.Response(301, headers={"location": "/user/show/1-otis"})
+        return httpx.Response(200, text="<html>profile</html>")
+
+    resp = _following_client(handler).get("/user/show/1")
+    assert resp.status_code == 200
+    assert resp.url.path == "/user/show/1-otis"
+
+
+def test_request_does_not_mistake_a_page_that_mentions_sign_in_for_the_wall():
+    """Every Goodreads page links to /user/sign_in in its header, so the body
+    cannot be the signal; only where the response actually landed is."""
+    header = f'<a href="{SIGN_IN_PATH}">Sign In</a>'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=f"<html>{header} profile</html>")
+
+    resp = _following_client(handler).get("/user/show/1")
+    assert resp.status_code == 200
+    assert SIGN_IN_PATH in resp.text
 
 
 # ------------------------------------------------- parse_appsync_endpoint

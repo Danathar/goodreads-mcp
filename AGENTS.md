@@ -49,9 +49,11 @@ In rough order of robustness:
    the full Apollo state. **On these pages, parse the blob, never the markup.**
 4. **AppSync GraphQL** — the discovery and review tools
 5. **Scraped HTML** — `list_shelves` only, and explicitly best-effort: it
-   regexes `shelf=` params out of `/review/list/{uid}`. There's no structured
-   equivalent for shelf *names*, which is why this one exists. Don't extend
-   this approach to anything that has a surface above it.
+   regexes `shelf=` and `tag=` params out of the public profile page
+   `/user/show/{uid}` (the review-list page `/review/list/{uid}` went
+   login-only in Sep 2026, #91). There's no structured equivalent for shelf
+   *names*, which is why this one exists. Don't extend this approach to
+   anything that has a surface above it.
 
 ## Two things that will bite you
 
