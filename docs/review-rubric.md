@@ -64,7 +64,12 @@ This is where this project actually breaks, so it gets the most weight.
 - [ ] `pyproject.toml` and `manifest.json` versions in sync — release CI fails
       if they drift.
 - [ ] New tool added to the `README.md` table and the `server.py` docstring list.
-- [ ] No generated files committed (`.coverage`, `vendor/`, `*.mcpb`).
+- [ ] No generated files committed (`.coverage`, `uv.lock`, `.venv/`, `*.mcpb`).
+- [ ] A new runtime dependency goes in `pyproject.toml` only. The bundle ships
+      none: `manifest.json` launches with `uv run`, which resolves that file on
+      the user's machine. Nothing may put packages or compiled modules in the
+      tree `mcpb pack` reads — release CI fails on a compiled module while the
+      manifest lists more than one platform (#89).
 
 ## Automated review
 
