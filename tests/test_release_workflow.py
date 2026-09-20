@@ -23,14 +23,19 @@ Three contracts here are load-bearing and were asserted by nothing:
   and `docs/risk-tiers.md` makes the paired bump a Tier 2 rule. That promise is
   five lines of shell in one step. It is exercised here both ways, and the
   committed tree is put through it.
-- **The tag check.** Its two outputs gate the five steps that test, vendor,
-  pack and publish. A typo in an output name does not fail anything — it
+- **The tag check.** Its two outputs gate the five steps that test, pack,
+  check, start and publish. A typo in an output name does not fail anything — it
   quietly skips the release. Every `steps.<id>.outputs.<name>` reference in the
   file is therefore joined back to the body that writes it.
-- **The vendored dependency list.** The vendor step hard-codes the runtime
-  requirements a second time. If `pyproject.toml` gains a dependency and that
-  step does not, the `.mcpb` ships without it and fails on the user's machine,
-  which no test in this repo could see. The two lists are pinned to each other.
+- **The bundle is portable.** The v0.1.1 bundle vendored mcp's dependency
+  closure with `pip install --target` on one runner, and four of those packages
+  are compiled: the `.mcpb` declared three platforms and started on one (#89).
+  Nothing ships pre-resolved now -- `manifest.json` launches through `uv run`,
+  which resolves `pyproject.toml` on the user's machine -- and two steps hold
+  that line: one fails the release if a compiled module is inside the bundle
+  while the manifest lists more than one platform, the other unpacks the bundle
+  and starts it with the manifest's own command, so a file `.mcpbignore` drops
+  is caught before it ships.
 
 A `run:` step that is not in `_EXECUTED` below fails the last test in the file,
 so a new step cannot be added without either running it or saying out loud that
@@ -48,7 +53,7 @@ import re
 import shutil
 import subprocess
 import sys
-import tomllib
+import zipfile
 
 import pytest
 
@@ -65,9 +70,11 @@ _VERSION_STEP = "Read version from pyproject.toml"
 _SYNC_STEP = "Read version from manifest.json"
 _TAG_STEP = "Check if tag already exists (skip if version not bumped)"
 _TEST_STEP = "Install test deps and run tests"
-_VENDOR_STEP = "Vendor Python dependencies"
 _PACK_STEP = "Pack MCPB"
-_CLEANUP_STEP = "Clean up vendor (avoid committing)"
+_COMPILED_STEP = "Check the bundle carries no compiled code"
+_LAUNCH_STEP = "Start the packed bundle the way the manifest launches it"
+_PUBLISH_STEP = "Create GitHub Release and upload .mcpb"
+_CLEANUP_STEP = "Clean up the bundle (avoid committing)"
 _PIP_STEP = "Upgrade pip"
 
 _EXECUTED = {
@@ -76,12 +83,13 @@ _EXECUTED = {
     _SYNC_STEP,
     _TAG_STEP,
     _TEST_STEP,
-    _VENDOR_STEP,
     _PACK_STEP,
+    _COMPILED_STEP,
+    _LAUNCH_STEP,
     _CLEANUP_STEP,
 }
 
-# The condition the five release-gated steps share, verbatim.
+# The condition the release-gated steps share, verbatim.
 _GATE_IF = "steps.check_tag.outputs.exists == 'false' && steps.check_tag.outputs.remote_exists == 'false'"
 
 _OUTPUT_REF = _workflow_steps.OUTPUT_REF
@@ -413,16 +421,24 @@ def test_the_release_steps_are_all_gated_on_both_halves_of_the_tag_check():
     gated = [step for step in _STEPS if step.if_ and step.if_ != "always()"]
     assert [step.name for step in gated] == [
         _TEST_STEP,
-        _VENDOR_STEP,
         _PACK_STEP,
-        "Create GitHub Release and upload .mcpb",
+        _COMPILED_STEP,
+        _LAUNCH_STEP,
+        _PUBLISH_STEP,
     ]
     for step in gated:
         assert step.if_ == _GATE_IF, f"step {step.name!r} is gated on {step.if_!r}, not the shared condition"
 
 
+def test_the_bundle_is_checked_and_started_before_it_is_published():
+    """Both bundle checks sit between packing and publishing, or they guard nothing."""
+    order = [step.name for step in _STEPS]
+    assert order.index(_PACK_STEP) < order.index(_COMPILED_STEP) < order.index(_PUBLISH_STEP)
+    assert order.index(_PACK_STEP) < order.index(_LAUNCH_STEP) < order.index(_PUBLISH_STEP)
+
+
 def test_the_publish_step_uploads_the_tag_the_version_step_computed():
-    step = _step("Create GitHub Release and upload .mcpb")
+    step = _step(_PUBLISH_STEP)
     assert step.uses.startswith("softprops/action-gh-release@")
     block = _RELEASE.read_text(encoding="utf-8")
     assert "tag_name: ${{ steps.version.outputs.tag }}" in block
@@ -464,55 +480,29 @@ def test_a_failing_test_run_stops_the_release(tmp_path: Path):
     assert result.returncode != 0
 
 
-def test_the_vendor_step_targets_vendor_and_counts_what_it_got(tmp_path: Path):
-    log = tmp_path / "argv"
-    stubs = tmp_path / "bin"
-    stubs.mkdir()
-    _write_stub(
-        stubs,
-        "pip",
-        _recorder(log) + 'mkdir -p vendor/mcp vendor/httpx vendor/anyio\n',
-    )
+def test_the_release_resolves_no_dependencies_ahead_of_the_user(tmp_path: Path):
+    """No step installs the runtime dependencies into the tree that gets packed.
 
-    result = _run(_body(_VENDOR_STEP), tmp_path, path_dirs=[stubs])
-
-    assert result.returncode == 0, result.stderr
-    assert "vendored 3 top-level packages" in result.stdout
-    (call,) = [record[1:] for record in _argv(log)]
-    assert call[:3] == ["install", "--target", "./vendor"]
-
-
-def test_the_vendor_step_bundles_exactly_the_runtime_dependencies(tmp_path: Path):
-    """The step re-types the dependency list; a dep added to only one of them ships broken.
-
-    The requirements are read off the pip invocation the step actually makes,
-    not off the workflow text, so a change to how the specs are quoted is fine
-    and a change to which specs are installed is not.
+    That is what made v0.1.1 single-platform: `pip install --target ./vendor`
+    on the runner picked the runner's wheels (#89). `uv run` in the manifest
+    resolves `pyproject.toml` on the user's machine instead, so the release
+    has nothing to vendor. Every `pip install` the workflow still runs is
+    checked to be the test-extra install, into the runner's own environment.
     """
-    log = tmp_path / "argv"
-    stubs = tmp_path / "bin"
-    stubs.mkdir()
-    _write_stub(stubs, "pip", _recorder(log) + "mkdir -p vendor\n")
-
-    _run(_body(_VENDOR_STEP), tmp_path, path_dirs=[stubs])
-
-    (call,) = [record[1:] for record in _argv(log)]
-    vendored = call[3:]
-    declared = tomllib.loads(_PYPROJECT.read_text(encoding="utf-8"))["project"]["dependencies"]
-    assert sorted(vendored) == sorted(declared), (
-        "release.yml vendors a different dependency set than pyproject.toml declares; "
-        "the .mcpb would ship without one of them"
+    commands = [
+        line.strip()
+        for step in _STEPS
+        if step.run
+        for line in step.run.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    installs = [line for line in commands if re.search(r"\bpip\b.*\binstall\b", line)]
+    assert installs == ["python -m pip install --upgrade pip", 'pip install -e ".[test]"'], (
+        f"release.yml installs something beyond the test extra: {installs}"
     )
-
-
-def test_a_failed_vendor_install_stops_the_release(tmp_path: Path):
-    stubs = tmp_path / "bin"
-    stubs.mkdir()
-    _write_stub(stubs, "pip", "exit 1\n")
-
-    result = _run(_body(_VENDOR_STEP), tmp_path, path_dirs=[stubs])
-
-    assert result.returncode != 0
+    assert not [line for line in commands if "--target" in line], (
+        "release.yml installs packages into the tree that gets packed"
+    )
 
 
 def test_the_pack_step_invokes_the_mcpb_packer_and_lists_the_bundle(tmp_path: Path):
@@ -540,8 +530,9 @@ def test_a_failed_pack_stops_the_release(tmp_path: Path):
 
 def test_the_pack_step_tolerates_a_packer_that_produced_nothing(tmp_path: Path):
     """Recorded, not endorsed: the listing falls through to `find`, so a packer
-    that exits 0 without writing a bundle leaves the step green and the upload
-    with nothing to match."""
+    that exits 0 without writing a bundle leaves the step green. The compiled-code
+    check that follows it refuses to run with no bundle, which is where that
+    release now stops."""
     stubs = tmp_path / "bin"
     stubs.mkdir()
     _write_stub(stubs, "npx", "exit 0\n")
@@ -552,16 +543,242 @@ def test_the_pack_step_tolerates_a_packer_that_produced_nothing(tmp_path: Path):
     assert ".mcpb" not in result.stdout
 
 
-def test_the_cleanup_step_removes_the_vendor_tree_and_every_bundle(tmp_path: Path):
-    (tmp_path / "vendor").mkdir()
-    (tmp_path / "vendor" / "httpx").mkdir()
+# --------------------------------------------------------------------------
+# Check the bundle carries no compiled code — the guard #89 asked for
+# --------------------------------------------------------------------------
+
+
+def _manifest_with_platforms(directory: Path, platforms: list[str]) -> None:
+    """The real manifest, with only its platform list changed."""
+    manifest = json.loads(_MANIFEST.read_text(encoding="utf-8"))
+    manifest["compatibility"]["platforms"] = platforms
+    (directory / "manifest.json").write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+
+
+def _bundle(directory: Path, *names: str, manifest: Path = _MANIFEST) -> Path:
+    """A `.mcpb` -- a zip -- holding the real manifest and the named empty files."""
+    path = directory / "goodreads-mcp.mcpb"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.write(manifest, "manifest.json")
+        for name in names:
+            archive.writestr(name, "")
+    return path
+
+
+_PURE = ("pyproject.toml", "goodreads_mcp/__init__.py", "goodreads_mcp/server.py")
+_COMPILED_V011 = (
+    "vendor/_cffi_backend.cpython-311-x86_64-linux-gnu.so",
+    "vendor/cryptography/hazmat/bindings/_rust.abi3.so",
+    "vendor/pydantic_core/_pydantic_core.cpython-311-x86_64-linux-gnu.so",
+    "vendor/rpds/rpds.cpython-311-x86_64-linux-gnu.so",
+)
+
+
+def test_the_compiled_check_passes_a_pure_python_bundle_for_every_platform(
+    tmp_path: Path, python_shim: Path
+):
+    _manifest_with_platforms(tmp_path, ["darwin", "win32", "linux"])
+    _bundle(tmp_path, *_PURE)
+
+    result = _run(_body(_COMPILED_STEP), tmp_path, path_dirs=[python_shim])
+
+    assert result.returncode == 0, result.stderr
+    assert "0 compiled" in result.stdout
+
+
+def test_the_compiled_check_would_have_failed_the_v011_bundle(tmp_path: Path, python_shim: Path):
+    """The four modules #89 found in the release, against the manifest's three platforms."""
+    _manifest_with_platforms(tmp_path, ["darwin", "win32", "linux"])
+    _bundle(tmp_path, *_PURE, *_COMPILED_V011)
+
+    result = _run(_body(_COMPILED_STEP), tmp_path, path_dirs=[python_shim])
+
+    assert result.returncode == 1
+    assert "::error::" in result.stdout
+    for module in _COMPILED_V011:
+        assert module in result.stdout, f"the failure does not name {module}"
+
+
+@pytest.mark.parametrize("extension", [".so", ".pyd", ".dylib"])
+def test_the_compiled_check_recognises_every_native_module_suffix(
+    tmp_path: Path, python_shim: Path, extension: str
+):
+    """`.so` is a Linux or macOS extension module, `.pyd` a Windows one, and
+    `.dylib` a shared library a macOS wheel ships alongside its module."""
+    _manifest_with_platforms(tmp_path, ["darwin", "win32"])
+    _bundle(tmp_path, *_PURE, f"vendor/native{extension}")
+
+    result = _run(_body(_COMPILED_STEP), tmp_path, path_dirs=[python_shim])
+
+    assert result.returncode == 1
+
+
+def test_the_compiled_check_allows_native_modules_in_a_single_platform_bundle(
+    tmp_path: Path, python_shim: Path
+):
+    """A bundle that declares one platform may carry that platform's wheels.
+
+    This is the narrowing #89 offered as the fallback, and the check leaves
+    that door open rather than forbidding vendoring outright.
+    """
+    _manifest_with_platforms(tmp_path, ["linux"])
+    _bundle(tmp_path, *_PURE, *_COMPILED_V011)
+
+    result = _run(_body(_COMPILED_STEP), tmp_path, path_dirs=[python_shim])
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_the_compiled_check_refuses_to_run_without_exactly_one_bundle(
+    tmp_path: Path, python_shim: Path
+):
+    """No bundle is a packer that silently produced nothing; two is ambiguous."""
+    _manifest_with_platforms(tmp_path, ["darwin", "win32", "linux"])
+
+    result = _run(_body(_COMPILED_STEP), tmp_path, path_dirs=[python_shim])
+    assert result.returncode == 1
+    assert "::error::expected exactly one .mcpb" in result.stdout
+
+    _bundle(tmp_path, *_PURE)
+    shutil.copy2(tmp_path / "goodreads-mcp.mcpb", tmp_path / "goodreads-mcp-old.mcpb")
+
+    result = _run(_body(_COMPILED_STEP), tmp_path, path_dirs=[python_shim])
+    assert result.returncode == 1
+    assert "::error::expected exactly one .mcpb" in result.stdout
+
+
+def test_the_committed_manifest_declares_more_than_one_platform():
+    """The compiled-code check only bites while this is true; say so if it stops being."""
+    manifest = json.loads(_MANIFEST.read_text(encoding="utf-8"))
+    assert len(manifest["compatibility"]["platforms"]) > 1, (
+        "manifest.json now declares a single platform, so the compiled-code check in "
+        "release.yml no longer guards against #89; narrow the check or the manifest on purpose"
+    )
+
+
+# --------------------------------------------------------------------------
+# Start the packed bundle the way the manifest launches it
+# --------------------------------------------------------------------------
+
+
+def _launch(tmp_path: Path, python_shim: Path, uv_script: str) -> subprocess.CompletedProcess[str]:
+    """Run the launch step against `tmp_path` with `uv_script` standing in for `uv`."""
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    _write_stub(stubs, "uv", uv_script)
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir(exist_ok=True)
+    return _run(
+        _body(_LAUNCH_STEP),
+        tmp_path,
+        path_dirs=[stubs, python_shim],
+        env={"RUNNER_TEMP": str(runner_temp)},
+    )
+
+
+def test_the_launch_step_runs_the_manifests_command_against_the_unpacked_bundle(
+    tmp_path: Path, python_shim: Path
+):
+    """The argv is the committed manifest's `command` + `args`, `${__dirname}` and all.
+
+    The test builds the expectation from the manifest the same way, so this
+    is not a second copy of the launch command: it says the step runs what the
+    manifest says, whatever that is.
+    """
+    _bundle(tmp_path, *_PURE)
+    log = tmp_path / "argv"
+
+    result = _launch(tmp_path, python_shim, _recorder(log))
+
+    assert result.returncode == 0, result.stderr
+    root = tmp_path / "runner-temp" / "bundle"
+    config = json.loads(_MANIFEST.read_text(encoding="utf-8"))["server"]["mcp_config"]
+    expected = [arg.replace("${__dirname}", str(root)) for arg in (config["command"], *config["args"])]
+    (call,) = _argv(log)
+    assert call[1:] == expected[1:]
+    assert Path(call[0]).name == expected[0]
+    assert "${__dirname}" not in " ".join(call), "the bundle root was not substituted"
+
+
+def test_the_launch_step_unpacks_every_file_of_the_bundle_first(tmp_path: Path, python_shim: Path):
+    """`uv run` reads pyproject.toml and the package out of the unpacked tree."""
+    _bundle(tmp_path, *_PURE)
+
+    result = _launch(tmp_path, python_shim, "exit 0\n")
+
+    assert result.returncode == 0, result.stderr
+    root = tmp_path / "runner-temp" / "bundle"
+    for name in ("manifest.json", *_PURE):
+        assert (root / name).is_file(), f"{name} was not unpacked before the launch"
+
+
+def test_the_launch_step_reads_the_manifest_that_is_inside_the_bundle(tmp_path: Path, python_shim: Path):
+    """The bundle's manifest, not the checkout's, is what a user's host will read."""
+    inner = tmp_path / "inner-manifest.json"
+    manifest = json.loads(_MANIFEST.read_text(encoding="utf-8"))
+    manifest["server"]["mcp_config"]["args"] = ["run", "--directory", "${__dirname}", "python", "-c", "pass"]
+    inner.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+    _bundle(tmp_path, *_PURE, manifest=inner)
+    log = tmp_path / "argv"
+
+    result = _launch(tmp_path, python_shim, _recorder(log))
+
+    assert result.returncode == 0, result.stderr
+    (call,) = _argv(log)
+    assert call[-2:] == ["-c", "pass"]
+
+
+def test_the_launch_step_gives_the_server_an_empty_stdin(tmp_path: Path, python_shim: Path):
+    """EOF is what makes a healthy stdio server exit; an open pipe would hang the release."""
+    _bundle(tmp_path, *_PURE)
+
+    result = _launch(tmp_path, python_shim, "cat > read.txt\n")
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "read.txt").read_text(encoding="utf-8") == ""
+
+
+def test_a_bundle_that_does_not_start_stops_the_release(tmp_path: Path, python_shim: Path):
+    _bundle(tmp_path, *_PURE)
+
+    result = _launch(tmp_path, python_shim, "echo 'ModuleNotFoundError: goodreads_mcp' >&2\nexit 1\n")
+
+    assert result.returncode == 1
+    assert "ModuleNotFoundError" in result.stderr
+
+
+def test_the_launch_step_starts_from_a_clean_unpack_directory(tmp_path: Path, python_shim: Path):
+    """A `.venv` left by an earlier run must not hide a bundle that no longer resolves."""
+    _bundle(tmp_path, *_PURE)
+    stale = tmp_path / "runner-temp" / "bundle" / ".venv"
+    stale.mkdir(parents=True)
+    (stale / "stale").write_text("", encoding="utf-8")
+
+    result = _launch(tmp_path, python_shim, "exit 0\n")
+
+    assert result.returncode == 0, result.stderr
+    assert not stale.exists()
+
+
+def test_the_release_installs_uv_before_it_starts_the_bundle():
+    """The launch step's `uv` comes from the setup action, not from the runner image."""
+    order = [step.name or step.uses for step in _STEPS]
+    (setup,) = [step for step in _STEPS if step.uses.startswith("astral-sh/setup-uv@")]
+    assert order.index(setup.name) < order.index(_LAUNCH_STEP)
+
+
+# --------------------------------------------------------------------------
+# Clean up
+# --------------------------------------------------------------------------
+
+
+def test_the_cleanup_step_removes_every_bundle(tmp_path: Path):
     (tmp_path / "goodreads-mcp.mcpb").write_text("bundle\n", encoding="utf-8")
     (tmp_path / "keep.txt").write_text("keep\n", encoding="utf-8")
 
     result = _run(_body(_CLEANUP_STEP), tmp_path)
 
     assert result.returncode == 0, result.stderr
-    assert not (tmp_path / "vendor").exists()
     assert not (tmp_path / "goodreads-mcp.mcpb").exists()
     assert (tmp_path / "keep.txt").exists()
 

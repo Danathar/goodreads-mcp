@@ -7,11 +7,11 @@ Full guidance lives in [AGENTS.md](../AGENTS.md). The essentials, inline:
 - **Goodreads has no public API** (since Dec 2020). Tools ride shelf RSS, the
   JSON autocomplete endpoint, the `__NEXT_DATA__` blob on Next.js pages, an
   AppSync GraphQL backend, and — for `list_shelves` only — a best-effort HTML
-  scrape of `/review/list/{uid}`.
+  scrape of the public profile page `/user/show/{uid}`.
 - **On Next.js book pages, parse `__NEXT_DATA__` / Apollo state, not the
   markup.** `list_shelves` is the deliberate exception: shelf *names* have no
-  structured surface, so it regexes `shelf=` params out of the review-list
-  page. Don't extend scraping to data reachable another way.
+  structured surface, so it regexes `shelf=` and `tag=` params out of the
+  profile page. Don't extend scraping to data reachable another way.
 - **Book HTML pages are behind an AWS WAF JS challenge** returning HTTP 202.
   Fetch book pages via the `.xml`-suffixed path, as `get_book` does.
 - **Never hardcode the GraphQL API key or endpoint.** They're resolved at

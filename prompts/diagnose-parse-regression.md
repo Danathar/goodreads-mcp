@@ -31,11 +31,13 @@ A goodreads-mcp tool is returning wrong or empty data. Diagnose it.
    - Empty/None fields from `__NEXT_DATA__` → Apollo state keys were renamed.
      Fetch the page, dump the blob, and diff the shape against what the
      parser expects.
-   - `list_shelves` empty → it regexes `shelf=` params out of the HTML of
-     `/review/list/{uid}`, so it's the most markup-fragile tool here. Fetch
-     that page and check whether shelf links still carry a `shelf=` query
-     param. Also confirm the profile is public — a private one returns a page
-     with no shelf links rather than an error.
+   - `list_shelves` empty → it regexes `shelf=` and `tag=` params out of the
+     HTML of the profile page `/user/show/{uid}`, so it's the most
+     markup-fragile tool here. Fetch that page and check whether the
+     bookshelves module still links shelves with a `shelf=` or `tag=` query
+     param. A private profile and a sign-in redirect raise `LoginRequired`
+     rather than returning `[]` (#91); if you see `[]` for a public user,
+     the links moved.
 
 4. Fix the parser, then add or update an offline fixture test covering the new
    shape so the regression is caught next time.

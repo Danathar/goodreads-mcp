@@ -18,14 +18,13 @@
   "license": "GPL-3.0-only",
   "keywords": ["goodreads", "books", "mcp", "reading"],
   "server": {
-    "type": "python",
+    "type": "uv",
     "entry_point": "goodreads_mcp/server.py",
     "mcp_config": {
-      "command": "python",
-      "args": ["-m", "goodreads_mcp.server"],
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "python", "-m", "goodreads_mcp.server"],
       "env": {
-        "GOODREADS_USER_ID": "${user_config.goodreads_user_id}",
-        "PYTHONPATH": "${__dirname}:${__dirname}/vendor"
+        "GOODREADS_USER_ID": "${user_config.goodreads_user_id}"
       }
     }
   },

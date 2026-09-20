@@ -3,7 +3,7 @@
 The state of quality assurance in this repo: what's enforced mechanically,
 what's known-weak, and where the real risk sits.
 
-**Last reviewed:** 2026-09-17
+**Last reviewed:** 2026-09-20
 
 ## What runs automatically
 
@@ -13,6 +13,8 @@ what's known-weak, and where the real risk sits.
 | coverage floor, 55% | `ci.yml` (`--cov-fail-under`) | yes |
 | MCPB manifest validation | `ci.yml` | yes |
 | version sync (`pyproject` vs `manifest`) | `release.yml` | yes, at release |
+| bundle carries no compiled module (it declares three platforms) | `release.yml` | yes, at release |
+| packed bundle starts under the manifest's own `uv run` command | `release.yml` | yes, at release |
 | automated code review | Codex, every PR | advisory |
 | offline tests on source edit | `.claude/settings.json` hook | advisory, local |
 
@@ -20,7 +22,7 @@ what's known-weak, and where the real risk sits.
 
 | | |
 |---|---|
-| offline tests | 467 passing, 23 skipped (live, opt-in) |
+| offline tests | 490 passing, 24 skipped (live, opt-in) |
 | coverage | 100% overall — `config.py` 100%, `client.py` 100%, `server.py` 100% |
 | CI, last 30 runs | 28 success |
 
