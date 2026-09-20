@@ -23,6 +23,8 @@ House rules (these endpoints are unofficial; be a polite guest):
   * browser-faithful headers
   * detect AWS WAF JS challenges and fail loudly instead of feeding the
     challenge page to a parser
+  * detect a redirect to the sign-in page and fail loudly instead of
+    parsing the login form as if it were the page that was asked for
 """
 
 from __future__ import annotations
@@ -94,6 +96,25 @@ def _is_waf_challenge(resp: httpx.Response) -> bool:
         return False
     head = resp.text[:2048]
     return any(marker in head for marker in WAF_MARKERS)
+
+
+class LoginRequired(Exception):
+    """Raised when Goodreads answers with its sign-in page instead of content.
+
+    A login-gated path comes back as a 302 to `/user/sign_in`, which the
+    client follows to a 200 login form. Status alone looks like success, so
+    without this check a scraper reads the form, finds nothing, and reports
+    an empty result as if the data did not exist (#91). This server is
+    unauthenticated by design, so there is no retry-with-credentials: the
+    only fix is a different, still-public surface.
+    """
+
+
+SIGN_IN_PATH = "/user/sign_in"
+
+
+def _is_sign_in_page(resp: httpx.Response) -> bool:
+    return resp.url.path == SIGN_IN_PATH
 
 
 class GraphQLError(Exception):
@@ -185,6 +206,12 @@ class GoodreadsClient:
                         "(HTTP 202). This path can't be fetched without a real "
                         "browser; try an alternate endpoint (e.g. the .xml book "
                         "page, RSS feed, or JSON autocomplete)."
+                    )
+                if _is_sign_in_page(resp):
+                    raise LoginRequired(
+                        f"Goodreads redirected {url!r} to its sign-in page. "
+                        "This path now needs a login, which this read-only "
+                        "server does not do; try an alternate public endpoint."
                     )
                 return resp
             time.sleep(delay + random.uniform(0, 0.5))

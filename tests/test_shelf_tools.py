@@ -1,10 +1,15 @@
 """Offline tests for the shelf tools and the user-id gate in front of them.
 
 `list_shelves` is the one deliberate HTML scrape in this server, so its whole
-contract is a regex plus a dedup loop: which `shelf=` occurrences count as a
-shelf link, whether custom names are percent-decoded, and whether duplicates
-collapse while keeping page order. The live suite can't pin any of that — a
-healthy profile page exercises one shape, not the awkward ones.
+contract is a regex plus a dedup loop: which `shelf=` and `tag=` occurrences
+count as a shelf link, whether custom names are percent-decoded, and whether
+duplicates collapse while keeping page order. The live suite can't pin any of
+that — a healthy profile page exercises one shape, not the awkward ones.
+
+The two ways the page can be a non-answer are pinned here too: a private
+profile (a 200 with a marker box where the shelves would be) and a sign-in
+redirect (#91), which the client turns into `LoginRequired` before the regex
+can mistake the login form for a user with no shelves.
 """
 
 from __future__ import annotations
@@ -13,11 +18,11 @@ import httpx
 import pytest
 
 from goodreads_mcp import server
-from goodreads_mcp.client import WAFChallenge
+from goodreads_mcp.client import LoginRequired, WAFChallenge
 
 
 def _run_list_shelves(html: str, monkeypatch) -> tuple[list[str], list[str]]:
-    """Run list_shelves against a canned review-list page.
+    """Run list_shelves against a canned profile page.
 
     Returns (shelf names, paths requested).
     """
@@ -69,22 +74,23 @@ def test_user_id_raises_an_actionable_error_when_nothing_is_configured(monkeypat
 # -------------------------------------------------------------- list_shelves
 
 
-def test_list_shelves_reads_the_review_list_page(monkeypatch):
+def test_list_shelves_reads_the_profile_page(monkeypatch):
     monkeypatch.setattr(server, "DEFAULT_USER_ID", "9")
     shelves, paths = _run_list_shelves(
         '<a href="/review/list/9?shelf=read">read</a>', monkeypatch
     )
 
     assert shelves == ["read"]
-    # Not /review/list_rss/: the RSS feed serves one shelf's items and cannot
+    # Not /review/list/9: that page redirects to sign-in (#91). And not
+    # /review/list_rss/: the RSS feed serves one shelf's items and cannot
     # enumerate shelf names, so that path swap would silently return nothing.
-    assert paths == ["/review/list/9"]
+    assert paths == ["/user/show/9"]
 
 
 def test_list_shelves_uses_the_configured_default_user(monkeypatch):
     monkeypatch.setattr(server, "DEFAULT_USER_ID", "12345678")
     _, paths = _run_list_shelves("", monkeypatch)
-    assert paths == ["/review/list/12345678"]
+    assert paths == ["/user/show/12345678"]
 
 
 def test_list_shelves_fails_before_the_network_when_no_user_is_configured(monkeypatch):
@@ -107,12 +113,29 @@ def test_list_shelves_collects_first_and_later_query_positions(monkeypatch):
     assert _run_list_shelves(html, monkeypatch)[0] == ["read", "to-read"]
 
 
+def test_list_shelves_collects_custom_shelves_linked_as_tags(monkeypatch):
+    """The profile's bookshelves module links the exclusive shelves as
+    `?shelf=` and every custom shelf as `?tag=`. Both are shelves to the RSS
+    feed (`/review/list_rss/9?shelf=sci-fi` works), so both are shelf names;
+    reading only `shelf=` would hide every custom shelf."""
+    monkeypatch.setattr(server, "DEFAULT_USER_ID", "9")
+    html = """
+    <a href="/review/list/9?shelf=read">read (629)</a>
+    <a href="/review/list/9?shelf=to-read">to-read (859)</a>
+    <a href="/review/list/9?tag=sci-fi">sci-fi (65)</a>
+    <a href="/review/list/9?tag=favorites">favorites (12)</a>
+    """
+    assert _run_list_shelves(html, monkeypatch)[0] == [
+        "read", "to-read", "sci-fi", "favorites"
+    ]
+
+
 def test_list_shelves_ignores_shelf_without_a_parameter_boundary(monkeypatch):
     monkeypatch.setattr(server, "DEFAULT_USER_ID", "9")
     # Unquoted attribute values, so the captured group would be non-empty if
     # the leading [?&] were dropped from the pattern.
     html = """
-    <div data-bookshelf=not-a-shelf data-myshelf=also-not>x</div>
+    <div data-bookshelf=not-a-shelf data-myshelf=also-not data-tag=nor-this>x</div>
     <a href="/review/list/9?shelf=read">read</a>
     """
     assert _run_list_shelves(html, monkeypatch)[0] == ["read"]
@@ -154,6 +177,55 @@ def test_list_shelves_propagates_a_waf_challenge(monkeypatch):
     # A challenge must not be read as "this user has no shelves".
     with pytest.raises(WAFChallenge):
         server.list_shelves()
+
+
+def test_list_shelves_raises_for_a_private_profile(monkeypatch):
+    """Goodreads serves a private profile as a 200 with a "This Profile is
+    Private" box where the bookshelves module would be. Without the marker
+    check that is indistinguishable from a public user with no shelves."""
+    monkeypatch.setattr(server, "DEFAULT_USER_ID", "9")
+    html = """
+    <div id="privateProfile" class="mediumText">
+      This Profile is Private. <br/><br/> Sign in to Goodreads to Learn More.
+    </div>
+    """
+    with pytest.raises(LoginRequired) as excinfo:
+        _run_list_shelves(html, monkeypatch)
+    assert "private" in str(excinfo.value)
+    assert "9" in str(excinfo.value)
+
+
+def test_list_shelves_raises_when_the_page_redirects_to_sign_in(monkeypatch):
+    """#91 end to end: the profile path answers 302 -> /user/sign_in -> 200.
+
+    Through the real client rather than a stubbed `get`, because the whole
+    bug is that a followed redirect looks like a 200 to any caller that only
+    checks status. The login form carries no shelf links, so before the
+    client raised the tool returned [] and the caller read that as "no
+    shelves"."""
+    monkeypatch.setattr(server, "DEFAULT_USER_ID", "9")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/user/show/9":
+            return httpx.Response(
+                302, headers={"location": "/user/sign_in?returnurl=%2Fuser%2Fshow%2F9"}
+            )
+        assert request.url.path == "/user/sign_in"
+        return httpx.Response(200, text="<html><form id='signIn'></form></html>")
+
+    monkeypatch.setattr(
+        server.gr,
+        "_client",
+        httpx.Client(
+            base_url="https://www.goodreads.com",
+            transport=httpx.MockTransport(handler),
+            follow_redirects=True,
+        ),
+    )
+    with pytest.raises(LoginRequired) as excinfo:
+        server.list_shelves()
+    assert "/user/show/9" in str(excinfo.value)
+    assert "sign-in" in str(excinfo.value)
 
 
 # --------------------------------------------------------------------- main

@@ -218,3 +218,18 @@ def test_get_shelf_rss_live():
     assert items, "shelf RSS returned no items"
     assert items[0]["title"]
     assert items[0]["book_id"]
+
+
+def test_list_shelves_live():
+    """#91: the only HTML scrape, and the one this suite never covered. The
+    review-list page went behind a login and the tool returned [] for
+    everyone for as long as nobody ran it by hand."""
+    shelves = server.list_shelves(user_id="1")
+    assert shelves, "profile page carried no shelf links"
+    # the exclusive shelves every account has ...
+    assert {"read", "to-read", "currently-reading"} <= set(shelves)
+    # ... and at least one custom shelf, which the page links as ?tag=
+    custom = [s for s in shelves if s not in ("read", "to-read", "currently-reading", "did-not-finish")]
+    assert custom, "no custom shelves found; is tag= no longer read?"
+    # a listed custom shelf must be a name the RSS feed accepts
+    assert server.get_shelf(custom[0], user_id="1"), f"RSS rejected shelf {custom[0]!r}"
