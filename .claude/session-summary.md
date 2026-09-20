@@ -24,40 +24,34 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-20 — #89/#90, the released bundle only started on Linux x86_64 / CPython 3.11
+## 2026-09-20 — #94, out-of-range tool inputs were accepted silently
 
-**Done:** `release.yml` vendored mcp's dependency closure with
-`pip install --target ./vendor` on the runner, and four of those packages
-(`pydantic-core`, `rpds-py`, `cffi`, `cryptography`) are compiled, so the
-`.mcpb` that declared `darwin`/`win32`/`linux` and `python >=3.10` started on
-exactly the runner's platform and Python (#89). `PYTHONPATH` in the manifest
-joined two entries with `:`, which Windows reads as one directory (#90).
-`manifest.json` is now `server.type: "uv"` launching
-`uv run --directory ${__dirname} python -m goodreads_mcp.server` — the MCPB
-runtime made for this (its spec: "handles compiled dependencies", "no user
-Python installation required") — with no `PYTHONPATH`; the vendor step is
-gone, and two release steps replace it: fail on a compiled module inside the
-bundle while the manifest lists more than one platform, and unpack the packed
-bundle and run its manifest's own command under a real `uv`. Verified end to
-end locally: the packed bundle is 56 kB, `uv run` on the unpacked tree
-resolved 37 packages and answered `initialize` + `tools/list` with all 12
-tools. `tests/test_release_workflow.py` and `tests/test_stdio_launch.py`
-updated (474 offline tests).
+**Done:** four tools took arguments outside their documented ranges and
+returned output that read like real data. `get_reviews` passed a star filter
+of 0, 6, or `min_rating > max_rating` through to Goodreads, which answers
+with `totalCount: null, edges: []` — the same shape as a book with no
+reviews. `search_books(max_results=-1)` sliced `[:-1]` and dropped the last
+match. `compare_books` trimmed to `_MAX_COMPARE` (10) without a word and
+`compared` counted only the survivors. `get_shelf(page=0)` went straight into
+the RSS URL. Each now raises `ValueError` with a plain message before any
+request goes out; `compare_books` refuses rather than trims (the docstring
+says "split the call"). `search_books` also returns `url: None` when
+`bookUrl` is absent instead of `BASE + ""`, which was a link to the home
+page. One test per case in `tests/test_offline_tool_bodies.py`; the
+test-count row in `docs/quality.md` is 515.
 
-**In flight:** the PR on `fix/89-portable-mcpb-bundle`.
+**In flight:** the PR on `fix/94-validate-tool-inputs`. #105 (`fix/93`,
+bad `config.json`) was open when this session started.
 
 **Blocked on:** nothing.
 
 **Watch:**
-- `uv run` writes `.venv/` and `uv.lock` into the installed extension
-  directory on first launch and needs the network then. No `uv.lock` is
-  committed, so each install resolves the newest versions inside the
-  `pyproject.toml` ranges; committing one (and `uv lock --check` in CI) would
-  make installs reproducible at the cost of a lock to maintain with pip-only
-  contributor tooling. Not done.
-- The bundle still carries `docs/`, `prompts/`, `.cursor/` and the agent
-  files — harmless, ~130 kB unpacked — because `.mcpbignore` only drops
-  tests, CI and build artefacts. Could be trimmed.
+- `search_books` docstring now notes the autocomplete endpoint answers ~5
+  matches, so the default `max_results=10` is never reached. Not verified
+  live this session; the note is from #94's evidence.
+- `get_reviews` still clamps `limit` silently (`max(0, min(limit, 100))`),
+  as `popular_books` does with its own cap. #94 did not ask for those; a
+  negative `limit` returns an empty result today.
 - The guard's pytest option safe list is an allowlist (see #71). A plugin
   option nobody has used yet will be refused until added to `_PYTEST_LONG` /
   `_PYTEST_SHORT`.

@@ -183,8 +183,39 @@ def test_search_books_tolerates_a_result_missing_every_optional_field(monkeypatc
 
     assert result["author"] is None
     assert result["description"] == ""
-    # A missing bookUrl must not produce a link to some other page.
-    assert result["url"] == server.BASE
+    # A missing bookUrl must not produce a link to some other page (BASE alone
+    # is the Goodreads home page); SERVER_INSTRUCTIONS says null is explicit.
+    assert result["url"] is None
+
+
+def test_search_books_returns_everything_when_max_results_exceeds_the_payload(
+    monkeypatch,
+):
+    """The autocomplete endpoint answers ~5 matches; a larger ask is not an error."""
+    payload = [{"bookId": str(i)} for i in range(5)]
+    monkeypatch.setattr(server.gr, "get", _Get(_Response(payload)))
+
+    results = server.search_books("anything", max_results=10)
+
+    assert [r["book_id"] for r in results] == ["0", "1", "2", "3", "4"]
+
+
+def test_search_books_returns_nothing_for_zero_max_results(monkeypatch):
+    get = _Get(_Response([{"bookId": "1"}]))
+    monkeypatch.setattr(server.gr, "get", get)
+
+    assert server.search_books("anything", max_results=0) == []
+
+
+def test_search_books_rejects_a_negative_max_results(monkeypatch):
+    """A negative slice bound drops the tail silently: [:-1] returned 4 of 5."""
+    get = _Get(_Response([{"bookId": str(i)} for i in range(5)]))
+    monkeypatch.setattr(server.gr, "get", get)
+
+    with pytest.raises(ValueError, match="max_results must be zero or greater"):
+        server.search_books("anything", max_results=-1)
+
+    assert get.calls == []  # refused before any request went out
 
 
 def test_search_books_caps_the_description_at_400_characters(monkeypatch):
@@ -321,6 +352,60 @@ def test_get_reviews_omits_star_filters_that_were_not_asked_for(monkeypatch):
     (variables,) = graphql.variables_for(server._Q_REVIEWS)
     assert "ratingMin" not in variables["filters"]
     assert "ratingMax" not in variables["filters"]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"min_rating": 0}, "min_rating must be between 1 and 5"),
+        ({"min_rating": 6}, "min_rating must be between 1 and 5"),
+        ({"max_rating": 0}, "max_rating must be between 1 and 5"),
+        ({"max_rating": 6}, "max_rating must be between 1 and 5"),
+        (
+            {"min_rating": 4, "max_rating": 2},
+            "min_rating must not be greater than max_rating",
+        ),
+    ],
+)
+def test_get_reviews_rejects_a_star_filter_outside_one_to_five(
+    kwargs, message, monkeypatch
+):
+    """Goodreads answers an impossible filter with totalCount null and no
+    edges, which the tool would report as returned=0 -- the same shape as a
+    book with no reviews. The filter is refused before any request is made."""
+    graphql = _Graphql({})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    with pytest.raises(ValueError, match=message):
+        server.get_reviews("1", **kwargs)
+
+    assert graphql.calls == []
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"min_rating": 1},
+        {"max_rating": 5},
+        {"min_rating": 1, "max_rating": 5},
+        {"min_rating": 3, "max_rating": 3},
+    ],
+)
+def test_get_reviews_accepts_the_edges_of_the_star_range(kwargs, monkeypatch):
+    graphql = _Graphql(
+        {
+            server._Q_BOOK_BY_LEGACY: [_reviews_book_response()],
+            server._Q_REVIEWS: [{"getReviews": _page([])}],
+        }
+    )
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    server.get_reviews("1", limit=5, **kwargs)
+
+    (variables,) = graphql.variables_for(server._Q_REVIEWS)
+    for name, key in (("min_rating", "ratingMin"), ("max_rating", "ratingMax")):
+        if name in kwargs:
+            assert variables["filters"][key] == kwargs[name]
 
 
 def test_get_reviews_pages_with_the_next_token(monkeypatch):
@@ -1001,7 +1086,26 @@ def test_compare_books_puts_unrated_then_failed_books_last(monkeypatch):
     assert result["books"][-1]["error"] == "No book found for id '3'."
 
 
-def test_compare_books_caps_the_fan_out(monkeypatch):
+def test_compare_books_compares_exactly_the_maximum_number_of_ids(monkeypatch):
+    fetched: list[str] = []
+
+    def fake_get_book(bid: str) -> dict[str, Any]:
+        fetched.append(bid)
+        return _compared(bid, 4.0, None)
+
+    monkeypatch.setattr(server, "get_book", fake_get_book)
+
+    ids = [str(i) for i in range(1, server._MAX_COMPARE + 1)]
+    result = server.compare_books(ids)
+
+    assert fetched == ids
+    assert result["compared"] == server._MAX_COMPARE
+
+
+def test_compare_books_refuses_more_ids_than_the_fan_out_cap(monkeypatch):
+    """Trimming to the cap used to drop the extras without a word, and
+    ``compared`` counted only the survivors. Now the call is refused before
+    any book is fetched, and the message says how many were passed."""
     fetched: list[str] = []
 
     def fake_get_book(bid: str) -> dict[str, Any]:
@@ -1011,11 +1115,10 @@ def test_compare_books_caps_the_fan_out(monkeypatch):
     monkeypatch.setattr(server, "get_book", fake_get_book)
 
     ids = [str(i) for i in range(1, server._MAX_COMPARE + 4)]
-    result = server.compare_books(ids)
+    with pytest.raises(ValueError, match=r"at most 10 book ids; got 13"):
+        server.compare_books(ids)
 
-    assert len(fetched) == server._MAX_COMPARE
-    assert fetched == ids[: server._MAX_COMPARE]
-    assert result["compared"] == server._MAX_COMPARE
+    assert fetched == []
 
 
 # ---------------------------------------------------------------- get_shelf
@@ -1042,6 +1145,19 @@ def test_get_shelf_passes_the_requested_shelf_user_and_page(monkeypatch):
     server.get_shelf(shelf="read", user_id="222", page=3)
 
     assert get.calls == [("/review/list_rss/222", {"shelf": "read", "page": 3})]
+
+
+@pytest.mark.parametrize("page", [0, -1])
+def test_get_shelf_rejects_a_page_below_one(page, monkeypatch):
+    """page=0 or a negative page went straight into the RSS URL."""
+    get = _Get(_Response(text="<rss/>"))
+    monkeypatch.setattr(server.gr, "get", get)
+    monkeypatch.setattr(server.gr, "parse_shelf_rss", lambda text: [])
+
+    with pytest.raises(ValueError, match="page must be 1 or greater"):
+        server.get_shelf(user_id="222", page=page)
+
+    assert get.calls == []
 
 
 def test_get_shelf_parses_the_body_of_the_response_it_fetched(monkeypatch):
