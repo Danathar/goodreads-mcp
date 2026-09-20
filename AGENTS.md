@@ -82,6 +82,13 @@ Never hardcode either. A 401/403 triggers one forced re-discovery and retry.
   null); only a missing `data` raises `GraphQLError`.
 - `pyproject.toml` and `manifest.json` versions must match — release CI fails
   if they drift.
+- `pyproject.toml` is the only dependency list. The released `.mcpb` ships no
+  packages: `manifest.json` launches with `uv run --directory ${__dirname}`,
+  and the host resolves the bundled `pyproject.toml` on the user's machine.
+  Don't vendor anything into the tree `mcpb pack` reads — a compiled module
+  is built for one platform and Python, and release CI fails on one while the
+  manifest declares several platforms (#89). Don't set `PYTHONPATH` in the
+  manifest either; there is no portable list separator for it (#90).
 
 ## Writing issues, PRs and comments
 

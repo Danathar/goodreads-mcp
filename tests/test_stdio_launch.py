@@ -1,13 +1,12 @@
 """Start the server the way the shipped bundle starts it.
 
 `manifest.json` gives every MCPB host one instruction for launching this
-server -- `python -m goodreads_mcp.server`, with `PYTHONPATH` pointing at the
-bundle root -- and until this file nothing ran it. Both suites reach the tools
-by importing the module in-process, which never executes the
-`if __name__ == "__main__":` guard, so deleting that guard left the whole
-offline suite green while the manifest's command became a process that exits 0
-without serving anything. The failure would have surfaced first in somebody's
-client.
+server -- `uv run --directory ${__dirname} python -m goodreads_mcp.server` --
+and until this file nothing ran it. Both suites reach the tools by importing
+the module in-process, which never executes the `if __name__ == "__main__":`
+guard, so deleting that guard left the whole offline suite green while the
+manifest's command became a process that exits 0 without serving anything. The
+failure would have surfaced first in somebody's client.
 
 The approach is to *launch* it rather than assert about it:
 
@@ -17,6 +16,13 @@ The approach is to *launch* it rather than assert about it:
   module whose file is the manifest's own `entry_point`. Renaming
   `goodreads_mcp/server.py`, or moving `main` into a `__main__.py`, fails here
   instead of shipping a manifest that points at nothing.
+* **`uv run` is the one part not spawned.** On a user's machine it syncs the
+  bundled `pyproject.toml` into a virtualenv and runs that environment's
+  `python`; the suite is already running in such an environment, so the test
+  runs the interpreter under it and imports this checkout. The resolution uv
+  would do is done for real by `release.yml`, against the packed bundle. The
+  shape of the `uv run` prefix -- and the absence of a `PYTHONPATH`, which is
+  what kept the bundle off Windows (#90) -- is asserted here instead.
 * **A real handshake goes over the pipe.** `initialize`,
   `notifications/initialized` and `tools/list` are written to the child's
   stdin and its replies are parsed as JSON-RPC. This is offline and
@@ -87,17 +93,39 @@ def mcp_config(manifest: dict) -> dict:
     return manifest["server"]["mcp_config"]
 
 
-@pytest.fixture(scope="module")
-def launch_argv(mcp_config: dict) -> list[str]:
-    """The manifest's command, with its interpreter swapped for this one.
+def _inside_uv_run(mcp_config: dict) -> list[str]:
+    """The command `uv run` hands to the synced environment, or fail the calling test.
 
-    The manifest says `python`, which is whatever the host resolves; the test
-    has to run the interpreter the suite is running under so the child imports
-    the same checkout.
+    The manifest's shape is `uv run --directory ${__dirname} <command...>`.
+    Anything else -- a different tool, options this function does not know
+    how to strip -- is a launch this file does not model, and says so.
     """
     command, *args = [mcp_config["command"], *mcp_config["args"]]
+    assert command == "uv", f"manifest launches {command!r}; this test models `uv run`"
+    assert args[:1] == ["run"], f"manifest's uv subcommand is {args[:1]!r}, not `run`"
+    rest = args[1:]
+    while rest and rest[0].startswith("-"):
+        option = rest.pop(0)
+        assert option == "--directory", (
+            f"manifest passes {option!r} to `uv run`, which this test does not know how to model"
+        )
+        assert rest, "`--directory` at the end of the manifest's args names no directory"
+        rest.pop(0)
+    assert rest, "manifest's `uv run` names no command to run"
+    return rest
+
+
+@pytest.fixture(scope="module")
+def launch_argv(mcp_config: dict) -> list[str]:
+    """The manifest's command, with `uv run` and its interpreter swapped for this one.
+
+    `uv run ... python` is whatever interpreter uv put in the bundle's
+    environment; the test has to run the interpreter the suite is running
+    under so the child imports the same checkout.
+    """
+    command, *args = _inside_uv_run(mcp_config)
     assert Path(command).stem.startswith("python"), (
-        f"manifest launches {command!r}, which this test's interpreter swap does not model"
+        f"manifest runs {command!r} under uv, which this test's interpreter swap does not model"
     )
     return [sys.executable, *args]
 
@@ -222,7 +250,7 @@ def _registered_tool_names() -> set[str]:
 
 def test_the_manifest_launches_an_importable_module(mcp_config: dict, manifest: dict):
     """`-m <module>` has to name a module whose file is the declared entry point."""
-    module_name = _module_under_dash_m(list(mcp_config["args"]))
+    module_name = _module_under_dash_m(_inside_uv_run(mcp_config))
     spec = importlib.util.find_spec(module_name)
     assert spec is not None and spec.origin, (
         f"manifest launches `-m {module_name}`, which is not importable"
@@ -233,17 +261,65 @@ def test_the_manifest_launches_an_importable_module(mcp_config: dict, manifest: 
     )
 
 
-def test_the_manifest_puts_the_bundle_root_on_the_python_path(mcp_config: dict):
-    """Without `${__dirname}` on `PYTHONPATH`, `-m goodreads_mcp.server` cannot resolve.
+def test_the_manifest_declares_the_uv_runtime_it_launches_with(manifest: dict):
+    """`server.type` tells the host what it is running; `uv` is what the command is.
 
-    The package is not installed inside an MCPB bundle; the host runs a plain
-    `python` against unpacked files, so the bundle root is the only thing that
-    makes the module importable.
+    The `uv` type is the MCPB runtime for a Python server that ships no
+    dependencies: the host resolves them from `pyproject.toml` on the user's
+    machine, whatever the platform and Python, which is what replaced the
+    single-platform vendored bundle (#89).
     """
-    path = mcp_config["env"]["PYTHONPATH"].split(":")
-    assert "${__dirname}" in path, (
-        f"PYTHONPATH {mcp_config['env']['PYTHONPATH']!r} does not include the bundle root"
+    assert manifest["server"]["type"] == "uv"
+    assert manifest["server"]["mcp_config"]["command"] == "uv"
+
+
+def test_the_manifest_runs_uv_in_the_bundle_root(mcp_config: dict):
+    """`--directory ${__dirname}` is what makes uv read the bundle's own pyproject.toml.
+
+    Without it uv resolves whatever project the host's working directory
+    happens to be in, and `-m goodreads_mcp.server` finds nothing.
+    """
+    args = list(mcp_config["args"])
+    assert "--directory" in args, f"manifest args {args!r} do not point uv at a directory"
+    assert args[args.index("--directory") + 1] == "${__dirname}", (
+        f"manifest points uv at {args[args.index('--directory') + 1]!r}, not the bundle root"
     )
+
+
+def test_the_bundle_carries_what_uv_resolves_from(manifest: dict):
+    """`uv run` needs pyproject.toml and the package inside the bundle.
+
+    `.mcpbignore` decides what `mcpb pack` leaves out; a line that names either
+    of them ships a bundle with nothing to resolve or nothing to import. The
+    dependency list itself has to be in pyproject.toml, since that is now the
+    only list there is.
+    """
+    ignored = {
+        line.strip().rstrip("/")
+        for line in (_ROOT / ".mcpbignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    }
+    package = Path(manifest["server"]["entry_point"]).parts[0]
+    for needed in ("pyproject.toml", package):
+        assert needed not in ignored, f".mcpbignore drops {needed}, which `uv run` needs in the bundle"
+    pyproject = tomllib.loads(_PYPROJECT.read_text(encoding="utf-8"))
+    assert pyproject["project"]["dependencies"], "pyproject.toml declares no dependencies for uv to resolve"
+
+
+def test_the_manifest_sets_no_python_path(mcp_config: dict):
+    """`PYTHONPATH=${__dirname}:${__dirname}/vendor` read as one directory on Windows (#90).
+
+    Python splits `PYTHONPATH` on `os.pathsep`, which is `;` there, and the
+    manifest grammar has no variable for the host's list separator, so a
+    manifest cannot portably join two entries. Under uv the package is
+    installed into the environment and nothing needs a path; keep it that way,
+    and keep every environment value free of a `:` that a host on Windows
+    would not read as a separator.
+    """
+    env = mcp_config.get("env", {})
+    assert "PYTHONPATH" not in env, f"manifest sets PYTHONPATH={env.get('PYTHONPATH')!r}"
+    for name, value in env.items():
+        assert ":" not in value, f"{name}={value!r} joins with `:`, which is not the separator on Windows"
 
 
 def test_the_module_runs_as_a_script_and_exits_cleanly(launch_argv: list[str]):
@@ -276,7 +352,7 @@ def test_running_the_module_as_a_script_calls_main(monkeypatch: pytest.MonkeyPat
         # re-executing it is how the guard runs. Ignored rather than asserted so
         # the test does not depend on an interpreter keeping that warning.
         warnings.simplefilter("ignore", RuntimeWarning)
-        runpy.run_module(_module_under_dash_m(list(mcp_config["args"])), run_name="__main__")
+        runpy.run_module(_module_under_dash_m(_inside_uv_run(mcp_config)), run_name="__main__")
     assert served == ["goodreads"], "running the module as a script did not start the server"
 
 
