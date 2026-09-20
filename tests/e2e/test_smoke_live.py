@@ -220,6 +220,63 @@ def test_get_shelf_rss_live():
     assert items[0]["book_id"]
 
 
+def test_a_ping_is_answered_while_a_tool_call_is_in_flight_live():
+    """The server over stdio answers a ping while get_reviews pages Goodreads.
+
+    Before #92 a ping sent during a tool call was answered only when the tool
+    returned: its round trip was the rest of the tool's run (0.98 s of a
+    1.28 s call when this was written; 1.4-1.9 s in the issue). Now it is a
+    hop over the pipe. The bound is relative, half of what the tool still had
+    to run, so a slow Goodreads cannot turn a pass into a flake; a Goodreads
+    too fast to be pinged mid-call skips rather than proves nothing.
+    """
+    import asyncio
+    import sys
+    import time
+
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+
+    delay = 0.2  # seconds into the call to send the ping
+    timings: dict[str, float] = {}
+
+    async def main() -> None:
+        # The SDK hands a child a trimmed environment by default; keep ours so
+        # the child resolves and reaches Goodreads the same way this test does.
+        params = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "goodreads_mcp.server"],
+            env=dict(os.environ),
+        )
+        async with stdio_client(params) as (read, write), ClientSession(read, write) as s:
+            await s.initialize()
+
+            async def tool() -> None:
+                t0 = time.perf_counter()
+                result = await s.call_tool(
+                    "get_reviews", {"book_id": "54493401", "limit": 100}
+                )
+                timings["tool"] = time.perf_counter() - t0
+                assert not result.isError, result.content
+
+            async def ping() -> None:
+                await asyncio.sleep(delay)
+                t0 = time.perf_counter()
+                await s.send_ping()
+                timings["ping"] = time.perf_counter() - t0
+
+            await asyncio.gather(tool(), ping())
+
+    asyncio.run(main())
+    remaining = timings["tool"] - delay
+    if remaining < 0.2:
+        pytest.skip(f"get_reviews took {timings['tool']:.2f}s; too fast to ping mid-call")
+    assert timings["ping"] < remaining / 2, (
+        f"ping sent {delay}s into a {timings['tool']:.2f}s tool call was answered "
+        f"after {timings['ping']:.2f}s: the server waited for the tool to return"
+    )
+
+
 def test_list_shelves_live():
     """#91: the only HTML scrape, and the one this suite never covered. The
     review-list page went behind a login and the tool returned [] for

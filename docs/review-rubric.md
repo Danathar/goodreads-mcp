@@ -33,7 +33,9 @@ This is where this project actually breaks, so it gets the most weight.
 ## 3. Politeness to an unofficial API
 
 - [ ] Single shared client, backoff on 429/503, browser-faithful headers intact.
-- [ ] No new concurrency that multiplies request rate.
+- [ ] No new concurrency that multiplies request rate. Tool calls already run
+      in worker threads; `client.MAX_IN_FLIGHT` caps what reaches the wire,
+      and a change to it needs a reason in the PR.
 - [ ] A new **standard discovery connection** uses `_paginated_graphql_edges`
       and respects the caps (`_MAX_DISCOVERY`, `_DISCOVERY_PAGE_SIZE`).
       The helper only handles Goodreads' standard `PaginationInput`/`PageInfo`

@@ -55,3 +55,17 @@ all of #60. See #71.
 Use `_resolve_book_ids` / `_legacy_id` rather than casting to int.
 **Why it matters:** Users paste URLs. A naive `int(book_id)` raises on input
 the server is documented to accept.
+
+## A followed redirect to the sign-in page is a 200
+**Date:** 2026-09-20
+**Wrong:** Reading a 200 (or a clean `raise_for_status()`) as "the page asked
+for came back". `list_shelves` read the sign-in form, found no shelf links,
+and returned `[]` for every user, public profiles included.
+**Right:** The client follows redirects, so a login-gated path (the review-list
+page `/review/list/{uid}` since Sep 2026, #91) lands on `/user/sign_in` as a
+200 login form. `client._request` checks where the response landed
+(`resp.url.path`) and raises `LoginRequired`; `list_shelves` reads the
+still-public profile page `/user/show/{uid}` instead.
+**Why it matters:** An empty result reads as "this user has no shelves", not
+"Goodreads moved this behind a login". A surface can go login-only without any
+status changing, so only the landing path tells.
