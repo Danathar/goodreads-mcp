@@ -542,6 +542,9 @@ def test_series_books_returns_reading_order_placements(monkeypatch):
 
     (variables,) = graphql.variables_for(server._Q_SERIES)
     assert variables["input"] == {"id": "kca://series/5"}
+    # The input book is echoed like every other discovery tool does (#95).
+    assert result["book_id"] == 1
+    assert result["title"] == "A Book: Complete"
     assert result["series"] == "Arc"
     assert result["series_index"] == 0
     assert result["returned"] == 2
@@ -550,6 +553,15 @@ def test_series_books_returns_reading_order_placements(monkeypatch):
         ("Prequel", "0.5", False),
         ("Book One", "1", True),
     ]
+    assert set(result) == {
+        "book_id",
+        "title",
+        "series",
+        "series_index",
+        "returned",
+        "has_more",
+        "books",
+    }
 
 
 def test_series_books_notes_a_standalone_without_a_second_call(monkeypatch):
@@ -567,12 +579,24 @@ def test_series_books_notes_a_standalone_without_a_second_call(monkeypatch):
 
     result = server.series_books("1")
 
+    assert result["book_id"] == 1
+    assert result["title"] == "A Standalone"
     assert result["series"] is None
     assert result["note"] == "This book isn't part of a Goodreads series."
     assert result["books"] == []
     assert result["returned"] == 0
     assert result["has_more"] is False
     assert len(graphql.calls) == 1
+    # Both branches share the chainable keys; only this one adds `note`.
+    assert set(result) == {
+        "book_id",
+        "title",
+        "series",
+        "note",
+        "returned",
+        "has_more",
+        "books",
+    }
 
 
 # ------------------------------------------------------------- get_editions
@@ -731,7 +755,13 @@ def test_popular_books_asks_for_the_whole_year_by_default(monkeypatch):
     assert variables["name"] == "works-by-release-date-2024"
     assert variables["after"] is None
     assert variables["limit"] == server._POPULAR_PAGE_SIZE
-    assert result == {"year": 2024, "month": None, "returned": 0, "books": []}
+    assert result == {
+        "year": 2024,
+        "month": None,
+        "returned": 0,
+        "has_more": False,
+        "books": [],
+    }
 
 
 def test_popular_books_asks_for_a_single_month_when_given_one(monkeypatch):
@@ -827,6 +857,60 @@ def test_popular_books_follows_the_next_page_token(monkeypatch):
     assert [c["after"] for c in calls] == [None, "page-2"]
     assert [b["rank"] for b in result["books"]] == [1, 2]
     assert result["returned"] == 2
+    # The second page said hasNextPage=False, so the chart is exhausted.
+    assert result["has_more"] is False
+    assert set(result) == {"year", "month", "returned", "has_more", "books"}
+
+
+def test_popular_books_reports_more_when_the_limit_lands_on_a_page_boundary(
+    monkeypatch,
+):
+    """Stopped at `limit` with the page still promising a next page (#95)."""
+    only = _page(
+        [{"rank": 1, "count": 3, "node": _book_node(1, "One", 4.0)}],
+        hasNextPage=True,
+        nextPageToken="page-2",
+    )
+    graphql = _Graphql({server._Q_TOP_LIST: [{"getTopList": only}]})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    result = server.popular_books(2024, limit=1)
+
+    assert result["returned"] == 1
+    assert result["has_more"] is True
+    assert len(graphql.calls) == 1, "must not fetch a page it will discard"
+
+
+def test_popular_books_reports_more_when_the_limit_stops_mid_page(monkeypatch):
+    """Entries left unread on the page count as more, even with no next page."""
+    only = _page(
+        [
+            {"rank": 1, "count": 3, "node": _book_node(1, "One", 4.0)},
+            {"rank": 2, "count": 2, "node": _book_node(2, "Two", 3.0)},
+        ]
+    )
+    graphql = _Graphql({server._Q_TOP_LIST: [{"getTopList": only}]})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    result = server.popular_books(2024, limit=1)
+
+    assert [b["rank"] for b in result["books"]] == [1]
+    assert result["has_more"] is True
+
+
+def test_popular_books_reports_no_more_when_the_page_ends_the_chart(monkeypatch):
+    only = _page(
+        [{"rank": 1, "count": 3, "node": _book_node(1, "One", 4.0)}],
+        hasNextPage=False,
+        nextPageToken="page-2",
+    )
+    graphql = _Graphql({server._Q_TOP_LIST: [{"getTopList": only}]})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    result = server.popular_books(2024, limit=20)
+
+    assert result["returned"] == 1
+    assert result["has_more"] is False
 
 
 def test_popular_books_caps_the_request_at_the_maximum(monkeypatch):
@@ -852,6 +936,8 @@ def test_popular_books_caps_the_request_at_the_maximum(monkeypatch):
     assert result["returned"] == server._MAX_POPULAR
     # Stopped mid-page rather than draining a third page for entries to discard.
     assert len(graphql.variables_for(server._Q_TOP_LIST)) == 2
+    # ...and says so: the cap, not the chart, ended the listing.
+    assert result["has_more"] is True
 
 
 # ------------------------------------------------------------ compare_books
