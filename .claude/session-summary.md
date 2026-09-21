@@ -24,34 +24,33 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-20 — #94, out-of-range tool inputs were accepted silently
+## 2026-09-21 — #109, `.gitignore` does not protect the bundle
 
-**Done:** four tools took arguments outside their documented ranges and
-returned output that read like real data. `get_reviews` passed a star filter
-of 0, 6, or `min_rating > max_rating` through to Goodreads, which answers
-with `totalCount: null, edges: []` — the same shape as a book with no
-reviews. `search_books(max_results=-1)` sliced `[:-1]` and dropped the last
-match. `compare_books` trimmed to `_MAX_COMPARE` (10) without a word and
-`compared` counted only the survivors. `get_shelf(page=0)` went straight into
-the RSS URL. Each now raises `ValueError` with a plain message before any
-request goes out; `compare_books` refuses rather than trims (the docstring
-says "split the call"). `search_books` also returns `url: None` when
-`bookUrl` is absent instead of `BASE + ""`, which was a link to the home
-page. One test per case in `tests/test_offline_tool_bodies.py`; the
-test-count row in `docs/quality.md` is 515.
+**Done:** `mcpb pack` reads the working tree, not git, and `.mcpbignore` and
+`.gitignore` had drifted apart by exactly one entry: `.coverage`. It is a
+SQLite database of absolute paths from the machine that measured it — the
+disclosure `docs/SECURITY-AI.md` records as having happened here once already —
+and `.coverage-thresholds.json` tells every contributor to produce one. A
+bundle packed from such a tree shipped it; verified against a real
+`mcpb pack` before and after. `.mcpbignore` now drops `.coverage`,
+`.coverage.*` and (stating what mcpb's own defaults already do) `.env` /
+`.env.*`, and `tests/test_stdio_launch.py` pins the invariant rather than the
+list: every `.gitignore` pattern must appear in `.mcpbignore`.
 
-**In flight:** the PR on `fix/94-validate-tool-inputs`. #105 (`fix/93`,
-bad `config.json`) was open when this session started.
+**In flight:** the PR on `sec/109-mcpbignore-coverage`. #108
+(`tests/test_editorconfig.py`) was open when this session started.
 
 **Blocked on:** nothing.
 
 **Watch:**
-- `search_books` docstring now notes the autocomplete endpoint answers ~5
-  matches, so the default `max_results=10` is never reached. Not verified
-  live this session; the note is from #94's evidence.
-- `get_reviews` still clamps `limit` silently (`max(0, min(limit, 100))`),
-  as `popular_books` does with its own cap. #94 did not ask for those; a
-  negative `limit` returns an empty result today.
-- The guard's pytest option safe list is an allowlist (see #71). A plugin
-  option nobody has used yet will be refused until added to `_PYTEST_LONG` /
-  `_PYTEST_SHORT`.
+- `test_the_test_count_row_matches_what_pytest_collects` is red on `main`
+  (the row reads 515, pytest collects 533) and #108 carries the fix. This
+  session deliberately added no new test *function* for that reason — the
+  new assertion extends the existing `.mcpbignore` test, so the collected
+  count is unchanged at 533 and the row is not touched twice.
+- The published `v0.1.1` asset is the pre-#89 vendored bundle: 1558 files,
+  four `.so` modules built for cpython-3.11 x86_64-linux, while the manifest
+  declares darwin/win32/linux. Today's `release.yml` would not produce it,
+  but that is the artifact the README currently points installers at.
+- `.claude/` and `.cursor/` are tracked, so they ship inside every bundle.
+  Harmless, but nothing an installed server needs.
