@@ -286,24 +286,50 @@ def test_the_manifest_runs_uv_in_the_bundle_root(mcp_config: dict):
     )
 
 
-def test_the_bundle_carries_what_uv_resolves_from(manifest: dict):
-    """`uv run` needs pyproject.toml and the package inside the bundle.
-
-    `.mcpbignore` decides what `mcpb pack` leaves out; a line that names either
-    of them ships a bundle with nothing to resolve or nothing to import. The
-    dependency list itself has to be in pyproject.toml, since that is now the
-    only list there is.
-    """
-    ignored = {
+def _ignore_patterns(name: str) -> set[str]:
+    """The patterns an ignore file declares, with any trailing `/` normalised off."""
+    return {
         line.strip().rstrip("/")
-        for line in (_ROOT / ".mcpbignore").read_text(encoding="utf-8").splitlines()
+        for line in (_ROOT / name).read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.startswith("#")
     }
+
+
+def test_the_bundle_carries_what_uv_resolves_from_and_drops_what_git_refuses(
+    manifest: dict,
+):
+    """`.mcpbignore` decides what `mcpb pack` leaves out, in both directions.
+
+    **What has to stay.** `uv run` needs pyproject.toml and the package inside
+    the bundle; a line naming either ships a bundle with nothing to resolve or
+    nothing to import. The dependency list itself has to be in pyproject.toml,
+    since that is now the only list there is.
+
+    **What has to go.** `mcpb pack` reads the working tree, not git, so
+    `.gitignore` does not protect the bundle: a file git refuses to track is
+    generated or environment-local by definition, and ships unless
+    `.mcpbignore` names it too. The two lists had drifted apart by exactly one
+    entry, `.coverage` -- a SQLite database of absolute paths from the machine
+    that measured it, and the one file docs/SECURITY-AI.md names as having
+    disclosed a contributor's filesystem layout here once already (#109). So
+    the invariant is pinned rather than the list: every `.gitignore` pattern
+    must appear in `.mcpbignore`, and the next entry added to one cannot go
+    missing from the other.
+    """
+    ignored = _ignore_patterns(".mcpbignore")
     package = Path(manifest["server"]["entry_point"]).parts[0]
     for needed in ("pyproject.toml", package):
         assert needed not in ignored, f".mcpbignore drops {needed}, which `uv run` needs in the bundle"
     pyproject = tomllib.loads(_PYPROJECT.read_text(encoding="utf-8"))
     assert pyproject["project"]["dependencies"], "pyproject.toml declares no dependencies for uv to resolve"
+
+    untracked = _ignore_patterns(".gitignore")
+    assert untracked, ".gitignore declares no patterns; this check would pass vacuously"
+    missing = sorted(untracked - ignored)
+    assert not missing, (
+        f".gitignore keeps {missing} out of the repository but .mcpbignore does not "
+        "keep them out of the bundle, and `mcpb pack` reads the working tree"
+    )
 
 
 def test_the_manifest_sets_no_python_path(mcp_config: dict):

@@ -16,3 +16,14 @@ tests/
 # nothing pre-resolved ships in the bundle (#89).
 vendor/
 uv.lock
+# `mcpb pack` reads the working tree, not git, so a file git refuses to track
+# still ships unless it is named here too. `.coverage` is a SQLite database of
+# absolute paths from the machine that measured it, which is the disclosure
+# docs/SECURITY-AI.md records as having happened once already; the command in
+# .coverage-thresholds.json writes one at the repository root.
+.coverage
+.coverage.*
+# Dropped by mcpb's own defaults today. Named here so the bundle does not
+# depend on that default staying put.
+.env
+.env.*

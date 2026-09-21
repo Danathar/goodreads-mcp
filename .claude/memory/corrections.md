@@ -69,3 +69,15 @@ still-public profile page `/user/show/{uid}` instead.
 **Why it matters:** An empty result reads as "this user has no shelves", not
 "Goodreads moved this behind a login". A surface can go login-only without any
 status changing, so only the landing path tells.
+
+## Gitignored is not bundle-ignored
+**Date:** 2026-09-21
+**Wrong:** Reading `.gitignore` as the list of files that stay out of a
+release. `.coverage` was gitignored, so it looked handled.
+**Right:** `mcpb pack` reads the working tree. Only `.mcpbignore` decides what
+a bundle carries, and it did not name `.coverage`, so any tree that had run the
+`regenerate` command in `.coverage-thresholds.json` packed one — absolute paths
+and all. Every `.gitignore` pattern now has to appear in `.mcpbignore`, checked
+in `tests/test_stdio_launch.py`.
+**Why it matters:** Two ignore files for two different consumers drift in
+silence, and the one nobody reads is the one that publishes. See #109.
