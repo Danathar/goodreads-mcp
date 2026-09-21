@@ -11,6 +11,7 @@ permissions:
 jobs:
   label:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       # Safe use of pull_request_target: labeler reads the changed-file list
       # via the API and never checks out or executes PR code.
