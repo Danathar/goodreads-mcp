@@ -191,6 +191,35 @@ def test_every_bash_verb_on_the_allow_list_is_one_the_guard_knows(guard):
     )
 
 
+# The variables that may be set in front of a guarded verb. An allow list for
+# the same reason the pytest options are one: the deny list it replaced held
+# seven names and missed `GIT_EXTERNAL_DIFF`, `PYTHONWARNINGS` and `LD_PRELOAD`,
+# each of which runs code in the process the allow list started (#115).
+_SAFE_ENV = {
+    "GOODREADS_LIVE",
+    "GOODREADS_USER_ID",
+    "CI",
+    "TZ",
+    "LANG",
+    "LC_ALL",
+    "NO_COLOR",
+    "FORCE_COLOR",
+    "PY_COLORS",
+}
+
+
+def test_the_environment_safe_list_is_the_recorded_set(guard):
+    """Adding a variable here is a grant, so it has to be a deliberate edit.
+
+    Exhaustive in both directions, like the allow-list table above: a name the
+    guard admits and this set does not is an unexamined grant.
+    """
+    assert guard.SAFE_ENV == _SAFE_ENV, (
+        f"admitted but not recorded: {sorted(guard.SAFE_ENV - _SAFE_ENV)}, "
+        f"recorded but not admitted: {sorted(_SAFE_ENV - guard.SAFE_ENV)}"
+    )
+
+
 # Each row is (command, fragment of the reason the agent is shown). The first
 # three groups are the reproductions from #60, verbatim; the rest are the
 # spellings an agent could reach for once the obvious one is refused.
@@ -222,6 +251,24 @@ _DENIED = [
     ("PYTEST_ADDOPTS='-p evil' pytest -q", "changes what it loads"),
     ("PYTEST_PLUGINS=evil pytest -q", "changes what it loads"),
     ("PYTHONPATH=/tmp pytest -q", "changes what it loads"),
+    # an assignment in front of the verb is part of the command: the shell
+    # applies it to the process the allow list started, whatever the verb (#115)
+    ("LD_PRELOAD=/tmp/evil.so pytest -q", "changes what it loads"),
+    ("PYTHONWARNINGS=ignore::evil.W pytest -q", "changes what it loads"),
+    ("GIT_EXTERNAL_DIFF=/tmp/evil.sh git diff HEAD~1 HEAD", "changes what it loads"),
+    (
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external "
+        "GIT_CONFIG_VALUE_0=/tmp/evil.sh git diff HEAD~1 HEAD",
+        "changes what it loads",
+    ),
+    ("GIT_DIR=/tmp/elsewhere/.git git log -1", "changes what it loads"),
+    ("GIT_WORK_TREE=/tmp/elsewhere git status", "changes what it loads"),
+    # and its value is shell text like any other word
+    ("FOO=$(cat /tmp/x) pytest -q", "cannot see"),
+    ("FOO=`cat /tmp/x` pytest -q", "cannot see"),
+    ("FOO=`id` git diff HEAD~1", "cannot see"),
+    ("FOO={a,b} pytest -q", "cannot see"),
+    ("GOODREADS_LIVE=$(id) pytest tests/e2e", "cannot see"),
     # 2. git diff reads any file
     ("git diff --no-index /etc/hostname /dev/null", "--no-index"),
     ("git diff --stat --no-index a b", "--no-index"),
@@ -280,6 +327,9 @@ _PERMITTED = [
     "pytest -q --cov=goodreads_mcp --cov-report=term-missing --cov-fail-under=55",
     "pytest -q",
     "GOODREADS_LIVE=1 pytest tests/e2e -v",
+    "GOODREADS_USER_ID=12345678 GOODREADS_LIVE=1 pytest tests/e2e -v",
+    "CI=1 pytest -q",
+    "TZ=UTC git log -1",
     "pytest",
     "pytest tests",
     "pytest tests/",

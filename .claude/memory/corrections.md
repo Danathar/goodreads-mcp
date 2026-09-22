@@ -81,3 +81,19 @@ and all. Every `.gitignore` pattern now has to appear in `.mcpbignore`, checked
 in `tests/test_stdio_launch.py`.
 **Why it matters:** Two ignore files for two different consumers drift in
 silence, and the one nobody reads is the one that publishes. See #109.
+
+## A VAR=value in front of a command is part of the command
+**Date:** 2026-09-22
+**Wrong:** Treating a leading assignment as context around the command.
+`guard-bash.py` popped `VAR=value` tokens off the front before it read
+anything, and checked the names only when the verb was `pytest`.
+**Right:** The shell evaluates the value and applies it to the process the
+allow list started, so both halves are part of the command.
+`GIT_EXTERNAL_DIFF=prog git diff HEAD~1 HEAD` ran `prog` once per changed path
+with no prompt, and `FOO=$(...) pytest -q` substituted unseen because the value
+was never scanned. Names now come from a safe list, for every guarded verb, and
+a command substitution anywhere on a line that names a guarded verb is refused.
+**Why it matters:** A deny list of dangerous variable names cannot be
+completed. The one here held seven and missed `GIT_EXTERNAL_DIFF`,
+`PYTHONWARNINGS` and `LD_PRELOAD`, each of which runs code in the process. See
+#115.

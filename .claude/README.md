@@ -78,8 +78,11 @@ because they share a prefix. So the enforcement is a hook.
 the whole command string and **denies** the spellings above —
 
 - `pytest` (or `python -m pytest`) with a path that does not resolve inside
-  `tests/`, or with any option outside its safe list, or with `PYTEST_ADDOPTS`
-  / `PYTEST_PLUGINS` / `PYTHONPATH` set in front of it;
+  `tests/`, or with any option outside its safe list;
+- any `VAR=value` in front of a guarded verb whose name is not on the guard's
+  safe list of variables (`GOODREADS_LIVE`, `GOODREADS_USER_ID`, and colour and
+  locale settings). An assignment is part of the command: the shell applies it
+  to the process the allow list started;
 - `--no-index`, `--output` and `--output-file` on `git diff` and `git log`;
 - a shell redirection on any of the three verbs (`2>&1` is fine — it names a
   file descriptor, not a file);
@@ -105,6 +108,18 @@ Two ways that came apart, both of them a bypass, both closed:
   time git sees it, and `--outpu{t,t}=<path>` writes any file the same way.
   Braces are refused rather than expanded, because an expander that disagreed
   with the shell in the other direction would be this same bug again.
+- **An assignment in front of the verb was read by nothing.** The guard popped
+  `VAR=value` off the front before it looked at anything, so neither half was
+  checked. Not the name, unless the verb was `pytest`:
+  `GIT_EXTERNAL_DIFF=prog git diff HEAD~1 HEAD` ran `prog` once per changed
+  path, further than `--no-index` or `--output` reach. And not the value, which
+  is shell text like any other word, so `FOO=$(...) pytest -q` substituted
+  unseen. Assignments are read with the rest of the command now, their names
+  against a safe list rather than a list of the dangerous ones — the deny list
+  that stood there held seven names and missed `GIT_EXTERNAL_DIFF`,
+  `PYTHONWARNINGS` and `LD_PRELOAD` ([#115][115]).
+
+[115]: https://github.com/Danathar/goodreads-mcp/issues/115
 
 The general shape: any construct the guard resolves differently from the shell
 is a bypass, not a cosmetic difference. Adding one that makes the guard see

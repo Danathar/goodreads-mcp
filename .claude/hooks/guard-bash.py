@@ -29,10 +29,13 @@ commands), and each simple command whose verb is guarded is checked on its own.
 Anything the guard cannot see through -- `$var`, `$(...)`, a backtick, a brace
 expansion, a glob standing where an option goes, a string that does not
 tokenise -- is denied rather than guessed at, but only in a guarded command;
-`echo $HOME` is not this hook's business.
+`echo $HOME` is not this hook's business. The exception is a command
+substitution, which is checked against the whole string rather than one
+command, because it is the construct that moves words between them: see
+`_SUBSTITUTION_RE`.
 
 The guard only holds while the string it reads is the string the shell runs.
-Two ways that used to come apart, both of them a bypass:
+Three ways that used to come apart, all of them a bypass:
 
 * `#` starts a comment in `shlex` wherever it appears, but in a shell only at
   the start of a word. `pytest --ignore=z#z /tmp/evil.py` reached the guard as
@@ -44,6 +47,14 @@ Two ways that used to come apart, both of them a bypass:
   `git diff --no-index --no-index a b` by the time git sees it. Braces are
   refused rather than expanded here, because an expander that disagreed with
   the shell in the other direction would be this same bug again.
+* A `VAR=value` assignment in front of the verb was popped off before any of
+  the above ran, so neither half of it was read: not the value, which is shell
+  text like any other word (`FOO=$(...) pytest -q` substituted unseen), and not
+  the name, unless the verb happened to be pytest -- so
+  `GIT_EXTERNAL_DIFF=prog git diff HEAD~1 HEAD` ran `prog` once per changed
+  path. The shell applies an assignment to the process the allow list started,
+  which makes it part of the command; it is read with the rest of the command
+  now, against a safe list of names rather than a list of dangerous ones (#115).
 
 Exercised by `tests/test_agent_permissions.py`. If you change what is denied
 here, change the tables there.
@@ -74,16 +85,28 @@ GUARDED = {"pytest", *(f"git {verb}" for verb in _GIT_VERBS)}
 # Interpreter spellings for `python -m pytest`.
 _PYTHON_RE = re.compile(r"^python(3(\.\d+)?)?$")
 
-# Environment assignments in front of the verb that change what pytest or the
-# interpreter loads. `GOODREADS_LIVE=1 pytest tests/e2e -v` is fine.
-_UNSAFE_ENV = {
-    "PYTEST_ADDOPTS",
-    "PYTEST_PLUGINS",
-    "PYTHONPATH",
-    "PYTHONHOME",
-    "PYTHONSTARTUP",
-    "PYTHONUSERBASE",
-    "PYTHONEXECUTABLE",
+# Environment assignments in front of the verb. The shell applies them to the
+# process the allow list started, so they are part of the command, not a detail
+# of it -- and several reach further than anything the option tables refuse:
+# `GIT_EXTERNAL_DIFF` names a program git runs once per changed path,
+# `PYTHONWARNINGS` imports its category's module at interpreter startup, and
+# `LD_PRELOAD` runs an object in the process before Python starts.
+#
+# This is an allow list for the same reason the pytest options are: a deny list
+# of the names thought of so far admits every name nobody thought of, and the
+# three above were all outside the one that stood here (#115). A variable has to
+# be added on purpose, and only the ones below change nothing about what the
+# command loads or runs.
+SAFE_ENV = {
+    "GOODREADS_LIVE",  # the live suite's switch: GOODREADS_LIVE=1 pytest tests/e2e
+    "GOODREADS_USER_ID",  # the shelf tools' default id, for a live run
+    "CI",
+    "TZ",
+    "LANG",
+    "LC_ALL",
+    "NO_COLOR",
+    "FORCE_COLOR",
+    "PY_COLORS",
 }
 
 # pytest options the guard lets through. The value is whether the option takes
@@ -188,6 +211,17 @@ _FD_DUP = {">&", "<&"}
 # text, and `{` `}` brace-expand, which assembles a denied flag out of a token
 # that does not contain one.
 _OPAQUE = ("$", "`", "{", "}")
+
+# A command substitution is the one opaque construct that does not stay inside
+# the token it starts in: `$(` puts a `(` in the stream, which splits simple
+# commands here but not in a shell, and a backtick leaves the words between the
+# pair standing where the verb or its arguments go. Either way the token the
+# scan above would have caught ends up in a different simple command from the
+# guarded verb -- `FOO=$(...) pytest -q` reached the guard as a bare
+# `pytest -q`. So the whole string is checked for one, whenever a guarded verb
+# is anywhere in it.
+_SUBSTITUTION_RE = re.compile(r"\$\(|`")
+_GUARDED_WORD_RE = re.compile(r"\b(pytest|git)\b")
 
 # Glob metacharacters. A path may carry them -- `pytest tests/test_*.py`,
 # `git diff -- '*.py'` -- and a glob cannot walk a path out of the directory
@@ -375,7 +409,10 @@ def _check_command(words: list[str], cwd: Path) -> None:
     if verb != "pytest":
         verb = f"git {verb}"
 
-    for token in words:
+    # `env` first: an assignment's value is shell text like any other word, so
+    # `FOO=$(...) pytest -q` substitutes before pytest starts. Scanning only
+    # `words` left that one token to the left of everything the guard reads.
+    for token in env + words:
         opaque = next((ch for ch in _OPAQUE if ch in token), None)
         if opaque is not None:
             raise Denied(
@@ -390,15 +427,21 @@ def _check_command(words: list[str], cwd: Path) -> None:
                 "see which option this is"
             )
 
+    # Every guarded verb, not just pytest: `GIT_EXTERNAL_DIFF=prog git diff`
+    # runs `prog` on each changed path, which is further than `--no-index` or
+    # `--output` reach.
+    for assignment in env:
+        name = assignment.partition("=")[0]
+        if name not in SAFE_ENV:
+            raise Denied(
+                f"`{name}=...` in front of `{verb}` changes what it loads or "
+                "runs; the guard's safe list "
+                f"(.claude/hooks/guard-bash.py) is {', '.join(sorted(SAFE_ENV))}"
+            )
+
     args = _strip_redirections(args, verb)
 
     if verb == "pytest":
-        for assignment in env:
-            name = assignment.partition("=")[0]
-            if name in _UNSAFE_ENV:
-                raise Denied(
-                    f"`{name}=...` in front of pytest changes what it loads"
-                )
         _check_pytest(args, cwd)
     else:
         _check_git(verb, args)
@@ -407,10 +450,16 @@ def _check_command(words: list[str], cwd: Path) -> None:
 def decide(command: str, cwd: str | os.PathLike[str] | None = None) -> str | None:
     """Return the reason the command is denied, or None to leave it alone."""
     cwd_path = Path(cwd) if cwd else _PROJECT_DIR
+    if _SUBSTITUTION_RE.search(command) and _GUARDED_WORD_RE.search(command):
+        return (
+            "a command substitution next to a guarded command: the guard "
+            "cannot see what the shell would run, so it cannot check the "
+            "command that would actually run"
+        )
     try:
         tokens = _tokenise(command)
     except ValueError as exc:
-        if re.search(r"\b(pytest|git)\b", command):
+        if _GUARDED_WORD_RE.search(command):
             return f"the guard could not parse this command ({exc}); rephrase it"
         return None
     try:
@@ -430,7 +479,7 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 - a broken guard must fail closed
         command = raw
         reason = f"guard-bash.py failed ({exc!r}); fix the hook before relying on it"
-        if not re.search(r"\b(pytest|git)\b", raw):
+        if not _GUARDED_WORD_RE.search(raw):
             reason = None
     if reason is None:
         return 0
