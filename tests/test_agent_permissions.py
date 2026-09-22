@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -348,6 +349,43 @@ _DENIED = [
     ("git log -1\npytest /tmp/x.py", "outside tests/"),
     ("pytest tests/;git diff --no-index a b", "--no-index"),
     ("(pytest -q); git diff --output=/tmp/x", "--output"),
+    # --- the corpus pass of #120 -------------------------------------------
+    # An operand outside the checkout is `--no-index` without the option:
+    # given two paths with at least one outside the working tree, `git diff`
+    # prints both files whole. Verified against git 2.55.0 in a throwaway
+    # repository -- `git diff .env /etc/hostname` printed the .env, which
+    # `Read(./.env)` exists to withhold, and the string starts `git diff ` so
+    # `Bash(git diff *)` approves it with no prompt and no option for
+    # `_GIT_DENIED` to match.
+    ("git diff .env /etc/hostname", "outside the repository"),
+    ("git diff /etc/hostname .env", "outside the repository"),
+    ("git diff ~/.ssh/id_rsa ~/.bashrc", "outside the repository"),
+    # the same word rewriting on pytest's own target check
+    ("pytest ~/evil.py", "outside tests/"),
+    ("git diff ~/.env HEAD", "outside the repository"),
+    ("git status /etc", "outside the repository"),
+    ("git log /etc/hostname", "outside the repository"),
+    # `-O` is `--orderfile` short, and git takes it clustered (`-pO<file>`
+    # runs). It opens a path of the caller's choosing to read sort patterns.
+    ("git diff -O/etc/passwd HEAD", "outside the repository"),
+    ("git diff -pO/etc/passwd HEAD", "outside the repository"),
+    ("git diff --orderfile=/etc/passwd HEAD", "outside the repository"),
+    # bash takes a redirection in front of the command name as readily as
+    # after it. The operator used to be read as the command's name, so the
+    # guard fell through its dispatch and charged the write to nothing.
+    (">goodreads_mcp/server.py git diff HEAD", "redirection"),
+    (">/tmp/out.txt git diff HEAD", "redirection"),
+    ("2>/tmp/err.txt pytest -q", "redirection"),
+    ("< /etc/passwd pytest -q", "redirection"),
+    # a path-qualified command name runs the same tool the bare one does
+    ("/usr/bin/git diff --no-index .env /etc/hostname", "outside the repository"),
+    ("/usr/bin/python3 -m pytest /tmp/evil.py", "outside tests/"),
+    # `export NAME` exports the name and a later command assigns to it, and
+    # `set -a` exports every assignment after it without naming a builtin at
+    # all -- both reach the verb with no assignment in front of it to find.
+    ("export GIT_EXTERNAL_DIFF; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD", "export-family"),
+    ("set -a; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD", "export-family"),
+    ("set -o allexport; LD_PRELOAD=/tmp/x.so; pytest -q", "export-family"),
 ]
 
 # Ordinary invocations the guard must not touch. The first line is the exact
@@ -408,6 +446,29 @@ _PERMITTED = [
     "pytest -q && git status",
     "git diff HEAD~1 | head -40",
     "ls > /tmp/x",  # not a guarded verb
+    # --- the corpus pass of #120, the other direction ----------------------
+    # The operand rule must leave ordinary revisions and in-tree paths alone:
+    # a revision resolves inside the checkout like any relative path does.
+    "git diff HEAD~1 HEAD -- goodreads_mcp",
+    "git diff main feature -- tests/test_parsers.py",
+    "git log -L1,2:goodreads_mcp/server.py",  # an in-tree -L range
+    # `-L` carries its path inside the option, where the operand rule does
+    # not look -- and does not need to: git refuses a path outside the tree
+    # itself ("fatal: '/etc/passwd' is outside repository", git 2.55.0),
+    # so the reach the operand rule closes is not open here.
+    "git log -L1,2:/etc/passwd",
+    # `-c` after the subcommand is git's combined-diff flag and takes no
+    # value; the `-c` that loads config stands before the subcommand, where
+    # no allow row reaches it (_UNREACHABLE below).
+    "git diff -c diff.external=/tmp/prog HEAD",
+    "git status goodreads_mcp",
+    "git diff ./goodreads_mcp/../tests",  # resolves back inside
+    # only `-a` of `set` changes what a child process sees
+    "set -e; git diff HEAD",
+    "set -o pipefail; pytest -q",
+    # `-O` is a letter, not a word: another short option carrying an O in its
+    # *value* is not the orderfile option
+    "git log --format=%H -1",
     "echo $HOME",
     "cat <<'EOF'\nit's\nEOF",  # unparseable, but no guarded verb in it
     "",
@@ -514,3 +575,372 @@ def test_security_ai_still_points_at_the_claude_readme():
     """The two documents are one explanation; a dangling pointer splits it."""
     assert "../.claude/README.md" in _SECURITY_AI.read_text(encoding="utf-8")
     assert _CLAUDE_README.is_file()
+
+
+# --------------------------------------------------------- the corpus (#120)
+#
+# The tables above grew one spelling at a time, and each fix found the next
+# spelling. #120 names the whole corpus once: five families of "something
+# outside the part an allow rule matches reaches the tool". The rows live in
+# `_DENIED` and `_PERMITTED` above, because those are what actually drive the
+# guard; what this section adds is the part a row cannot carry on its own --
+# which family it belongs to, whether the family is answered in both
+# directions, and which shapes were decided *not* to gate and why.
+#
+# Two claims are deliberately not made anywhere here, because both are
+# asserted in sibling repositories and both are false:
+#
+# * that a Bash tool call's shell outlives the call. It does not -- verified
+#   on Claude Code 2.1.267, `export X=1` in one call and `echo ${X:-UNSET}` in
+#   the next printed UNSET. No row below reasons across calls; the export rule
+#   is about one command string, where bash really does apply an export to
+#   every later command in it.
+# * that a leading assignment is part of what an allow rule's prefix matches.
+#   The documented rule is the opposite -- an allow rule will not match past
+#   an assignment of any variable outside a fixed known-safe set -- so most
+#   assignment spellings prompt on their own account. `SAFE_ENV` is a backstop
+#   for a set that is not published, not the only thing in front of them.
+
+_ENVIRONMENT = "environment"
+_REDIRECTION = "redirection"
+_WORD_REWRITING = "word rewriting"
+_COMMAND_NAME = "command name"
+_OPTIONS = "options"
+
+_FAMILIES = (_ENVIRONMENT, _REDIRECTION, _WORD_REWRITING, _COMMAND_NAME, _OPTIONS)
+
+# One command per family per direction, naming a row that already stands in
+# `_DENIED` or `_PERMITTED`. Listing them here rather than tagging the rows
+# themselves keeps the driving tables the plain data they are, and makes the
+# "is this family answered in both directions" question checkable.
+_CORPUS_FAMILIES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    _ENVIRONMENT: (
+        (
+            "GIT_EXTERNAL_DIFF=/tmp/evil.sh git diff HEAD~1 HEAD",
+            "GIT_EXTERNAL_DIFF+=/tmp/prog git diff HEAD~1 HEAD",
+            "export GIT_EXTERNAL_DIFF; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD",
+            "set -a; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD",
+            "LD_PRELOAD=/tmp/evil.so git status",
+        ),
+        (
+            "GOODREADS_LIVE=1 pytest tests/e2e -v",
+            "git diff HEAD; export GIT_EXTERNAL_DIFF=/tmp/prog",
+            "set -e; git diff HEAD",
+            "export FOO=1; echo hi",
+        ),
+    ),
+    _REDIRECTION: (
+        (
+            "git diff HEAD~1 >/tmp/d.txt",
+            ">goodreads_mcp/server.py git diff HEAD",
+            "2>/tmp/err.txt pytest -q",
+            "< /etc/passwd pytest -q",
+        ),
+        (
+            "pytest -q 2>&1 | tail -20",
+            "ls > /tmp/x",
+            "pytest -k 'a>b' tests",
+        ),
+    ),
+    _WORD_REWRITING: (
+        (
+            "git diff ~/.ssh/id_rsa ~/.bashrc",
+            "git diff ~/.env HEAD",
+            "pytest ~/evil.py",
+            "FOO=$(cat /tmp/x) pytest -q",
+        ),
+        (
+            "git diff -- '*.py'",
+            "pytest tests/test_*.py",
+            "git log --grep=#60 --oneline -5",
+        ),
+    ),
+    _COMMAND_NAME: (
+        (
+            "/usr/bin/git diff --no-index .env /etc/hostname",
+            "/usr/bin/python3 -m pytest /tmp/evil.py",
+            "env GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD~1 HEAD",
+            "exec pytest -q",
+        ),
+        (
+            "python -m pytest -q",
+            "git --no-pager log --oneline -5",
+            "env FOO=1 echo hi",
+        ),
+    ),
+    _OPTIONS: (
+        (
+            "git diff .env /etc/hostname",
+            "git diff -O/etc/passwd HEAD",
+            "git diff --orderfile=/etc/passwd HEAD",
+            "pytest -p some_module",
+        ),
+        (
+            "git diff --stat HEAD~1 HEAD",
+            "pytest -q -W error::DeprecationWarning",
+            "git log -L1,2:goodreads_mcp/server.py",
+            "pytest -q --lf",
+        ),
+    ),
+}
+
+
+# Shapes that do reach the tool but that no allow rule here reaches, so the
+# guard is not what stands in front of them. Recorded rather than left silent
+# (#120 asks for an answer per shape), and checked against the allow list
+# rather than asserted in prose, so a rule added to `.claude/settings.json`
+# that starts covering one of these fails the row that said it could not.
+_UNREACHABLE: tuple[tuple[str, str, str], ...] = (
+    (
+        _COMMAND_NAME,
+        "{,git} diff HEAD --no-index .env /etc/hostname",
+        "bash drops the empty alternative as an unquoted null word, so this "
+        "really does run `git diff` -- checked against bash 5.3, where "
+        "`printf '[%s] ' {,git} diff` prints `[git] [diff]`. What stops it is "
+        "the allow list: `Bash(git diff *)` matches a string that begins "
+        "`git diff `, and this one begins `{,git}`",
+    ),
+    (
+        _OPTIONS,
+        "git -c diff.external=/tmp/prog diff HEAD",
+        "the config spelling of GIT_EXTERNAL_DIFF, and it does reach git -- "
+        "but a git global option stands before the subcommand, so the string "
+        "begins `git -c` and matches no row. `--exec-path` and `--config-env` "
+        "are the same shape. A `-c` written *after* the subcommand is git's "
+        "combined-diff flag and takes no value",
+    ),
+)
+
+
+# Shapes this pass found already filed, and deliberately did not fix here so
+# the issue that owns them lands its own change. Pinned to the answer the
+# guard gives today, so the row goes red when that issue's fix lands and has
+# to be moved into `_DENIED` rather than quietly disagreeing with it.
+_TRACKED_ELSEWHERE: tuple[tuple[str, str, str], ...] = (
+    (
+        _OPTIONS,
+        "pytest -W ignore::this.W",
+        "#117: `-W` and `--pythonwarnings` are on the guard's safe option "
+        "list, and Python parses the value with `warnings._setoption`, which "
+        "imports the module of a dotted category before pytest starts. Left "
+        "to #117 rather than fixed here, because that issue carries the "
+        "verified diff and the value-shape check it needs",
+    ),
+    (
+        _OPTIONS,
+        "pytest --pythonwarnings=ignore::this.W",
+        "#117, the long spelling of the same option",
+    ),
+    (
+        _OPTIONS,
+        "pytest -qW ignore::this.W",
+        "#117, the same option in a short cluster",
+    ),
+)
+
+
+# Disabling a rule must flip a row of the corpus, or the row is not what holds
+# the rule. `(label, before, after, witness)`: the edit is applied to a copy of
+# the guard and the witness must stop being denied.
+_MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "the operand-outside-the-checkout rule",
+        "if _is_outside_repo(token, cwd):",
+        "if False:",
+        "git diff .env /etc/hostname",
+    ),
+    (
+        "`-O`, which is `--orderfile` spelled short",
+        "and _GIT_DENIED_SHORT in token[1:]",
+        "and False",
+        "git diff -O/etc/passwd HEAD",
+    ),
+    (
+        "taking redirections out before the verb is looked for",
+        "words, redirections = _split_redirections(words)",
+        "redirections = []",
+        ">goodreads_mcp/server.py git diff HEAD",
+    ),
+    (
+        "reading a command name with its directory taken off",
+        'name = words[0].rsplit("/", 1)[-1]',
+        "name = words[0]",
+        "/usr/bin/git diff --no-index .env /etc/hostname",
+    ),
+    (
+        "an export-family builtin naming a variable with no value",
+        'return any(not word.startswith("-") for word in words[1:])',
+        "return any(_ASSIGNMENT_RE.match(word) for word in words[1:])",
+        "export GIT_EXTERNAL_DIFF; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD",
+    ),
+    (
+        "`set -a`, which exports every assignment after it",
+        "if _turns_on_allexport(words):",
+        "if False:",
+        "set -a; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD",
+    ),
+)
+
+
+# A model of the documented permission matcher, for the unreachability claims
+# above. The separators and the wrappers it steps over are documented, and so
+# is the assignment rule ("an allow rule won't match past an assignment of any
+# other variable"); the known-safe exceptions are left out because they are not
+# published, which makes this model decline to match slightly more often than
+# the real one -- the safe direction for a claim that nothing reaches.
+_MATCHER_SEPARATORS = re.compile(r"&&|\|\||\|&|;|\||&|\n")
+_MATCHER_WRAPPERS = frozenset(
+    {
+        "timeout",
+        "time",
+        "nice",
+        "nohup",
+        "stdbuf",
+        "command",
+        "builtin",
+        "noglob",
+        "xargs",
+    }
+)
+_MATCHER_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
+
+
+def _bash_allow_rules() -> list[str]:
+    """Return the `Bash(...)` allow rows, with the wrapper taken off."""
+
+    entries = json.loads(_SETTINGS.read_text(encoding="utf-8"))["permissions"]["allow"]
+    return [
+        entry[len("Bash(") : -1]
+        for entry in entries
+        if entry.startswith("Bash(") and entry.endswith(")")
+    ]
+
+
+def _subcommand_matches(part: str, rules: list[str]) -> bool:
+    words = part.split()
+    while words and words[0] in _MATCHER_WRAPPERS:
+        words = words[1:]
+    if not words or _MATCHER_ASSIGNMENT.match(words[0]):
+        return False
+    text = " ".join(words)
+    for rule in rules:
+        if rule.endswith(" *"):
+            prefix = rule[: -len(" *")]
+            if text == prefix or text.startswith(f"{prefix} "):
+                return True
+        elif text == rule:
+            return True
+    return False
+
+
+def _matches_an_allow_rule(command: str) -> bool:
+    """Whether every subcommand of `command` matches an allow row."""
+
+    rules = _bash_allow_rules()
+    parts = [part.strip() for part in _MATCHER_SEPARATORS.split(command)]
+    present = [part for part in parts if part]
+    return bool(present) and all(_subcommand_matches(part, rules) for part in present)
+
+
+def test_every_corpus_family_is_answered_in_both_directions():
+    """A family answered one way states no rule.
+
+    Without this, a family could be satisfied by "refuse everything", which is
+    a guard nobody can use, or by "refuse nothing", which is no guard at all.
+    Each listed command has to be a row of the table its direction names, so
+    the families cannot drift away from what actually runs.
+    """
+    assert set(_CORPUS_FAMILIES) == set(_FAMILIES)
+    denied = {command for command, _ in _DENIED}
+    permitted = set(_PERMITTED)
+
+    for family, (refused, allowed) in _CORPUS_FAMILIES.items():
+        assert len(refused) >= 4, f"{family} names {len(refused)} refused shapes"
+        assert len(allowed) >= 3, f"{family} names {len(allowed)} allowed shapes"
+        missing = [c for c in refused if c not in denied]
+        assert not missing, f"{family}: not rows of _DENIED: {missing}"
+        missing = [c for c in allowed if c not in permitted]
+        assert not missing, f"{family}: not rows of _PERMITTED: {missing}"
+
+
+def test_the_matcher_model_is_not_vacuous():
+    """An unreachability claim from a model that matches nothing is empty."""
+    for command in (
+        "git diff HEAD",
+        "git status",
+        "git log --oneline -5",
+        "pytest -q",
+        "git diff HEAD; git log -1",
+    ):
+        assert _matches_an_allow_rule(command), (
+            f"{command!r} is allow-listed but the model does not match it, so "
+            "every unreachability claim it makes is worthless"
+        )
+    for command in ("curl https://example.com", "rm -rf /"):
+        assert not _matches_an_allow_rule(command), (
+            f"{command!r} matches no allow row but the model says it does"
+        )
+
+
+@pytest.mark.parametrize(
+    ("family", "command", "why"), _UNREACHABLE, ids=[c for _, c, _ in _UNREACHABLE]
+)
+def test_an_unreachable_shape_matches_no_allow_rule(family, command, why):
+    """An unreachable shape is a claim about the allow list; read it there."""
+    assert family in _FAMILIES
+    assert not _matches_an_allow_rule(command), (
+        f"{command!r} now matches an allow rule, so it is reachable and the "
+        f"recorded answer is stale: {why}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("family", "command", "why"),
+    _TRACKED_ELSEWHERE,
+    ids=[c for _, c, _ in _TRACKED_ELSEWHERE],
+)
+def test_a_shape_tracked_elsewhere_still_has_the_answer_it_had(
+    guard, family, command, why
+):
+    """Pinned, not decided, so the owning issue's fix shows up here as a diff."""
+    assert family in _FAMILIES
+    assert guard.decide(command, _ROOT) is None, (
+        f"{command!r} is now denied. That is the fix landing -- move it into "
+        f"_DENIED rather than leaving this row disagreeing with it: {why}"
+    )
+
+
+@pytest.mark.parametrize("mutation", _MUTATIONS, ids=[m[0] for m in _MUTATIONS])
+def test_disabling_a_rule_stops_a_corpus_row_being_denied(mutation, tmp_path):
+    """Each new rule must be the one thing that decides its witness.
+
+    A rule with no row depending on it is untested however green the suite is,
+    and a row some *other* rule already decides proves nothing about the one it
+    was written for.
+    """
+    label, before, after, witness = mutation
+    source = _GUARD.read_text(encoding="utf-8")
+    assert source.count(before) == 1, (
+        f"the mutation for {label} names {source.count(before)} places in the "
+        "guard, so what it disables is not one rule"
+    )
+    assert witness in {command for command, _ in _DENIED}, (
+        f"{witness!r} is not a row of _DENIED, so it witnesses nothing"
+    )
+
+    mutant_path = tmp_path / "guard_mutant.py"
+    mutant_path.write_text(source.replace(before, after), encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("guard_mutant", mutant_path)
+    mutant = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mutant)
+    # The guard derives the project root from its own location, so a copy in a
+    # temporary directory would call every path in the repository "outside the
+    # checkout" and deny each witness for a reason that has nothing to do with
+    # the rule under test. Point it back at the real root.
+    mutant._PROJECT_DIR = _ROOT
+    mutant._TESTS_DIR = _ROOT / "tests"
+
+    assert mutant.decide(witness, _ROOT) is None, (
+        f"disabling {label} changed nothing: {witness!r} is still denied "
+        "without it, so that row does not hold the rule"
+    )
