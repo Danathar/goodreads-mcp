@@ -61,7 +61,47 @@ Three ways that used to come apart, all of them a bypass:
   applies to every command it runs later in the same string; and a wrapper
   (`env`, `command`, `timeout`, and `env -S` above all), whose own options this
   guard does not model and which is therefore denied in front of a guarded
-  verb rather than guessed at.
+  verb rather than guessed at. Two more went in with the whole-corpus pass
+  (#120): a bare `export NAME` that a later command assigns to, and `set -a`,
+  which exports every assignment after it without naming a builtin at all.
+* An operand naming a path outside the checkout is `--no-index` with no option
+  written. Given two paths and at least one outside the working tree,
+  `git diff` prints both files whole -- verified against git 2.55.0, where
+  `git diff .env /etc/hostname` printed the .env that `Read(./.env)` exists to
+  withhold. The string begins `git diff `, so `Bash(git diff *)` approves it
+  and there is no option on the line for the denied-option list to match. A
+  leading `~` counts as outside whatever `HOME` is set to, because bash
+  expands it before git runs.
+* A redirection may stand in front of the command name -- bash reads
+  `>out git diff HEAD` and `git diff HEAD >out` as the same command. The
+  operator used to be read as the command's name, so the guard fell through
+  its dispatch and charged the write to nothing.
+
+Three shapes of the corpus are decided as *not reachable* rather than refused,
+so a later pass does not work them out again. Each rests on the allow list,
+not on a guess about what is dangerous:
+
+* A git global option before the subcommand -- `git -c diff.external=prog
+  diff`, `--exec-path`, `--config-env`. These do reach git, and `-c
+  diff.external=` is the config spelling of `GIT_EXTERNAL_DIFF`. What stops
+  them is that `Bash(git diff *)` matches a string beginning `git diff `, and
+  a global option puts `git -c` at the front instead.
+* A brace-expanded command name, `{,git} diff`. bash drops the empty
+  alternative as an unquoted null word, so this really does run git (checked
+  against bash 5.3); the string begins `{,git}` and matches no row.
+* `python -m pytest`, which the guard checks anyway. No row covers it --
+  `Bash(pytest *)` wants a string beginning `pytest ` -- so it prompts on its
+  own account; it is read here because a guard that recognised one spelling of
+  an interpreter and not another would be deciding by accident.
+
+Nothing here reasons across Bash tool calls. A call does not inherit the
+previous call's environment (verified on Claude Code 2.1.267: `export X=1` in
+one call, `echo ${X:-UNSET}` in the next, prints UNSET), so the export rule is
+about one command string -- which is where bash really does apply an export to
+every later command. Where a spelling prompts rather than being refused here,
+the reason is Claude Code's own matcher: an allow rule has to match each
+subcommand of a string independently, across `;`, `&&`, `||`, `|`, `|&`, `&`
+and a newline.
 
 Exercised by `tests/test_agent_permissions.py`. If you change what is denied
 here, change the tables there.
@@ -244,9 +284,71 @@ _PYTEST_LONG = {
 _COV_REPORT_RE = re.compile(r"^(term|term-missing)(:skip-covered)?$|^$")
 
 # `git diff` and `git log` options that read or write outside the repository.
-# Git rejects every abbreviation of these (`--no-ind`, `--outp`, ...), so exact
-# matching is enough.
-_GIT_DENIED = {"--no-index", "--output", "--output-file"}
+# Git rejects every abbreviation of these, so exact matching is enough: checked
+# against git 2.55.0, where `--no-inde`, `--outpu` and `--outp` are all
+# "ambiguous option" (`--no-indent-heuristic` and `--output-indicator-context`
+# stand next to them) and `--orderfil` is "unknown option". `--output` is worth
+# the entry even though git then exits 129 on the separate-value form, because
+# it creates the file before it complains: `git diff --output /tmp/x HEAD`
+# leaves /tmp/x truncated and exits non-zero.
+_GIT_DENIED = {"--no-index", "--output", "--output-file", "--orderfile"}
+
+# `-O<file>` is `--orderfile` spelled short, and git takes it clustered behind
+# other short options (`-pO/etc/passwd` runs; only the value has to be attached
+# to the letter), so the letter is looked for all through a cluster, up to the
+# first letter whose value is the rest of it, rather than only at its head.
+# It makes git open a path of the caller's choosing to read sort patterns out
+# of it. That is a narrower reach than the entries above --
+# the file orders the diff and is never printed, so it discloses nothing by
+# itself -- but it is the same kind of reach, an option naming a path outside
+# the repository, and it belongs with them rather than in a second category.
+# Decided in #125 to keep it refused: refusing it costs nothing.
+_GIT_DENIED_SHORT = "O"
+
+# Short options whose value is the rest of their cluster. Git stops reading a
+# cluster as options at the first of these, so the `-O` scan stops there too:
+# `-SFOO` searches for FOO and `-pSO/x` searches for `O/x`, and neither opens
+# an order file. Checked against git 2.55.0 in `git diff` and `git log` --
+# `-<letter>O<path>` never read <path> as an order file for any letter here --
+# and replayed against real git by tests/test_agent_permissions.py. A letter
+# that is a flag in either verb (`-u` is `--patch` in diff) must not be here,
+# or `-uO<path>` would read the path past a scan that stopped at it.
+_GIT_SHORT_VALUED = frozenset("SGIlnUMCBXL")
+
+# Options that take the next word as their value when none is attached. That
+# word is a value, not an operand, so the outside-the-checkout rule skips it:
+# `git log --decorate-refs /foo` names a ref pattern, not a path. Only options
+# whose value is required belong here. `--relative`, `--stat`, `-U` and the
+# other optional-value options take an attached value only, and the next word
+# stays an operand -- `git diff --relative <outside> <inside>` prints the
+# outside file. Per verb, because `-L` and `--decorate-refs` are log options
+# and `git diff` reads the word after them as a path. Checked against git
+# 2.55.0 and replayed against real git by tests/test_agent_permissions.py.
+_GIT_VALUE_NEXT_DIFF = frozenset(
+    {
+        "-S",
+        "-G",
+        "-I",
+        "--author",
+        "--committer",
+        "--grep",
+        "--anchored",
+        "--find-object",
+        "--ignore-matching-lines",
+        "--line-prefix",
+        "--src-prefix",
+        "--dst-prefix",
+        "--rotate-to",
+        "--skip-to",
+        "--word-diff-regex",
+    }
+)
+_GIT_VALUE_NEXT = {
+    "git diff": _GIT_VALUE_NEXT_DIFF,
+    "git log": _GIT_VALUE_NEXT_DIFF
+    | {"-L", "--decorate-refs", "--decorate-refs-exclude"},
+    "git status": frozenset(),
+}
 
 # Shell operator characters. Any token made only of these is an operator; the
 # ones with `<` or `>` are redirections, the rest separate simple commands.
@@ -316,9 +418,25 @@ def _simple_commands(tokens: list[str]) -> list[list[str]]:
     return [c for c in commands if c]
 
 
-def _strip_redirections(words: list[str], verb: str) -> list[str]:
-    """Deny any redirection except a file-descriptor duplication (`2>&1`)."""
+def _split_redirections(words: list[str]) -> tuple[list[str], list[str]]:
+    """Separate a simple command's words from the redirections written in it.
+
+    Returned rather than refused on the spot, because the reason names the
+    verb and the verb is not known until the words are read -- which is the
+    bug this replaced. A redirection may stand anywhere in a simple command,
+    the command name included: bash reads `>out git diff HEAD` and
+    `git diff HEAD >out` as the same command. The operator used to be left
+    where it was and the words scanned from the front, so a leading one was
+    read as the command's name, `_check_command` fell through its `else` and
+    returned, and the redirection was never charged to anything.
+
+    A file-descriptor duplication (`2>&1`, `>&-`) names no path and is dropped
+    along with its operand; every other form is collected, spelled the way it
+    was written so the refusal can quote it.
+    """
+
     out: list[str] = []
+    found: list[str] = []
     i = 0
     while i < len(words):
         token = words[i]
@@ -329,14 +447,13 @@ def _strip_redirections(words: list[str], verb: str) -> list[str]:
                     out.pop()  # the `2` of `2>&1`
                 i += 2
                 continue
-            raise Denied(
-                f"`{verb}` with a shell redirection (`{token}`) reads or writes "
-                "a file of the shell's choosing; the allow list never meant to "
-                "grant that"
-            )
+            descriptor = out.pop() if out and out[-1].isdigit() else ""
+            found.append(f"{descriptor}{token}{nxt}")
+            i += 2
+            continue
         out.append(token)
         i += 1
-    return out
+    return out, found
 
 
 # ------------------------------------------------------------------- pytest
@@ -414,7 +531,47 @@ def _check_pytest(args: list[str], cwd: Path) -> None:
 # ---------------------------------------------------------------------- git
 
 
-def _check_git(verb: str, args: list[str]) -> None:
+def _is_outside_repo(word: str, cwd: Path) -> bool:
+    """Whether an operand of a git command names a path outside the checkout.
+
+    The caller decides which words are operands. A leading `~` is outside by
+    definition, because bash expands it to a home directory before git runs
+    and never to a path under this checkout, so the answer must not depend on
+    where `HOME` points or whether it is set.
+    """
+
+    if word.startswith("~"):
+        return True
+    try:
+        return not (cwd / word).resolve().is_relative_to(_PROJECT_DIR)
+    except (ValueError, RuntimeError, OSError):
+        return True
+
+
+def _names_an_orderfile(token: str) -> bool:
+    """Whether a short-option cluster holds `-O`, read the way git reads it.
+
+    Letters are options until the first one whose value is the rest of the
+    cluster; an `O` inside that value is text. `git diff -SFOO HEAD` searches
+    for FOO and opens no order file.
+    """
+    if not token.startswith("-") or token.startswith("--"):
+        return False
+    for letter in token[1:]:
+        if letter == _GIT_DENIED_SHORT:
+            return True
+        if letter in _GIT_SHORT_VALUED:
+            return False
+    return False
+
+
+def _check_git(verb: str, args: list[str], cwd: Path) -> None:
+    takes_value = _GIT_VALUE_NEXT[verb]
+    after_dashdash = False
+    value_next = False
+    # The two name checks run on every word, a value included: a value that
+    # happens to spell a denied option is refused, which costs nothing, and
+    # an entry wrongly in `_GIT_VALUE_NEXT` then cannot hide one.
     for token in args:
         name = token.partition("=")[0]
         if name in _GIT_DENIED:
@@ -422,12 +579,55 @@ def _check_git(verb: str, args: list[str]) -> None:
                 f"`{verb} {name}` reaches outside the repository "
                 "(`--no-index` reads any file, `--output` writes one)"
             )
+        if _names_an_orderfile(token):
+            raise Denied(
+                f"`{verb} {token}` reaches outside the repository: `-O` is "
+                "`--orderfile` spelled short, and git reads the path attached "
+                "to it"
+            )
+        if value_next:
+            # `--grep /x`: the option's value, which git never reads as a path.
+            value_next = False
+            continue
+        if not after_dashdash:
+            if token == "--":
+                after_dashdash = True
+                continue
+            if token.startswith("-"):
+                value_next = token in takes_value
+                continue
+        # Every word after `--` is an operand, whatever it begins with: with a
+        # directory named `-` in the checkout, `git diff -- -/../../x .env`
+        # prints x (git 2.55.0).
+        #
+        # Decided in #125: the rule is wide. Any operand outside the checkout
+        # is refused on all three verbs, not only the two-path form that makes
+        # `git diff` go `--no-index`. It is simpler to state and errs the safe
+        # way. What it costs is `git diff ../other-repo/file`, which is rare,
+        # and a person can run it.
+        if _is_outside_repo(token, cwd):
+            raise Denied(
+                f"`{verb} {token}` names a path outside the repository, which "
+                "is `--no-index` without the option: given two paths with at "
+                "least one outside the working tree, `git diff` prints both "
+                "files whole and no option appears on the command line for "
+                "the denied-option list above to match. Verified against git "
+                "2.55.0 -- `git diff .env /etc/hostname` printed `.env`, which "
+                "`Read(./.env)` exists to withhold, and the string starts "
+                "`git diff ` so `Bash(git diff *)` approves it with no prompt. "
+                "Read a file with the Read tool, which the deny list governs"
+            )
 
 
 # --------------------------------------------------------------------- driver
 
 
 def _check_command(words: list[str], cwd: Path) -> None:
+    # Redirections first: bash lets one stand in front of the command name, so
+    # taking them out is what makes the word after them the verb rather than
+    # the `>` being read as the verb and the command falling through unchecked.
+    words, redirections = _split_redirections(words)
+
     # Leading VAR=value assignments.
     env: list[str] = []
     while words and _ASSIGNMENT_RE.match(words[0]):
@@ -435,8 +635,15 @@ def _check_command(words: list[str], cwd: Path) -> None:
     if not words:
         return
 
+    # `/usr/bin/git` and `./pytest` run the same tools their bare names do, so
+    # the name is read with any directory taken off. The allow list matches the
+    # bare spelling only, so a qualified one prompts rather than reaching a
+    # rule -- it is read here because a guard that recognised one spelling and
+    # not the other would be deciding by accident.
+    name = words[0].rsplit("/", 1)[-1]
+
     # A wrapper the guard cannot see through, in front of something it guards.
-    if words[0] in _WRAPPERS and _GUARDED_WORD_RE.search(" ".join(words)):
+    if name in _WRAPPERS and _GUARDED_WORD_RE.search(" ".join(words)):
         raise Denied(
             f"`{words[0]}` runs another command and this guard does not model "
             f"its options, so it cannot tell what `{words[0]}` would run or "
@@ -446,12 +653,11 @@ def _check_command(words: list[str], cwd: Path) -> None:
             "one word. Run the command as a command of its own."
         )
 
-    head = words[0]
-    if _PYTHON_RE.match(head) and words[1:3] == ["-m", "pytest"]:
+    if _PYTHON_RE.match(name) and words[1:3] == ["-m", "pytest"]:
         verb, args = "pytest", words[3:]
-    elif head == "pytest":
+    elif name == "pytest":
         verb, args = "pytest", words[1:]
-    elif head == "git":
+    elif name == "git":
         # `git --no-pager diff` and the like: the verb is the first token that is
         # not an option. A global option with a value (`-C dir`) makes its value
         # look like the verb; that is harmless, because the allow list only
@@ -498,23 +704,72 @@ def _check_command(words: list[str], cwd: Path) -> None:
                 f"(.claude/hooks/guard-bash.py) is {', '.join(sorted(SAFE_ENV))}"
             )
 
-    args = _strip_redirections(args, verb)
+    if redirections:
+        raise Denied(
+            f"`{verb}` with a shell redirection (`{redirections[0]}`) reads or "
+            "writes a file of the shell's choosing; the allow list never meant "
+            "to grant that. bash accepts one in front of the command name as "
+            "readily as after it, so `>out git diff HEAD` is the same command "
+            "as `git diff HEAD >out`; a file-descriptor duplication (`2>&1`) "
+            "names no path and is left alone"
+        )
 
     if verb == "pytest":
         _check_pytest(args, cwd)
     else:
-        _check_git(verb, args)
+        _check_git(verb, args, cwd)
 
 
-def _exports_an_assignment(words: list[str]) -> bool:
-    """Whether this simple command is an export-family builtin that sets a name.
+def _exports_a_name(words: list[str]) -> bool:
+    """Whether this simple command is an export-family builtin naming a variable.
 
-    `export` and `declare -p` on their own set nothing and are not this.
+    `export` and `declare -p` on their own name nothing and are not this.
+
+    A name with no `=` counts. `export GIT_EXTERNAL_DIFF` exports the name and
+    a later command assigns to it, so
+    `export GIT_EXTERNAL_DIFF; GIT_EXTERNAL_DIFF=prog; git diff HEAD` puts the
+    program in git's environment exactly as the one-word spelling does, and
+    asking only whether the builtin's own word carried an `=` answered no for
+    it. Which name is dangerous is deliberately not modelled here: the reach
+    is the same whatever it is called, and `SAFE_ENV` is where the names that
+    change nothing are listed.
     """
 
     if not words or words[0] not in _EXPORT_BUILTINS:
         return False
-    return any(_ASSIGNMENT_RE.match(word) for word in words[1:])
+    return any(not word.startswith("-") for word in words[1:])
+
+
+def _turns_on_allexport(words: list[str]) -> bool:
+    """Whether this simple command is the `set` that exports later assignments.
+
+    `set -a` and `set -o allexport` put every variable assigned after them in
+    the environment of every command bash then runs, so a plain
+    `GIT_EXTERNAL_DIFF=prog` standing as its own command reaches the next git
+    invocation without naming an export-family builtin at all. Only the arming
+    spellings are read; `set +a` turns it back off and is not matched, which
+    can leave the flag set for longer than bash would -- the over-refusing
+    direction, and the safe one.
+    """
+
+    if not words or words[0] != "set":
+        return False
+    return any(
+        word == "allexport"
+        or (word.startswith("-") and not word.startswith("--") and "a" in word[1:])
+        for word in words[1:]
+    )
+
+
+def _is_bare_assignment(words: list[str]) -> bool:
+    """Whether this simple command is assignments and nothing else.
+
+    On its own that sets a shell variable, which no child process sees, so it
+    is not refused; under `set -a` it sets an environment one, and
+    `_turns_on_allexport` is what tells the two apart.
+    """
+
+    return bool(words) and all(_ASSIGNMENT_RE.match(word) for word in words)
 
 
 def decide(command: str, cwd: str | os.PathLike[str] | None = None) -> str | None:
@@ -537,20 +792,28 @@ def decide(command: str, cwd: str | os.PathLike[str] | None = None) -> str | Non
         # `git diff HEAD; export GIT_EXTERNAL_DIFF=prog` is left alone and
         # `export GIT_EXTERNAL_DIFF=prog; git diff HEAD` is not.
         exported = False
+        allexport = False
         for words in _simple_commands(tokens):
             if exported and _GUARDED_WORD_RE.search(" ".join(words)):
                 raise Denied(
-                    "an export-family assignment (`export NAME=value`, "
-                    "`declare -x`, `typeset -x`, `readonly`) earlier in this "
-                    "string is in this command's environment, which is the "
+                    "an export-family name exported earlier in this string "
+                    "(`export NAME=value`, `declare -x`, `typeset -x`, "
+                    "`readonly`, a bare `export NAME` a later command assigns "
+                    "to, or any assignment after `set -a`) "
+                    "is in this command's environment, which is the "
                     "reach of a leading `NAME=value` written after the verb "
                     "instead of before it: `export GIT_EXTERNAL_DIFF=prog; "
                     "git diff HEAD~1 HEAD` runs prog once per changed path "
                     "while the git command carries no assignment at all. Run "
                     "it without the export"
                 )
-            if _exports_an_assignment(words):
+            # Armed after this command has been judged, so the rule stays
+            # ordered: an export reaches what bash runs after it, never what
+            # ran before it.
+            if _exports_a_name(words) or (allexport and _is_bare_assignment(words)):
                 exported = True
+            if _turns_on_allexport(words):
+                allexport = True
             _check_command(words, cwd_path)
     except Denied as exc:
         return str(exc)
