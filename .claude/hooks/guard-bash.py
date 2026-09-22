@@ -202,7 +202,9 @@ SAFE_ENV = {
 # ones deliberately absent load code (`-p`, `-c`, `--pdbcls`, `--pyargs`,
 # `--doctest-modules`), relocate collection (`--rootdir`, `--confcutdir`,
 # `--import-mode`, `-o`/`--override-ini`), or write files (`--basetemp`, which
-# also deletes, `--junitxml`, `--log-file`, `--debug`).
+# also deletes, `--junitxml`, `--log-file`, `--debug`). Two listed options are
+# safe only for some values, and their values are checked: `--cov-report`
+# (terminal reporters only) and `-W`/`--pythonwarnings` (no dotted category).
 _PYTEST_SHORT = {
     "q": False,
     "v": False,
@@ -282,6 +284,26 @@ _PYTEST_LONG = {
     "--cov-reset": False,
 }
 _COV_REPORT_RE = re.compile(r"^(term|term-missing)(:skip-covered)?$|^$")
+
+
+def _check_warning_filter(value: str) -> None:
+    """Refuse a `-W` value whose warning category is a dotted name (#117).
+
+    pytest resolves the category of `action:message:category:module:lineno`
+    by importing the module of a dotted name before a test is collected:
+    `-W ignore::this.W` imports `this` and runs its top-level code, the reach
+    `-p` is refused for. A built-in category has no dot, and that is all this
+    repository passes (`-W error::DeprecationWarning`).
+    """
+    parts = value.split(":")
+    category = parts[2].strip() if len(parts) > 2 else ""
+    if "." in category:
+        raise Denied(
+            f"`-W {value}` names the warning category `{category}`, and pytest "
+            "imports the module of a dotted category before it runs anything; "
+            "only a built-in category (no dot) is allowed"
+        )
+
 
 # `git diff` and `git log` options that read or write outside the repository.
 # Git rejects every abbreviation of these, so exact matching is enough: checked
@@ -478,6 +500,8 @@ def _check_pytest(args: list[str], cwd: Path) -> None:
             if _PYTEST_LONG[name] and not eq:
                 i += 1
                 value = args[i] if i < len(args) else ""
+            if name == "--pythonwarnings":
+                _check_warning_filter(value)
             if name == "--cov-report" and not _COV_REPORT_RE.match(value):
                 raise Denied(
                     f"`--cov-report={value}` writes files; only the terminal "
@@ -509,6 +533,10 @@ def _check_pytest(args: list[str], cwd: Path) -> None:
                         "code, relocate collection or write files are refused"
                     )
                 if _PYTEST_SHORT[flag]:
+                    if flag == "W":
+                        _check_warning_filter(
+                            rest or (args[i + 1] if i + 1 < len(args) else "")
+                        )
                     if not rest:
                         i += 1  # the value is the next token
                     break
