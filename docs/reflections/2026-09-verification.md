@@ -32,8 +32,9 @@ writing a rule about this codebase, grep for the thing first. "Every tool uses
 X" is a claim with a command attached: `grep -n X`. Run it.
 
 **The source's own comments are not authoritative.** `client.py`'s docstring
-says "four unofficial-but-stable read surfaces" and omits the HTML scrape
-`list_shelves` uses. Documentation inherited that error. Verify against code,
+said "four unofficial-but-stable read surfaces" and omitted the HTML scrape
+`list_shelves` uses; #81 found it and #82 corrected it to five. Documentation
+inherited that error, and copies of it outlived the fix. Verify against code,
 not against prose about the code.
 
 **Ship commands that were executed, not commands that look right.** A

@@ -100,7 +100,9 @@ That hook is [`.claude/hooks/guard-bash.py`](../.claude/hooks/guard-bash.py).
 It denies `pytest` with a path outside `tests/` or an option that loads code,
 `--no-index` / `--output` on `git diff` and `git log`, a shell redirection on
 any of the allowed verbs, and any variable assignment in front of one of them
-whose name is not on a short safe list; it stays silent on everything else, so
+whose name is not on a short safe list — including bash's `VAR+=value` append
+form, an `export` earlier in the same string, and a wrapper such as `env` or
+`timeout` that the guard cannot see through; it stays silent on everything else, so
 it never widens what the rules grant. `tests/test_agent_permissions.py` holds the table
 of denied spellings, the table of ordinary invocations that must pass, and the
 check that the hook is registered — a guard that is not registered guards

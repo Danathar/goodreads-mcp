@@ -55,6 +55,13 @@ Three ways that used to come apart, all of them a bypass:
   path. The shell applies an assignment to the process the allow list started,
   which makes it part of the command; it is read with the rest of the command
   now, against a safe list of names rather than a list of dangerous ones (#115).
+  Three spellings of the same assignment go with it: bash's `NAME+=value`
+  append form, which creates the variable when it is unset; the export family
+  (`export NAME=value`, `declare -x`, `typeset -x`, `readonly`), which bash
+  applies to every command it runs later in the same string; and a wrapper
+  (`env`, `command`, `timeout`, and `env -S` above all), whose own options this
+  guard does not model and which is therefore denied in front of a guarded
+  verb rather than guessed at.
 
 Exercised by `tests/test_agent_permissions.py`. If you change what is denied
 here, change the tables there.
@@ -84,6 +91,46 @@ GUARDED = {"pytest", *(f"git {verb}" for verb in _GIT_VERBS)}
 
 # Interpreter spellings for `python -m pytest`.
 _PYTHON_RE = re.compile(r"^python(3(\.\d+)?)?$")
+
+# An assignment as bash's grammar spells it, which is wider than `NAME=value`.
+# `NAME+=value` appends and *creates* the variable when it is unset, so
+# `GIT_EXTERNAL_DIFF+=prog git diff HEAD~1 HEAD` is the same environment as the
+# plain form; the `^[A-Za-z_][A-Za-z0-9_]*=` this replaces did not match it, so
+# the word went on to be read as the command's name and the guard returned
+# without checking anything. Group 1 is the variable, without the `+`.
+_ASSIGNMENT_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?\+?=")
+
+# `export NAME=value`, and the three builtins that spell the same thing with a
+# flag. What they set is in the environment of every command bash runs later in
+# the same string, so the assignment reaches a guarded verb that carries none
+# of its own: `export GIT_EXTERNAL_DIFF=prog; git diff HEAD~1 HEAD` ran prog
+# once per changed path while the git command looked bare. The builtin is
+# refused rather than its options read, because the flag that exports has
+# several spellings (-x, -gx, a plain `NAME=value` after an earlier
+# `declare -x NAME`) and a half-read option list is a guard that disagrees with
+# bash in some other direction.
+_EXPORT_BUILTINS = frozenset({"export", "declare", "typeset", "readonly"})
+
+# Words that run another command and whose own options this guard does not
+# model. `env GIT_EXTERNAL_DIFF=prog git diff HEAD~1 HEAD` put the assignment
+# behind a word the guard read as the verb, so it returned at the first `if`.
+# `env -S` goes further and hides the whole invocation inside one word. Like
+# every other construct the guard cannot see through, a wrapper standing in
+# front of a guarded verb is denied rather than guessed at.
+_WRAPPERS = frozenset(
+    {
+        "env",
+        "command",
+        "exec",
+        "time",
+        "builtin",
+        "nohup",
+        "nice",
+        "timeout",
+        "stdbuf",
+        "xargs",
+    }
+)
 
 # Environment assignments in front of the verb. The shell applies them to the
 # process the allow list started, so they are part of the command, not a detail
@@ -383,10 +430,21 @@ def _check_git(verb: str, args: list[str]) -> None:
 def _check_command(words: list[str], cwd: Path) -> None:
     # Leading VAR=value assignments.
     env: list[str] = []
-    while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+    while words and _ASSIGNMENT_RE.match(words[0]):
         env.append(words.pop(0))
     if not words:
         return
+
+    # A wrapper the guard cannot see through, in front of something it guards.
+    if words[0] in _WRAPPERS and _GUARDED_WORD_RE.search(" ".join(words)):
+        raise Denied(
+            f"`{words[0]}` runs another command and this guard does not model "
+            f"its options, so it cannot tell what `{words[0]}` would run or "
+            "what environment it would run under: `env GIT_EXTERNAL_DIFF=prog "
+            "git diff HEAD~1 HEAD` puts the assignment where the guard reads "
+            "the verb, and `env -S '...'` hides the whole invocation inside "
+            "one word. Run the command as a command of its own."
+        )
 
     head = words[0]
     if _PYTHON_RE.match(head) and words[1:3] == ["-m", "pytest"]:
@@ -431,7 +489,8 @@ def _check_command(words: list[str], cwd: Path) -> None:
     # runs `prog` on each changed path, which is further than `--no-index` or
     # `--output` reach.
     for assignment in env:
-        name = assignment.partition("=")[0]
+        matched = _ASSIGNMENT_RE.match(assignment)
+        name = matched.group(1) if matched else assignment.partition("=")[0]
         if name not in SAFE_ENV:
             raise Denied(
                 f"`{name}=...` in front of `{verb}` changes what it loads or "
@@ -445,6 +504,17 @@ def _check_command(words: list[str], cwd: Path) -> None:
         _check_pytest(args, cwd)
     else:
         _check_git(verb, args)
+
+
+def _exports_an_assignment(words: list[str]) -> bool:
+    """Whether this simple command is an export-family builtin that sets a name.
+
+    `export` and `declare -p` on their own set nothing and are not this.
+    """
+
+    if not words or words[0] not in _EXPORT_BUILTINS:
+        return False
+    return any(_ASSIGNMENT_RE.match(word) for word in words[1:])
 
 
 def decide(command: str, cwd: str | os.PathLike[str] | None = None) -> str | None:
@@ -463,7 +533,24 @@ def decide(command: str, cwd: str | os.PathLike[str] | None = None) -> str | Non
             return f"the guard could not parse this command ({exc}); rephrase it"
         return None
     try:
+        # In order: an export reaches the commands bash runs *after* it, so
+        # `git diff HEAD; export GIT_EXTERNAL_DIFF=prog` is left alone and
+        # `export GIT_EXTERNAL_DIFF=prog; git diff HEAD` is not.
+        exported = False
         for words in _simple_commands(tokens):
+            if exported and _GUARDED_WORD_RE.search(" ".join(words)):
+                raise Denied(
+                    "an export-family assignment (`export NAME=value`, "
+                    "`declare -x`, `typeset -x`, `readonly`) earlier in this "
+                    "string is in this command's environment, which is the "
+                    "reach of a leading `NAME=value` written after the verb "
+                    "instead of before it: `export GIT_EXTERNAL_DIFF=prog; "
+                    "git diff HEAD~1 HEAD` runs prog once per changed path "
+                    "while the git command carries no assignment at all. Run "
+                    "it without the export"
+                )
+            if _exports_an_assignment(words):
+                exported = True
             _check_command(words, cwd_path)
     except Denied as exc:
         return str(exc)

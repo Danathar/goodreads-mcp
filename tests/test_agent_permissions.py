@@ -312,6 +312,32 @@ _DENIED = [
     ("pytest --ignore=z#z /tmp/proof/notatest.py", "outside tests/"),
     ("pytest --deselect=z#z /tmp/proof/notatest.py", "outside tests/"),
     ("pytest -q#q /tmp/proof/notatest.py", "not on the guard's safe list"),
+    # bash's append form. `NAME+=value` creates the variable when it is
+    # unset, so this is the same environment as `NAME=value`; the guard's
+    # `^[A-Za-z_][A-Za-z0-9_]*=` did not match it and the word went on to be
+    # read as the verb, which is not one the guard knows, so it returned.
+    ("GIT_EXTERNAL_DIFF+=/tmp/prog git diff HEAD~1 HEAD", "safe list"),
+    ("LD_PRELOAD+=/tmp/x.so pytest -q", "safe list"),
+    ("PYTHONWARNINGS+=ignore::this.W pytest --version", "safe list"),
+    ("PYTEST_PLUGINS+=evil pytest -q", "safe list"),
+    # the export family: the same assignment written after the verb instead
+    # of in front of it, which bash applies to every later command of the
+    # string
+    ("export GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD~1 HEAD", "export-family"),
+    ("declare -x GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD", "export-family"),
+    ("typeset -x LD_PRELOAD=/tmp/x.so; pytest -q", "export-family"),
+    ("readonly PYTHONPATH=/tmp; pytest -q", "export-family"),
+    ("export LD_PRELOAD=/tmp/x.so && pytest -q", "export-family"),
+    ("export GIT_EXTERNAL_DIFF=/tmp/prog\ngit diff HEAD", "export-family"),
+    # a wrapper the guard does not model, in front of a guarded verb. `env`
+    # put the assignment where the guard reads the verb; `env -S` hides the
+    # whole invocation inside one word.
+    ("env GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD~1 HEAD", "runs another command"),
+    ("env -S 'GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD'", "runs another command"),
+    ("env -S'LD_PRELOAD=/tmp/x.so pytest -q'", "runs another command"),
+    ("timeout 60 GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD", "runs another command"),
+    ("command GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD", "runs another command"),
+    ("exec pytest -q", "runs another command"),
     # a guarded verb hidden behind a separator is still checked
     ("git log -1; pytest /tmp/x.py", "outside tests/"),
     ("git log -1 && pytest /tmp/x.py", "outside tests/"),
@@ -330,6 +356,19 @@ _PERMITTED = [
     "GOODREADS_USER_ID=12345678 GOODREADS_LIVE=1 pytest tests/e2e -v",
     "CI=1 pytest -q",
     "TZ=UTC git log -1",
+    # An export reaches what bash runs after it and nothing earlier, and an
+    # export in a string with no guarded verb in it is not this hook's
+    # business at all.
+    "git diff HEAD; export GIT_EXTERNAL_DIFF=/tmp/prog",
+    "export FOO=1",
+    "export FOO=1; echo hi",
+    "declare -x FOO=1; echo hi",
+    "export; echo hi",  # sets nothing
+    "declare -p; echo hi",  # sets nothing
+    "echo export FOO=1",  # the word as text, not as a command name
+    # A wrapper with nothing the guard guards behind it.
+    "env FOO=1 echo hi",
+    "timeout 5 echo hi",
     "pytest",
     "pytest tests",
     "pytest tests/",

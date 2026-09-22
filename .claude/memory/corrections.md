@@ -97,3 +97,19 @@ a command substitution anywhere on a line that names a guarded verb is refused.
 completed. The one here held seven and missed `GIT_EXTERNAL_DIFF`,
 `PYTHONWARNINGS` and `LD_PRELOAD`, each of which runs code in the process. See
 #115.
+
+## An assignment has more spellings than `NAME=value`
+**Date:** 2026-09-22
+**Wrong:** Reading only `NAME=value` in front of the verb. Three spellings put
+the same variable in the same environment and none of them matched:
+`NAME+=value`, which bash creates when the variable is unset; `export
+NAME=value` earlier in the string, which bash applies to every command after
+it; and `env NAME=value verb`, where the wrapper stands where the guard reads
+the verb. `env -S '...'` hides the whole invocation inside one word.
+**Right:** All four are refused, and all four were run against git in a
+throwaway repository first — each executes the program `GIT_EXTERNAL_DIFF`
+names, once per changed path, exactly as the plain form does.
+**Why it matters:** A rule stated as "an assignment before the command" has to
+match bash's grammar for one, not the one spelling that came to mind. The
+export form is the one worth remembering: the command it arms carries no
+assignment at all.

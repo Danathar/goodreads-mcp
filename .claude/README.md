@@ -82,7 +82,14 @@ the whole command string and **denies** the spellings above —
 - any `VAR=value` in front of a guarded verb whose name is not on the guard's
   safe list of variables (`GOODREADS_LIVE`, `GOODREADS_USER_ID`, and colour and
   locale settings). An assignment is part of the command: the shell applies it
-  to the process the allow list started;
+  to the process the allow list started. bash's `VAR+=value` append form counts
+  — it creates the variable when it is unset — and so does the export family
+  (`export VAR=value`, `declare -x`, `typeset -x`, `readonly`), which reaches
+  every command bash runs later in the same string;
+- a wrapper the guard does not model — `env`, `command`, `exec`, `timeout` and
+  the rest — standing in front of a guarded verb. `env VAR=value git diff` puts
+  the assignment where the guard reads the verb, and `env -S '...'` hides the
+  whole invocation inside one word;
 - `--no-index`, `--output` and `--output-file` on `git diff` and `git log`;
 - a shell redirection on any of the three verbs (`2>&1` is fine — it names a
   file descriptor, not a file);
