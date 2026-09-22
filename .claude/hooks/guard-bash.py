@@ -64,6 +64,11 @@ Three ways that used to come apart, all of them a bypass:
   verb rather than guessed at. Two more went in with the whole-corpus pass
   (#120): a bare `export NAME` that a later command assigns to, and `set -a`,
   which exports every assignment after it without naming a builtin at all.
+* zsh's `noglob` is a wrapper Claude Code's permission matcher steps over, and
+  the guard did not know it, so `noglob pytest -p evil` reached
+  `Bash(pytest *)` unchecked. A bare `noglob` takes no options, so the command
+  after it is checked in its place; a path spelling (`/usr/bin/noglob`) is some
+  other program and is denied like the wrappers above.
 * An operand naming a path outside the checkout is `--no-index` with no option
   written. Given two paths and at least one outside the working tree,
   `git diff` prints both files whole -- verified against git 2.55.0, where
@@ -157,6 +162,24 @@ _EXPORT_BUILTINS = frozenset({"export", "declare", "typeset", "readonly"})
 # `env -S` goes further and hides the whole invocation inside one word. Like
 # every other construct the guard cannot see through, a wrapper standing in
 # front of a guarded verb is denied rather than guessed at.
+#
+# The list covers every wrapper Claude Code's permission matcher steps over
+# before it compares a command with an allow row (timeout, time, nice, stdbuf,
+# nohup, command, builtin, noglob, and xargs through its `xargs <prefix>`
+# case), because each of those reaches `Bash(pytest *)` or `Bash(git diff *)`
+# with no prompt. The matcher compares what follows the word's last `/` or
+# `\`, so `/usr/bin/noglob pytest -p evil` and `'./shim\nohup' git diff HEAD`
+# are approved as readily as the bare spelling -- which is why the wrapper
+# below is read with everything up to either separator taken off.
+# `noglob` was missing: `noglob pytest -p evil` and
+# `noglob git diff --no-index /dev/null ./.env` passed this guard, and matched
+# the allow rows. A bare `noglob` is zsh's precommand modifier, which takes no
+# options and turns off globbing for the command after it, so that command is
+# checked in its place (`_check_command` steps over it). Only a path spelling
+# reaches this list: `/usr/bin/noglob` or `$HOME/bin/noglob` is some other
+# program the matcher reads as the modifier, and the guard cannot see what it
+# runs. In bash a bare `noglob` is not a command, but bash has already applied
+# any redirection by then, and the step-over checks that too.
 _WRAPPERS = frozenset(
     {
         "env",
@@ -167,6 +190,7 @@ _WRAPPERS = frozenset(
         "nohup",
         "nice",
         "timeout",
+        "noglob",
         "stdbuf",
         "xargs",
     }
@@ -656,10 +680,18 @@ def _check_command(words: list[str], cwd: Path) -> None:
     # the `>` being read as the verb and the command falling through unchecked.
     words, redirections = _split_redirections(words)
 
-    # Leading VAR=value assignments.
+    # Leading VAR=value assignments, and zsh's `noglob` modifier among them.
+    # A bare `noglob` takes no options and runs the next word as the command,
+    # so that command is the one to check: `noglob echo git` is `echo git`, not
+    # a wrapper hiding a guarded verb. zsh does not read an assignment after it
+    # as one (`noglob FOO=1 cmd` looks for a command named `FOO=1`), but it is
+    # read as one here anyway -- checked against the safe list, the only cost
+    # is refusing a command zsh could not find.
     env: list[str] = []
-    while words and _ASSIGNMENT_RE.match(words[0]):
-        env.append(words.pop(0))
+    while words and (words[0] == "noglob" or _ASSIGNMENT_RE.match(words[0])):
+        word = words.pop(0)
+        if word != "noglob":
+            env.append(word)
     if not words:
         return
 
@@ -671,7 +703,12 @@ def _check_command(words: list[str], cwd: Path) -> None:
     name = words[0].rsplit("/", 1)[-1]
 
     # A wrapper the guard cannot see through, in front of something it guards.
-    if name in _WRAPPERS and _GUARDED_WORD_RE.search(" ".join(words)):
+    # Claude Code's matcher finds a wrapper by cutting its word at the last `/`
+    # *or* `\` (`replace(/^.*[\\/]/, "")` in 2.1.267), so it steps over
+    # `'./shim\nohup' git diff ...` and matches `Bash(git diff *)` -- and what
+    # runs is the file at that path. The wrapper is looked for the same way.
+    wrapper = re.split(r"[\\/]", words[0])[-1]
+    if wrapper in _WRAPPERS and _GUARDED_WORD_RE.search(" ".join(words)):
         raise Denied(
             f"`{words[0]}` runs another command and this guard does not model "
             f"its options, so it cannot tell what `{words[0]}` would run or "
