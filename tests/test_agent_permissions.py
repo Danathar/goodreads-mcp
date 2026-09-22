@@ -402,6 +402,13 @@ _DENIED = [
     ("export GIT_EXTERNAL_DIFF; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD", "export-family"),
     ("set -a; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD", "export-family"),
     ("set -o allexport; LD_PRELOAD=/tmp/x.so; pytest -q", "export-family"),
+    # a dotted warning category is a module pytest imports before it collects
+    # anything: `-W ignore::this.W` prints the Zen of Python first (#117)
+    ("pytest -W ignore::this.W", "warning category"),
+    ("pytest --pythonwarnings=ignore::this.W", "warning category"),
+    ("pytest --pythonwarnings ignore::this.W", "warning category"),
+    ("pytest -qW ignore::this.W", "warning category"),
+    ("pytest -Wignore::goodreads_mcp.server.W", "warning category"),
 ]
 
 # Ordinary invocations the guard must not touch. The first line is the exact
@@ -438,6 +445,8 @@ _PERMITTED = [
     "pytest -q --lf",
     "pytest -q -x --maxfail=2 --durations=5",
     "pytest -q -W error::DeprecationWarning",
+    # the module field is a regex matched against module names, not imported
+    "pytest -q -W ignore::DeprecationWarning:goodreads_mcp.server",
     "pytest -q --deselect tests/test_parsers.py::test_x",
     "pytest -q -p no:cacheprovider",
     "pytest -pno:cacheprovider -q",
@@ -703,6 +712,7 @@ _CORPUS_FAMILIES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
             "git diff -uO/etc/passwd HEAD",
             "git diff -- -/../../etc/hostname .env",
             "pytest -p some_module",
+            "pytest -W ignore::this.W",
         ),
         (
             "git diff --stat HEAD~1 HEAD",
@@ -739,33 +749,6 @@ _UNREACHABLE: tuple[tuple[str, str, str], ...] = (
         "begins `git -c` and matches no row. `--exec-path` and `--config-env` "
         "are the same shape. A `-c` written *after* the subcommand is git's "
         "combined-diff flag and takes no value",
-    ),
-)
-
-
-# Shapes this pass found already filed, and deliberately did not fix here so
-# the issue that owns them lands its own change. Pinned to the answer the
-# guard gives today, so the row goes red when that issue's fix lands and has
-# to be moved into `_DENIED` rather than quietly disagreeing with it.
-_TRACKED_ELSEWHERE: tuple[tuple[str, str, str], ...] = (
-    (
-        _OPTIONS,
-        "pytest -W ignore::this.W",
-        "#117: `-W` and `--pythonwarnings` are on the guard's safe option "
-        "list, and Python parses the value with `warnings._setoption`, which "
-        "imports the module of a dotted category before pytest starts. Left "
-        "to #117 rather than fixed here, because that issue carries the "
-        "verified diff and the value-shape check it needs",
-    ),
-    (
-        _OPTIONS,
-        "pytest --pythonwarnings=ignore::this.W",
-        "#117, the long spelling of the same option",
-    ),
-    (
-        _OPTIONS,
-        "pytest -qW ignore::this.W",
-        "#117, the same option in a short cluster",
     ),
 )
 
@@ -815,6 +798,12 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "if _turns_on_allexport(words):",
         "if False:",
         "set -a; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD",
+    ),
+    (
+        "a dotted warning category in `-W`",
+        'if "." in category:',
+        "if False:",
+        "pytest -W ignore::this.W",
     ),
 )
 
@@ -928,22 +917,6 @@ def test_an_unreachable_shape_matches_no_allow_rule(family, command, why):
     assert not _matches_an_allow_rule(command), (
         f"{command!r} now matches an allow rule, so it is reachable and the "
         f"recorded answer is stale: {why}"
-    )
-
-
-@pytest.mark.parametrize(
-    ("family", "command", "why"),
-    _TRACKED_ELSEWHERE,
-    ids=[c for _, c, _ in _TRACKED_ELSEWHERE],
-)
-def test_a_shape_tracked_elsewhere_still_has_the_answer_it_had(
-    guard, family, command, why
-):
-    """Pinned, not decided, so the owning issue's fix shows up here as a diff."""
-    assert family in _FAMILIES
-    assert guard.decide(command, _ROOT) is None, (
-        f"{command!r} is now denied. That is the fix landing -- move it into "
-        f"_DENIED rather than leaving this row disagreeing with it: {why}"
     )
 
 
