@@ -33,7 +33,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -370,6 +372,20 @@ _DENIED = [
     ("git diff -O/etc/passwd HEAD", "outside the repository"),
     ("git diff -pO/etc/passwd HEAD", "outside the repository"),
     ("git diff --orderfile=/etc/passwd HEAD", "outside the repository"),
+    # the scan stops at a letter whose value is the rest of the cluster, and
+    # `-u` is not one in `git diff` -- it is `--patch`, so the O after it is
+    # the option (`git diff -uO<path>` opens <path>, git 2.55.0)
+    ("git diff -uO/etc/passwd HEAD", "outside the repository"),
+    # every word after `--` is an operand, a leading `-` included: with a
+    # directory named `-` in the checkout, this prints /etc/hostname
+    ("git diff -- -/../../etc/hostname .env", "outside the repository"),
+    # a word is an option's value only where git reads it as one.
+    # `--decorate-refs` is a log option, and `git diff` reads the word after
+    # it as a path; `--relative` takes an attached value only, so the word
+    # after it stays an operand (`git diff --relative <outside> <inside>`
+    # prints the outside file, git 2.55.0)
+    ("git diff --decorate-refs /etc/hostname .env", "outside the repository"),
+    ("git diff --relative /etc/hostname .env", "outside the repository"),
     # bash takes a redirection in front of the command name as readily as
     # after it. The operator used to be read as the command's name, so the
     # guard fell through its dispatch and charged the write to nothing.
@@ -469,6 +485,15 @@ _PERMITTED = [
     # `-O` is a letter, not a word: another short option carrying an O in its
     # *value* is not the orderfile option
     "git log --format=%H -1",
+    # ... and the letter is only the option where git reads it as one. `-S`
+    # takes the rest of its cluster as the pickaxe string, so the O in FOO is
+    # text and no order file is opened (git 2.55.0).
+    "git diff -SFOO HEAD",
+    "git log -pSO/x --oneline -1",
+    # a word that is an option's value is not an operand: `/foo` here is a
+    # ref pattern, and git log exits 0 on it (git 2.55.0)
+    "git log --decorate-refs /foo --oneline -1",
+    "git log --grep /api/ --oneline -5",
     "echo $HOME",
     "cat <<'EOF'\nit's\nEOF",  # unparseable, but no guarded verb in it
     "",
@@ -751,9 +776,15 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "`-O`, which is `--orderfile` spelled short",
-        "and _GIT_DENIED_SHORT in token[1:]",
-        "and False",
+        "if letter == _GIT_DENIED_SHORT:",
+        "if False:",
         "git diff -O/etc/passwd HEAD",
+    ),
+    (
+        "every word after `--` being an operand",
+        "after_dashdash = True",
+        "after_dashdash = False",
+        "git diff -- -/../../etc/hostname .env",
     ),
     (
         "taking redirections out before the verb is looked for",
@@ -943,4 +974,97 @@ def test_disabling_a_rule_stops_a_corpus_row_being_denied(mutation, tmp_path):
     assert mutant.decide(witness, _ROOT) is None, (
         f"disabling {label} changed nothing: {witness!r} is still denied "
         "without it, so that row does not hold the rule"
+    )
+
+
+# ------------------------------------------ the arity tables, against git
+#
+# `_GIT_SHORT_VALUED` and `_GIT_VALUE_NEXT` say where git stops reading
+# options, and each entry relaxes the guard: a letter listed wrongly lets a
+# real `-O` through the cluster scan, and an option listed wrongly lets a real
+# outside operand past the operand rule. So every entry is replayed against
+# the git on this machine rather than trusted from the comment beside it.
+
+_GIT = shutil.which("git")
+
+
+@pytest.fixture(scope="module")
+def scratch_git(tmp_path_factory):
+    """A two-commit repository and a marked file outside it."""
+    if _GIT is None:
+        pytest.skip("git is not installed")
+    base = tmp_path_factory.mktemp("arity")
+    repo = base / "repo"
+    repo.mkdir()
+    outside = base / "outside.txt"
+    outside.write_text("OUTSIDE-MARKER\n", encoding="utf-8")
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(base),
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.invalid",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.invalid",
+    }
+
+    def git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [_GIT, "-C", str(repo), *args], capture_output=True, text=True, env=env
+        )
+
+    git("init", "-q")
+    (repo / "a").write_text("one\n", encoding="utf-8")
+    git("add", "a")
+    git("commit", "-qm", "one")
+    (repo / "a").write_text("two\n", encoding="utf-8")
+    git("commit", "-qam", "two")
+    return git, outside
+
+
+# What makes each verb do the work a probe looks for: an order file is only
+# read when there is a diff to order.
+_PROBE_ARGS = {"git diff": ("diff", "HEAD~1"), "git log": ("log", "-p")}
+
+
+def test_the_git_probes_can_see_what_they_look_for(scratch_git):
+    """A probe that cannot see a read would pass every entry."""
+    git, outside = scratch_git
+    for args in _PROBE_ARGS.values():
+        assert "orderfile" in git(*args, "-pO/nonexistent/order").stderr
+    assert "OUTSIDE-MARKER" in git("diff", "--relative", str(outside), "a").stdout
+    assert "outside repository" in git("log", str(outside)).stderr
+
+
+@pytest.mark.parametrize("verb", sorted(_PROBE_ARGS))
+def test_a_letter_that_ends_the_cluster_scan_ends_it_in_git(guard, scratch_git, verb):
+    git, _ = scratch_git
+    opened = [
+        letter
+        for letter in sorted(guard._GIT_SHORT_VALUED)
+        if "orderfile" in git(*_PROBE_ARGS[verb], f"-{letter}O/nonexistent/order").stderr
+    ]
+    assert not opened, (
+        f"`{verb} -<letter>O<path>` opens <path> as an order file for {opened}, "
+        "so the -O scan must not stop at them"
+    )
+
+
+@pytest.mark.parametrize("verb", sorted(_PROBE_ARGS))
+def test_a_word_skipped_as_a_value_is_a_value_to_git(guard, scratch_git, verb):
+    git, outside = scratch_git
+    subcommand = _PROBE_ARGS[verb][0]
+    operands = []
+    for option in sorted(guard._GIT_VALUE_NEXT[verb]):
+        alone = git(subcommand, option, str(outside))
+        paired = git(subcommand, option, str(outside), "a")
+        if (
+            "outside repository" in alone.stderr
+            or "OUTSIDE-MARKER" in alone.stdout + paired.stdout
+        ):
+            operands.append(option)
+    assert not operands, (
+        f"`{verb}` reads the word after {operands} as an operand, so the "
+        "operand rule must not skip it"
     )

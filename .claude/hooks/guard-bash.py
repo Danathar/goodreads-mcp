@@ -295,13 +295,59 @@ _GIT_DENIED = {"--no-index", "--output", "--output-file", "--orderfile"}
 
 # `-O<file>` is `--orderfile` spelled short, and git takes it clustered behind
 # other short options (`-pO/etc/passwd` runs; only the value has to be attached
-# to the letter), so the letter is looked for anywhere in a cluster rather than
-# only at its head. It makes git open a path of the caller's choosing to read
-# sort patterns out of it. That is a narrower reach than the entries above --
+# to the letter), so the letter is looked for all through a cluster, up to the
+# first letter whose value is the rest of it, rather than only at its head.
+# It makes git open a path of the caller's choosing to read sort patterns out
+# of it. That is a narrower reach than the entries above --
 # the file orders the diff and is never printed, so it discloses nothing by
 # itself -- but it is the same kind of reach, an option naming a path outside
 # the repository, and it belongs with them rather than in a second category.
 _GIT_DENIED_SHORT = "O"
+
+# Short options whose value is the rest of their cluster. Git stops reading a
+# cluster as options at the first of these, so the `-O` scan stops there too:
+# `-SFOO` searches for FOO and `-pSO/x` searches for `O/x`, and neither opens
+# an order file. Checked against git 2.55.0 in `git diff` and `git log` --
+# `-<letter>O<path>` never read <path> as an order file for any letter here --
+# and replayed against real git by tests/test_agent_permissions.py. A letter
+# that is a flag in either verb (`-u` is `--patch` in diff) must not be here,
+# or `-uO<path>` would read the path past a scan that stopped at it.
+_GIT_SHORT_VALUED = frozenset("SGIlnUMCBXL")
+
+# Options that take the next word as their value when none is attached. That
+# word is a value, not an operand, so the outside-the-checkout rule skips it:
+# `git log --decorate-refs /foo` names a ref pattern, not a path. Only options
+# whose value is required belong here. `--relative`, `--stat`, `-U` and the
+# other optional-value options take an attached value only, and the next word
+# stays an operand -- `git diff --relative <outside> <inside>` prints the
+# outside file. Per verb, because `-L` and `--decorate-refs` are log options
+# and `git diff` reads the word after them as a path. Checked against git
+# 2.55.0 and replayed against real git by tests/test_agent_permissions.py.
+_GIT_VALUE_NEXT_DIFF = frozenset(
+    {
+        "-S",
+        "-G",
+        "-I",
+        "--author",
+        "--committer",
+        "--grep",
+        "--anchored",
+        "--find-object",
+        "--ignore-matching-lines",
+        "--line-prefix",
+        "--src-prefix",
+        "--dst-prefix",
+        "--rotate-to",
+        "--skip-to",
+        "--word-diff-regex",
+    }
+)
+_GIT_VALUE_NEXT = {
+    "git diff": _GIT_VALUE_NEXT_DIFF,
+    "git log": _GIT_VALUE_NEXT_DIFF
+    | {"-L", "--decorate-refs", "--decorate-refs-exclude"},
+    "git status": frozenset(),
+}
 
 # Shell operator characters. Any token made only of these is an operator; the
 # ones with `<` or `>` are redirections, the rest separate simple commands.
@@ -487,14 +533,12 @@ def _check_pytest(args: list[str], cwd: Path) -> None:
 def _is_outside_repo(word: str, cwd: Path) -> bool:
     """Whether an operand of a git command names a path outside the checkout.
 
-    An option is not an operand and is judged by name elsewhere; a leading `~`
-    is outside by definition, because bash expands it to a home directory
-    before git runs and never to a path under this checkout, so the answer
-    must not depend on where `HOME` points or whether it is set.
+    The caller decides which words are operands. A leading `~` is outside by
+    definition, because bash expands it to a home directory before git runs
+    and never to a path under this checkout, so the answer must not depend on
+    where `HOME` points or whether it is set.
     """
 
-    if word.startswith("-"):
-        return False
     if word.startswith("~"):
         return True
     try:
@@ -503,7 +547,30 @@ def _is_outside_repo(word: str, cwd: Path) -> bool:
         return True
 
 
+def _names_an_orderfile(token: str) -> bool:
+    """Whether a short-option cluster holds `-O`, read the way git reads it.
+
+    Letters are options until the first one whose value is the rest of the
+    cluster; an `O` inside that value is text. `git diff -SFOO HEAD` searches
+    for FOO and opens no order file.
+    """
+    if not token.startswith("-") or token.startswith("--"):
+        return False
+    for letter in token[1:]:
+        if letter == _GIT_DENIED_SHORT:
+            return True
+        if letter in _GIT_SHORT_VALUED:
+            return False
+    return False
+
+
 def _check_git(verb: str, args: list[str], cwd: Path) -> None:
+    takes_value = _GIT_VALUE_NEXT[verb]
+    after_dashdash = False
+    value_next = False
+    # The two name checks run on every word, a value included: a value that
+    # happens to spell a denied option is refused, which costs nothing, and
+    # an entry wrongly in `_GIT_VALUE_NEXT` then cannot hide one.
     for token in args:
         name = token.partition("=")[0]
         if name in _GIT_DENIED:
@@ -511,16 +578,26 @@ def _check_git(verb: str, args: list[str], cwd: Path) -> None:
                 f"`{verb} {name}` reaches outside the repository "
                 "(`--no-index` reads any file, `--output` writes one)"
             )
-        if (
-            token.startswith("-")
-            and not token.startswith("--")
-            and _GIT_DENIED_SHORT in token[1:]
-        ):
+        if _names_an_orderfile(token):
             raise Denied(
                 f"`{verb} {token}` reaches outside the repository: `-O` is "
                 "`--orderfile` spelled short, and git reads the path attached "
                 "to it"
             )
+        if value_next:
+            # `--grep /x`: the option's value, which git never reads as a path.
+            value_next = False
+            continue
+        if not after_dashdash:
+            if token == "--":
+                after_dashdash = True
+                continue
+            if token.startswith("-"):
+                value_next = token in takes_value
+                continue
+        # Every word after `--` is an operand, whatever it begins with: with a
+        # directory named `-` in the checkout, `git diff -- -/../../x .env`
+        # prints x (git 2.55.0).
         if _is_outside_repo(token, cwd):
             raise Denied(
                 f"`{verb} {token}` names a path outside the repository, which "
