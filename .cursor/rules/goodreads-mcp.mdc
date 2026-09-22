@@ -21,5 +21,7 @@ Full guidance: [AGENTS.md](mdc:AGENTS.md). Essentials:
   headers. Don't add concurrency that raises request rate.
 - New discovery tools: reuse `_paginated_graphql_edges`, cap `limit` at 100,
   return `returned` / `has_more`, and include source `url` fields.
+  `popular_books` and `compare_books` have their own tighter caps — check the
+  constants near the top of `server.py` before assuming.
 - `pytest -q` is offline. `GOODREADS_LIVE=1 pytest tests/e2e -v` is live — run
   it after any parsing change.
