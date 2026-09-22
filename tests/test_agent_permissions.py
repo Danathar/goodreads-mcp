@@ -346,14 +346,20 @@ _DENIED = [
     ("command GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD", "runs another command"),
     ("exec pytest -q", "runs another command"),
     # `noglob` is a wrapper the permission matcher steps over, so these match
-    # `Bash(pytest *)` and `Bash(git diff *)`. Under zsh it runs the command;
-    # in bash it is not found, but the redirection is applied first. The
-    # matcher compares the wrapper's basename, so a path spelling is the same.
-    ("noglob pytest -p evil", "runs another command"),
-    ("noglob git diff --no-index /dev/null ./.env", "runs another command"),
-    ("noglob git diff HEAD --output=x", "runs another command"),
-    ("noglob pytest >out", "runs another command"),
-    ("git status; noglob pytest /tmp/evil.py", "runs another command"),
+    # `Bash(pytest *)` and `Bash(git diff *)`. A bare `noglob` is zsh's
+    # modifier, which runs the command after it, so that command is checked in
+    # its place (in bash it is not found, but the redirection is applied
+    # first). The matcher compares the wrapper's basename, so it approves a
+    # path spelling as readily; that is some other program, and is refused.
+    ("noglob pytest -p evil", "plugin"),
+    ("noglob git diff --no-index /dev/null ./.env", "--no-index"),
+    ("noglob git diff HEAD --output=x", "--output"),
+    ("noglob pytest >out", "redirection"),
+    ("git status; noglob pytest /tmp/evil.py", "outside tests/"),
+    ("noglob noglob pytest -p evil", "plugin"),
+    ("GIT_EXTERNAL_DIFF=/tmp/prog noglob git diff HEAD", "safe list"),
+    ("noglob GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD", "safe list"),
+    ("noglob timeout 5 pytest -q", "runs another command"),
     ("/usr/bin/noglob pytest -p evil", "runs another command"),
     ("/usr/bin/noglob git diff .env /etc/hostname", "runs another command"),
     ("$HOME/bin/noglob pytest -q", "runs another command"),
@@ -446,7 +452,14 @@ _PERMITTED = [
     # A wrapper with nothing the guard guards behind it.
     "env FOO=1 echo hi",
     "timeout 5 echo hi",
+    # A bare `noglob` runs the command after it, which is the one checked: a
+    # guarded word as an argument of something else is not a guarded verb.
     "noglob echo hi",
+    "noglob echo git",
+    "noglob rg pytest",
+    "noglob pytest -q",
+    "noglob git diff HEAD",
+    "noglob TZ=UTC git log -1",
     "pytest",
     "pytest tests",
     "pytest tests/",
@@ -717,6 +730,8 @@ _CORPUS_FAMILIES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
             "python -m pytest -q",
             "git --no-pager log --oneline -5",
             "env FOO=1 echo hi",
+            "noglob echo git",
+            "noglob pytest -q",
         ),
     ),
     _OPTIONS: (
@@ -821,10 +836,10 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "pytest -W ignore::this.W",
     ),
     (
-        "`noglob` as a wrapper",
+        "a path-spelled `noglob` as a wrapper",
         '"noglob",',
         "",
-        "noglob pytest -p evil",
+        "/usr/bin/noglob pytest -p evil",
     ),
 )
 

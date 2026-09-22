@@ -59,12 +59,16 @@ Three ways that used to come apart, all of them a bypass:
   append form, which creates the variable when it is unset; the export family
   (`export NAME=value`, `declare -x`, `typeset -x`, `readonly`), which bash
   applies to every command it runs later in the same string; and a wrapper
-  (`env`, `command`, `timeout`, `noglob`, and `env -S` above all), whose own
-  options this guard does not model and which is therefore denied in front of
-  a guarded verb rather than guessed at. Two more went in with the
-  whole-corpus pass (#120): a bare `export NAME` that a later command assigns
-  to, and `set -a`, which exports every assignment after it without naming a
-  builtin at all.
+  (`env`, `command`, `timeout`, and `env -S` above all), whose own options this
+  guard does not model and which is therefore denied in front of a guarded
+  verb rather than guessed at. Two more went in with the whole-corpus pass
+  (#120): a bare `export NAME` that a later command assigns to, and `set -a`,
+  which exports every assignment after it without naming a builtin at all.
+* zsh's `noglob` is a wrapper Claude Code's permission matcher steps over, and
+  the guard did not know it, so `noglob pytest -p evil` reached
+  `Bash(pytest *)` unchecked. A bare `noglob` takes no options, so the command
+  after it is checked in its place; a path spelling (`/usr/bin/noglob`) is some
+  other program and is denied like the wrappers above.
 * An operand naming a path outside the checkout is `--no-index` with no option
   written. Given two paths and at least one outside the working tree,
   `git diff` prints both files whole -- verified against git 2.55.0, where
@@ -168,8 +172,13 @@ _EXPORT_BUILTINS = frozenset({"export", "declare", "typeset", "readonly"})
 # spelling -- which is why `name` below is read with its directory taken off.
 # `noglob` was missing: `noglob pytest -p evil` and
 # `noglob git diff --no-index /dev/null ./.env` passed this guard, and matched
-# the allow rows. In bash `noglob` is not a command, but bash has already
-# applied any redirection by then; under zsh it runs the command.
+# the allow rows. A bare `noglob` is zsh's precommand modifier, which takes no
+# options and turns off globbing for the command after it, so that command is
+# checked in its place (`_check_command` steps over it). Only a path spelling
+# reaches this list: `/usr/bin/noglob` or `$HOME/bin/noglob` is some other
+# program the matcher reads as the modifier, and the guard cannot see what it
+# runs. In bash a bare `noglob` is not a command, but bash has already applied
+# any redirection by then, and the step-over checks that too.
 _WRAPPERS = frozenset(
     {
         "env",
@@ -670,10 +679,18 @@ def _check_command(words: list[str], cwd: Path) -> None:
     # the `>` being read as the verb and the command falling through unchecked.
     words, redirections = _split_redirections(words)
 
-    # Leading VAR=value assignments.
+    # Leading VAR=value assignments, and zsh's `noglob` modifier among them.
+    # A bare `noglob` takes no options and runs the next word as the command,
+    # so that command is the one to check: `noglob echo git` is `echo git`, not
+    # a wrapper hiding a guarded verb. zsh does not read an assignment after it
+    # as one (`noglob FOO=1 cmd` looks for a command named `FOO=1`), but it is
+    # read as one here anyway -- checked against the safe list, the only cost
+    # is refusing a command zsh could not find.
     env: list[str] = []
-    while words and _ASSIGNMENT_RE.match(words[0]):
-        env.append(words.pop(0))
+    while words and (words[0] == "noglob" or _ASSIGNMENT_RE.match(words[0])):
+        word = words.pop(0)
+        if word != "noglob":
+            env.append(word)
     if not words:
         return
 
