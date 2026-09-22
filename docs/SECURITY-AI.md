@@ -98,9 +98,12 @@ command string.
 
 That hook is [`.claude/hooks/guard-bash.py`](../.claude/hooks/guard-bash.py).
 It denies `pytest` with a path outside `tests/` or an option that loads code,
-`--no-index` / `--output` on `git diff` and `git log`, and a shell redirection
-on any of the allowed verbs; it stays silent on everything else, so it never
-widens what the rules grant. `tests/test_agent_permissions.py` holds the table
+`--no-index` / `--output` on `git diff` and `git log`, a shell redirection on
+any of the allowed verbs, and any variable assignment in front of one of them
+whose name is not on a short safe list — including bash's `VAR+=value` append
+form, an `export` earlier in the same string, and a wrapper such as `env` or
+`timeout` that the guard cannot see through; it stays silent on everything else, so
+it never widens what the rules grant. `tests/test_agent_permissions.py` holds the table
 of denied spellings, the table of ordinary invocations that must pass, and the
 check that the hook is registered — a guard that is not registered guards
 nothing. See [#60](https://github.com/Danathar/goodreads-mcp/issues/60).
@@ -111,8 +114,12 @@ the shell runs. Two constructs broke that and are now refused outright — a `#`
 which ends a token for `shlex` wherever it appears but starts a comment for a
 shell only at the start of a word, and a brace expansion, which assembles a
 denied flag out of a token that does not contain one. Both let an allow-listed
-command through the guard clean and reach the program whole. Any new construct
-the guard resolves differently from the shell is the same bug; see
+command through the guard clean and reach the program whole. A third was a
+`VAR=value` assignment in front of the verb, which the guard removed before it
+read anything: `GIT_EXTERNAL_DIFF=prog git diff HEAD~1 HEAD` runs `prog` once
+per changed path, and a command substitution in any value ran unseen
+([#115](https://github.com/Danathar/goodreads-mcp/issues/115)). Any new
+construct the guard resolves differently from the shell is the same bug; see
 [#71](https://github.com/Danathar/goodreads-mcp/issues/71) and the
 "guard only holds if it reads what the shell runs" section of
 [`.claude/README.md`](../.claude/README.md).

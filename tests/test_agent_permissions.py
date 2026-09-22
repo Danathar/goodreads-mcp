@@ -191,6 +191,35 @@ def test_every_bash_verb_on_the_allow_list_is_one_the_guard_knows(guard):
     )
 
 
+# The variables that may be set in front of a guarded verb. An allow list for
+# the same reason the pytest options are one: the deny list it replaced held
+# seven names and missed `GIT_EXTERNAL_DIFF`, `PYTHONWARNINGS` and `LD_PRELOAD`,
+# each of which runs code in the process the allow list started (#115).
+_SAFE_ENV = {
+    "GOODREADS_LIVE",
+    "GOODREADS_USER_ID",
+    "CI",
+    "TZ",
+    "LANG",
+    "LC_ALL",
+    "NO_COLOR",
+    "FORCE_COLOR",
+    "PY_COLORS",
+}
+
+
+def test_the_environment_safe_list_is_the_recorded_set(guard):
+    """Adding a variable here is a grant, so it has to be a deliberate edit.
+
+    Exhaustive in both directions, like the allow-list table above: a name the
+    guard admits and this set does not is an unexamined grant.
+    """
+    assert guard.SAFE_ENV == _SAFE_ENV, (
+        f"admitted but not recorded: {sorted(guard.SAFE_ENV - _SAFE_ENV)}, "
+        f"recorded but not admitted: {sorted(_SAFE_ENV - guard.SAFE_ENV)}"
+    )
+
+
 # Each row is (command, fragment of the reason the agent is shown). The first
 # three groups are the reproductions from #60, verbatim; the rest are the
 # spellings an agent could reach for once the obvious one is refused.
@@ -222,6 +251,24 @@ _DENIED = [
     ("PYTEST_ADDOPTS='-p evil' pytest -q", "changes what it loads"),
     ("PYTEST_PLUGINS=evil pytest -q", "changes what it loads"),
     ("PYTHONPATH=/tmp pytest -q", "changes what it loads"),
+    # an assignment in front of the verb is part of the command: the shell
+    # applies it to the process the allow list started, whatever the verb (#115)
+    ("LD_PRELOAD=/tmp/evil.so pytest -q", "changes what it loads"),
+    ("PYTHONWARNINGS=ignore::evil.W pytest -q", "changes what it loads"),
+    ("GIT_EXTERNAL_DIFF=/tmp/evil.sh git diff HEAD~1 HEAD", "changes what it loads"),
+    (
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external "
+        "GIT_CONFIG_VALUE_0=/tmp/evil.sh git diff HEAD~1 HEAD",
+        "changes what it loads",
+    ),
+    ("GIT_DIR=/tmp/elsewhere/.git git log -1", "changes what it loads"),
+    ("GIT_WORK_TREE=/tmp/elsewhere git status", "changes what it loads"),
+    # and its value is shell text like any other word
+    ("FOO=$(cat /tmp/x) pytest -q", "cannot see"),
+    ("FOO=`cat /tmp/x` pytest -q", "cannot see"),
+    ("FOO=`id` git diff HEAD~1", "cannot see"),
+    ("FOO={a,b} pytest -q", "cannot see"),
+    ("GOODREADS_LIVE=$(id) pytest tests/e2e", "cannot see"),
     # 2. git diff reads any file
     ("git diff --no-index /etc/hostname /dev/null", "--no-index"),
     ("git diff --stat --no-index a b", "--no-index"),
@@ -265,6 +312,32 @@ _DENIED = [
     ("pytest --ignore=z#z /tmp/proof/notatest.py", "outside tests/"),
     ("pytest --deselect=z#z /tmp/proof/notatest.py", "outside tests/"),
     ("pytest -q#q /tmp/proof/notatest.py", "not on the guard's safe list"),
+    # bash's append form. `NAME+=value` creates the variable when it is
+    # unset, so this is the same environment as `NAME=value`; the guard's
+    # `^[A-Za-z_][A-Za-z0-9_]*=` did not match it and the word went on to be
+    # read as the verb, which is not one the guard knows, so it returned.
+    ("GIT_EXTERNAL_DIFF+=/tmp/prog git diff HEAD~1 HEAD", "safe list"),
+    ("LD_PRELOAD+=/tmp/x.so pytest -q", "safe list"),
+    ("PYTHONWARNINGS+=ignore::this.W pytest --version", "safe list"),
+    ("PYTEST_PLUGINS+=evil pytest -q", "safe list"),
+    # the export family: the same assignment written after the verb instead
+    # of in front of it, which bash applies to every later command of the
+    # string
+    ("export GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD~1 HEAD", "export-family"),
+    ("declare -x GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD", "export-family"),
+    ("typeset -x LD_PRELOAD=/tmp/x.so; pytest -q", "export-family"),
+    ("readonly PYTHONPATH=/tmp; pytest -q", "export-family"),
+    ("export LD_PRELOAD=/tmp/x.so && pytest -q", "export-family"),
+    ("export GIT_EXTERNAL_DIFF=/tmp/prog\ngit diff HEAD", "export-family"),
+    # a wrapper the guard does not model, in front of a guarded verb. `env`
+    # put the assignment where the guard reads the verb; `env -S` hides the
+    # whole invocation inside one word.
+    ("env GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD~1 HEAD", "runs another command"),
+    ("env -S 'GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD'", "runs another command"),
+    ("env -S'LD_PRELOAD=/tmp/x.so pytest -q'", "runs another command"),
+    ("timeout 60 GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD", "runs another command"),
+    ("command GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD", "runs another command"),
+    ("exec pytest -q", "runs another command"),
     # a guarded verb hidden behind a separator is still checked
     ("git log -1; pytest /tmp/x.py", "outside tests/"),
     ("git log -1 && pytest /tmp/x.py", "outside tests/"),
@@ -280,6 +353,22 @@ _PERMITTED = [
     "pytest -q --cov=goodreads_mcp --cov-report=term-missing --cov-fail-under=55",
     "pytest -q",
     "GOODREADS_LIVE=1 pytest tests/e2e -v",
+    "GOODREADS_USER_ID=12345678 GOODREADS_LIVE=1 pytest tests/e2e -v",
+    "CI=1 pytest -q",
+    "TZ=UTC git log -1",
+    # An export reaches what bash runs after it and nothing earlier, and an
+    # export in a string with no guarded verb in it is not this hook's
+    # business at all.
+    "git diff HEAD; export GIT_EXTERNAL_DIFF=/tmp/prog",
+    "export FOO=1",
+    "export FOO=1; echo hi",
+    "declare -x FOO=1; echo hi",
+    "export; echo hi",  # sets nothing
+    "declare -p; echo hi",  # sets nothing
+    "echo export FOO=1",  # the word as text, not as a command name
+    # A wrapper with nothing the guard guards behind it.
+    "env FOO=1 echo hi",
+    "timeout 5 echo hi",
     "pytest",
     "pytest tests",
     "pytest tests/",
