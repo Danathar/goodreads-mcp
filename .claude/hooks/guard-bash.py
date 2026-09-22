@@ -167,9 +167,10 @@ _EXPORT_BUILTINS = frozenset({"export", "declare", "typeset", "readonly"})
 # before it compares a command with an allow row (timeout, time, nice, stdbuf,
 # nohup, command, builtin, noglob, and xargs through its `xargs <prefix>`
 # case), because each of those reaches `Bash(pytest *)` or `Bash(git diff *)`
-# with no prompt. The matcher compares the wrapper's basename, so
-# `/usr/bin/noglob pytest -p evil` is approved as readily as the bare
-# spelling -- which is why `name` below is read with its directory taken off.
+# with no prompt. The matcher compares what follows the word's last `/` or
+# `\`, so `/usr/bin/noglob pytest -p evil` and `'./shim\nohup' git diff HEAD`
+# are approved as readily as the bare spelling -- which is why the wrapper
+# below is read with everything up to either separator taken off.
 # `noglob` was missing: `noglob pytest -p evil` and
 # `noglob git diff --no-index /dev/null ./.env` passed this guard, and matched
 # the allow rows. A bare `noglob` is zsh's precommand modifier, which takes no
@@ -702,7 +703,12 @@ def _check_command(words: list[str], cwd: Path) -> None:
     name = words[0].rsplit("/", 1)[-1]
 
     # A wrapper the guard cannot see through, in front of something it guards.
-    if name in _WRAPPERS and _GUARDED_WORD_RE.search(" ".join(words)):
+    # Claude Code's matcher finds a wrapper by cutting its word at the last `/`
+    # *or* `\` (`replace(/^.*[\\/]/, "")` in 2.1.267), so it steps over
+    # `'./shim\nohup' git diff ...` and matches `Bash(git diff *)` -- and what
+    # runs is the file at that path. The wrapper is looked for the same way.
+    wrapper = re.split(r"[\\/]", words[0])[-1]
+    if wrapper in _WRAPPERS and _GUARDED_WORD_RE.search(" ".join(words)):
         raise Denied(
             f"`{words[0]}` runs another command and this guard does not model "
             f"its options, so it cannot tell what `{words[0]}` would run or "
