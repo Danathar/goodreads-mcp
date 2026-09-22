@@ -345,6 +345,18 @@ _DENIED = [
     ("timeout 60 GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD", "runs another command"),
     ("command GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD", "runs another command"),
     ("exec pytest -q", "runs another command"),
+    # `noglob` is a wrapper the permission matcher steps over, so these match
+    # `Bash(pytest *)` and `Bash(git diff *)`. Under zsh it runs the command;
+    # in bash it is not found, but the redirection is applied first. The
+    # matcher compares the wrapper's basename, so a path spelling is the same.
+    ("noglob pytest -p evil", "runs another command"),
+    ("noglob git diff --no-index /dev/null ./.env", "runs another command"),
+    ("noglob git diff HEAD --output=x", "runs another command"),
+    ("noglob pytest >out", "runs another command"),
+    ("git status; noglob pytest /tmp/evil.py", "runs another command"),
+    ("/usr/bin/noglob pytest -p evil", "runs another command"),
+    ("/usr/bin/noglob git diff .env /etc/hostname", "runs another command"),
+    ("$HOME/bin/noglob pytest -q", "runs another command"),
     # a guarded verb hidden behind a separator is still checked
     ("git log -1; pytest /tmp/x.py", "outside tests/"),
     ("git log -1 && pytest /tmp/x.py", "outside tests/"),
@@ -434,6 +446,7 @@ _PERMITTED = [
     # A wrapper with nothing the guard guards behind it.
     "env FOO=1 echo hi",
     "timeout 5 echo hi",
+    "noglob echo hi",
     "pytest",
     "pytest tests",
     "pytest tests/",
@@ -697,6 +710,8 @@ _CORPUS_FAMILIES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
             "/usr/bin/python3 -m pytest /tmp/evil.py",
             "env GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD~1 HEAD",
             "exec pytest -q",
+            "noglob pytest -p evil",
+            "/usr/bin/noglob pytest -p evil",
         ),
         (
             "python -m pytest -q",
@@ -805,6 +820,12 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "if False:",
         "pytest -W ignore::this.W",
     ),
+    (
+        "`noglob` as a wrapper",
+        '"noglob",',
+        "",
+        "noglob pytest -p evil",
+    ),
 )
 
 
@@ -813,7 +834,9 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
 # is the assignment rule ("an allow rule won't match past an assignment of any
 # other variable"); the known-safe exceptions are left out because they are not
 # published, which makes this model decline to match slightly more often than
-# the real one -- the safe direction for a claim that nothing reaches.
+# the real one -- the safe direction for a claim that nothing reaches. Like the
+# real one (2.1.267), it reads a wrapper by its basename, so
+# `/usr/bin/nohup git diff HEAD` is `git diff HEAD` to it.
 _MATCHER_SEPARATORS = re.compile(r"&&|\|\||\|&|;|\||&|\n")
 _MATCHER_WRAPPERS = frozenset(
     {
@@ -844,7 +867,7 @@ def _bash_allow_rules() -> list[str]:
 
 def _subcommand_matches(part: str, rules: list[str]) -> bool:
     words = part.split()
-    while words and words[0] in _MATCHER_WRAPPERS:
+    while words and words[0].rsplit("/", 1)[-1] in _MATCHER_WRAPPERS:
         words = words[1:]
     if not words or _MATCHER_ASSIGNMENT.match(words[0]):
         return False

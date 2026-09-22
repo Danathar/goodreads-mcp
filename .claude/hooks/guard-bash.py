@@ -59,11 +59,12 @@ Three ways that used to come apart, all of them a bypass:
   append form, which creates the variable when it is unset; the export family
   (`export NAME=value`, `declare -x`, `typeset -x`, `readonly`), which bash
   applies to every command it runs later in the same string; and a wrapper
-  (`env`, `command`, `timeout`, and `env -S` above all), whose own options this
-  guard does not model and which is therefore denied in front of a guarded
-  verb rather than guessed at. Two more went in with the whole-corpus pass
-  (#120): a bare `export NAME` that a later command assigns to, and `set -a`,
-  which exports every assignment after it without naming a builtin at all.
+  (`env`, `command`, `timeout`, `noglob`, and `env -S` above all), whose own
+  options this guard does not model and which is therefore denied in front of
+  a guarded verb rather than guessed at. Two more went in with the
+  whole-corpus pass (#120): a bare `export NAME` that a later command assigns
+  to, and `set -a`, which exports every assignment after it without naming a
+  builtin at all.
 * An operand naming a path outside the checkout is `--no-index` with no option
   written. Given two paths and at least one outside the working tree,
   `git diff` prints both files whole -- verified against git 2.55.0, where
@@ -157,6 +158,18 @@ _EXPORT_BUILTINS = frozenset({"export", "declare", "typeset", "readonly"})
 # `env -S` goes further and hides the whole invocation inside one word. Like
 # every other construct the guard cannot see through, a wrapper standing in
 # front of a guarded verb is denied rather than guessed at.
+#
+# The list covers every wrapper Claude Code's permission matcher steps over
+# before it compares a command with an allow row (timeout, time, nice, stdbuf,
+# nohup, command, builtin, noglob, and xargs through its `xargs <prefix>`
+# case), because each of those reaches `Bash(pytest *)` or `Bash(git diff *)`
+# with no prompt. The matcher compares the wrapper's basename, so
+# `/usr/bin/noglob pytest -p evil` is approved as readily as the bare
+# spelling -- which is why `name` below is read with its directory taken off.
+# `noglob` was missing: `noglob pytest -p evil` and
+# `noglob git diff --no-index /dev/null ./.env` passed this guard, and matched
+# the allow rows. In bash `noglob` is not a command, but bash has already
+# applied any redirection by then; under zsh it runs the command.
 _WRAPPERS = frozenset(
     {
         "env",
@@ -167,6 +180,7 @@ _WRAPPERS = frozenset(
         "nohup",
         "nice",
         "timeout",
+        "noglob",
         "stdbuf",
         "xargs",
     }
