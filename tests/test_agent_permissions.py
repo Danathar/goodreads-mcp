@@ -254,6 +254,10 @@ _DENIED = [
     # an assignment in front of the verb is part of the command: the shell
     # applies it to the process the allow list started, whatever the verb (#115)
     ("LD_PRELOAD=/tmp/evil.so pytest -q", "changes what it loads"),
+    # LD_PRELOAD reaches every guarded verb's loader, not pytest's alone (#121:
+    # a scanner reproduced the pytest-only row above against `git status` and
+    # found #115's fix already covered it -- this pins that it stays covered)
+    ("LD_PRELOAD=/tmp/evil.so git status", "changes what it loads"),
     ("PYTHONWARNINGS=ignore::evil.W pytest -q", "changes what it loads"),
     ("GIT_EXTERNAL_DIFF=/tmp/evil.sh git diff HEAD~1 HEAD", "changes what it loads"),
     (
