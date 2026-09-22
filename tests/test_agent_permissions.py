@@ -490,6 +490,8 @@ _PERMITTED = [
     # text and no order file is opened (git 2.55.0).
     "git diff -SFOO HEAD",
     "git log -pSO/x --oneline -1",
+    "git log -S FOO --oneline",
+    "git log -GOpen --oneline -5",
     # a word that is an option's value is not an operand: `/foo` here is a
     # ref pattern, and git log exits 0 on it (git 2.55.0)
     "git log --decorate-refs /foo --oneline -1",
@@ -698,12 +700,16 @@ _CORPUS_FAMILIES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
             "git diff .env /etc/hostname",
             "git diff -O/etc/passwd HEAD",
             "git diff --orderfile=/etc/passwd HEAD",
+            "git diff -uO/etc/passwd HEAD",
+            "git diff -- -/../../etc/hostname .env",
             "pytest -p some_module",
         ),
         (
             "git diff --stat HEAD~1 HEAD",
             "pytest -q -W error::DeprecationWarning",
             "git log -L1,2:goodreads_mcp/server.py",
+            "git diff -SFOO HEAD",
+            "git log --decorate-refs /foo --oneline -1",
             "pytest -q --lf",
         ),
     ),

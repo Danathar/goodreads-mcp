@@ -302,6 +302,7 @@ _GIT_DENIED = {"--no-index", "--output", "--output-file", "--orderfile"}
 # the file orders the diff and is never printed, so it discloses nothing by
 # itself -- but it is the same kind of reach, an option naming a path outside
 # the repository, and it belongs with them rather than in a second category.
+# Decided in #125 to keep it refused: refusing it costs nothing.
 _GIT_DENIED_SHORT = "O"
 
 # Short options whose value is the rest of their cluster. Git stops reading a
@@ -598,6 +599,12 @@ def _check_git(verb: str, args: list[str], cwd: Path) -> None:
         # Every word after `--` is an operand, whatever it begins with: with a
         # directory named `-` in the checkout, `git diff -- -/../../x .env`
         # prints x (git 2.55.0).
+        #
+        # Decided in #125: the rule is wide. Any operand outside the checkout
+        # is refused on all three verbs, not only the two-path form that makes
+        # `git diff` go `--no-index`. It is simpler to state and errs the safe
+        # way. What it costs is `git diff ../other-repo/file`, which is rare,
+        # and a person can run it.
         if _is_outside_repo(token, cwd):
             raise Denied(
                 f"`{verb} {token}` names a path outside the repository, which "
