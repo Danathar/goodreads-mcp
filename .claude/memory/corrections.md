@@ -113,3 +113,15 @@ names, once per changed path, exactly as the plain form does.
 match bash's grammar for one, not the one spelling that came to mind. The
 export form is the one worth remembering: the command it arms carries no
 assignment at all.
+
+## The permission table and the guard are not ordinary Tier 2 changes
+**Date:** 2026-09-23
+**Wrong:** `docs/risk-tiers.md` filed `.claude/settings.json` under Tier 2,
+which needs only a green suite, and did not name `.claude/hooks/guard-bash.py`
+at all, so its closest wording was Tier 3's "agent instruction files".
+**Right:** Both are listed in Tier 2 with their own requirement: a human reads
+and merges the change. SECURITY-AI.md and CONTRIBUTING.md say the same.
+**Why it matters:** The guard's tests are its own tables. A change that weakens
+the guard can remove the test rows that pinned it, and CI stays green. A green
+suite cannot be the bar for the file that decides what an agent can reach. See
+#129.

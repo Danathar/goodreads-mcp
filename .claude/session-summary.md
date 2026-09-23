@@ -24,33 +24,25 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-21 — #109, `.gitignore` does not protect the bundle
+## 2026-09-23 — #129, the agent boundary was classified as ordinary Tier 2 work
 
-**Done:** `mcpb pack` reads the working tree, not git, and `.mcpbignore` and
-`.gitignore` had drifted apart by exactly one entry: `.coverage`. It is a
-SQLite database of absolute paths from the machine that measured it — the
-disclosure `docs/SECURITY-AI.md` records as having happened here once already —
-and `.coverage-thresholds.json` tells every contributor to produce one. A
-bundle packed from such a tree shipped it; verified against a real
-`mcpb pack` before and after. `.mcpbignore` now drops `.coverage`,
-`.coverage.*` and (stating what mcpb's own defaults already do) `.env` /
-`.env.*`, and `tests/test_stdio_launch.py` pins the invariant rather than the
-list: every `.gitignore` pattern must appear in `.mcpbignore`.
+**Done:** `docs/risk-tiers.md` put `.claude/settings.json` in Tier 2, which asks
+only for a green suite, and did not name `.claude/hooks/guard-bash.py` at all.
+The only wording that fit the guard was Tier 3's "agent instruction files". The
+guard's tests are its own tables, so one pull request could relax a refusal and
+drop its row and still pass. Tier 2 now names both paths and requires a human
+to read and merge a change to them. SECURITY-AI.md has a "Never widen your own
+boundary" hard rule, CONTRIBUTING.md mirrors it, and
+`test_a_change_to_the_boundary_is_held_for_a_human` pins all three. Offline
+count row 777 → 778.
 
-**In flight:** the PR on `sec/109-mcpbignore-coverage`. #108
-(`tests/test_editorconfig.py`) was open when this session started.
+**In flight:** the PR on `sec/boundary-risk-tier`.
 
 **Blocked on:** nothing.
 
 **Watch:**
-- `test_the_test_count_row_matches_what_pytest_collects` is red on `main`
-  (the row reads 515, pytest collects 533) and #108 carries the fix. This
-  session deliberately added no new test *function* for that reason — the
-  new assertion extends the existing `.mcpbignore` test, so the collected
-  count is unchanged at 533 and the row is not touched twice.
-- The published `v0.1.1` asset is the pre-#89 vendored bundle: 1558 files,
-  four `.so` modules built for cpython-3.11 x86_64-linux, while the manifest
-  declares darwin/win32/linux. Today's `release.yml` would not produce it,
-  but that is the artifact the README currently points installers at.
-- `.claude/` and `.cursor/` are tracked, so they ship inside every bundle.
-  Harmless, but nothing an installed server needs.
+- `.github/labeler.yml`'s `agent-config` label still puts `.claude/**` together
+  with the instruction files. It is a label, not a tier, so it was left alone.
+- `.claude/skills/**` stays Tier 3. Neither skill has `allowed-tools` or
+  `hooks:` frontmatter today. A skill that adds either key grants tools or
+  runs code, and would belong with the boundary.

@@ -34,3 +34,7 @@ are out of scope.
 
 Keep changes focused. Update `pyproject.toml` and `manifest.json` versions
 together when publishing a release — CI checks they match.
+
+A change to `.claude/settings.json` or `.claude/hooks/**` is a change to the
+agent permission boundary. A human reads it and merges it, whoever wrote it
+(see [risk tiers](docs/risk-tiers.md), Tier 2).
