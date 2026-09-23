@@ -51,7 +51,9 @@ This is where this project actually breaks, so it gets the most weight.
 - [ ] `@mcp.tool(annotations=_READ_ONLY)` on new tools.
 - [ ] Results carry a source `url` so the model can cite them; null is explicit,
       never fabricated.
-- [ ] `returned` / `has_more` present on paginated results.
+- [ ] `returned` / `has_more` present on results paged through
+      `_paginated_graphql_edges` and on `popular_books`. `get_reviews` pages
+      by hand and returns `returned` with `total_text_reviews` instead.
 - [ ] Results shaped so tools chain — one tool's `book_id` feeds the next.
 
 ## 5. Tests
