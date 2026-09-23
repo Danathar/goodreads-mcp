@@ -671,6 +671,30 @@ def test_security_ai_still_points_at_the_claude_readme():
     assert _CLAUDE_README.is_file()
 
 
+def test_a_change_to_the_boundary_is_held_for_a_human():
+    """The permission table and the guard sit in the tier that asks for a human.
+
+    They were Tier 2 and unnamed. Tier 2 asked only for a green suite, and the
+    guard's tests are its own tables, so one pull request could weaken both and
+    stay green. The tier table, the security policy and CONTRIBUTING.md each
+    name both paths now (#129).
+    """
+    tiers = (_ROOT / "docs" / "risk-tiers.md").read_text(encoding="utf-8")
+    tier_2 = tiers.split("## Tier 2", 1)[1].split("## Tier 3", 1)[0]
+    for path in ("`.claude/settings.json`", "`.claude/hooks/**`"):
+        assert path in tier_2.split("**Required:**", 1)[0], (
+            f"docs/risk-tiers.md no longer lists {path} under Tier 2"
+        )
+    assert "a human reads the diff and\n  merges it" in tier_2
+    for doc in (_SECURITY_AI, _ROOT / "CONTRIBUTING.md"):
+        text = doc.read_text(encoding="utf-8")
+        for path in ("`.claude/settings.json`", "`.claude/hooks/**`"):
+            assert path in text, f"{doc.name} no longer names {path}"
+    assert "**Never widen your own boundary.**" in _SECURITY_AI.read_text(
+        encoding="utf-8"
+    )
+
+
 # --------------------------------------------------------- the corpus (#120)
 #
 # The tables above grew one spelling at a time, and each fix found the next

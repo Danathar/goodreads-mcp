@@ -32,7 +32,7 @@ permissions.
 
 Covers: new or changed `@mcp.tool` functions; `_MAX_*` / `_PAGE_SIZE` caps;
 `pyproject.toml` / `manifest.json`; `.github/workflows/**`;
-`.claude/settings.json`.
+`.claude/settings.json`; `.claude/hooks/**`.
 
 **Required:**
 - `pytest -q` passing, coverage gate satisfied
@@ -40,10 +40,26 @@ Covers: new or changed `@mcp.tool` functions; `_MAX_*` / `_PAGE_SIZE` caps;
 - Version bumps applied to `pyproject.toml` **and** `manifest.json` together
 - Workflow changes: state what was verified and what couldn't be (a cron
   schedule can't be proven before it fires)
+- `.claude/settings.json` or `.claude/hooks/**`: a human reads the diff and
+  merges it; a green suite is not enough on its own
+
+### Why the agent boundary needs a human
+
+`.claude/settings.json` is the permission table and `.claude/hooks/guard-bash.py`
+is the `PreToolUse` guard that keeps the allow-listed verbs from reaching past
+`Read(./.env)`. Together they are the boundary an agent works inside. A wrong
+change there does not break the build. It gives an agent unprompted reach, and
+CI stays green, because the guard's tests are its own tables in
+`tests/test_agent_permissions.py`: one pull request can relax a refusal and drop
+the row that pinned it. That is the silent failure Tier 1 exists for, so a
+passing suite does not count as review here. Every way past the guard found so
+far (#60, #71, #115, #120) was a one-line difference.
 
 ## Tier 3 — contained
 
-Docs, comments, agent instruction files, prompts, skills, labels.
+Docs, comments, agent instruction files, prompts, skills, labels. The
+`.claude/` files that run are not instruction files: the permission table and
+the hooks are Tier 2 (see above).
 
 **Required:**
 - Claims about the code checked against the code. Most findings on this repo's
