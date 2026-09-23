@@ -381,6 +381,12 @@ _DENIED = [
     ("x\\noglob pytest -q >out", "backslash"),
     ('"x\\nohup" git diff HEAD', "backslash"),
     ("echo hi; /bin\\nice git status >out", "backslash"),
+    # the command word as bash finds it: after redirections, assignments and
+    # a bare `noglob`, and as one word however it is quoted
+    ("2>/tmp/e TZ=UTC x\\nohup pytest -q", "backslash"),
+    ("noglob x\\nohup pytest -q >out", "backslash"),
+    ("'a b'\\nohup pytest -q >out", "backslash"),
+    ("echo 'a;b'&&x\\nohup pytest>o", "backslash"),
     # a guarded verb hidden behind a separator is still checked
     ("git log -1; pytest /tmp/x.py", "outside tests/"),
     ("git log -1 && pytest /tmp/x.py", "outside tests/"),
@@ -478,9 +484,14 @@ _PERMITTED = [
     "noglob pytest -q",
     "noglob git diff HEAD",
     "noglob TZ=UTC git log -1",
-    # A backslash that spells no wrapper, or a wrapper with nothing guarded.
+    # A backslash that spells no wrapper, one outside the command word (the
+    # matcher steps over wrappers only there), or a wrapper with nothing
+    # guarded behind it.
     "git log --grep='a\\|b' -1",
+    "git log --grep='x\\nohup' -1",
+    "git log --grep=x\\\\nohup -1",
     "x\\nohup echo hi >out",
+    "x\\nohup echo hi; git status",
     "pytest",
     "pytest tests",
     "pytest tests/",
