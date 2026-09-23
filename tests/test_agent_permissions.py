@@ -367,10 +367,20 @@ _DENIED = [
     # spelled as any path -- an agent-made file included -- is stepped over and
     # the allow row matches the words after it, while the file is what runs.
     ("./shim/nohup git diff HEAD", "runs another command"),
-    ("'./shim\\nohup' git diff HEAD", "runs another command"),
-    ("'./shim\\nohup' git diff --no-index /dev/null ./.env", "runs another command"),
-    ("'./shim\\noglob' pytest -p evil", "runs another command"),
     ("/tmp/timeout 5 pytest -q", "runs another command"),
+    # With a `\`, the matcher's cut and bash disagree, and the lexer here has
+    # already taken an unquoted one out: `/usr/bin\timeout` is the file
+    # `/usr/bintimeout` to bash (not found, exit 127, but `>out` is applied
+    # first) and `timeout` to the matcher, which then matches `pytest *`.
+    ("'./shim\\nohup' git diff HEAD", "backslash"),
+    ("'./shim\\nohup' git diff --no-index /dev/null ./.env", "backslash"),
+    ("'./shim\\noglob' pytest -p evil", "backslash"),
+    ("/usr/bin\\timeout 5 pytest -q >out", "backslash"),
+    ("/usr/bin\\nohup git diff HEAD >goodreads_mcp/server.py", "backslash"),
+    ("x\\nohup pytest -q >out", "backslash"),
+    ("x\\noglob pytest -q >out", "backslash"),
+    ('"x\\nohup" git diff HEAD', "backslash"),
+    ("echo hi; /bin\\nice git status >out", "backslash"),
     # a guarded verb hidden behind a separator is still checked
     ("git log -1; pytest /tmp/x.py", "outside tests/"),
     ("git log -1 && pytest /tmp/x.py", "outside tests/"),
@@ -468,6 +478,9 @@ _PERMITTED = [
     "noglob pytest -q",
     "noglob git diff HEAD",
     "noglob TZ=UTC git log -1",
+    # A backslash that spells no wrapper, or a wrapper with nothing guarded.
+    "git log --grep='a\\|b' -1",
+    "x\\nohup echo hi >out",
     "pytest",
     "pytest tests",
     "pytest tests/",
@@ -851,10 +864,10 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "/usr/bin/noglob pytest -p evil",
     ),
     (
-        "a wrapper's word cut at `\\` as well as `/`",
-        r'wrapper = re.split(r"[\\/]", words[0])[-1]',
-        'wrapper = words[0].rsplit("/", 1)[-1]',
-        "'./shim\\nohup' git diff HEAD",
+        "a wrapper spelled with a `\\`, read on the string as typed",
+        "raw_wrapper = _backslash_wrapper(command)",
+        "raw_wrapper = None",
+        "/usr/bin\\timeout 5 pytest -q >out",
     ),
 )
 

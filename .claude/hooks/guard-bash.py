@@ -169,8 +169,9 @@ _EXPORT_BUILTINS = frozenset({"export", "declare", "typeset", "readonly"})
 # case), because each of those reaches `Bash(pytest *)` or `Bash(git diff *)`
 # with no prompt. The matcher compares what follows the word's last `/` or
 # `\`, so `/usr/bin/noglob pytest -p evil` and `'./shim\nohup' git diff HEAD`
-# are approved as readily as the bare spelling -- which is why the wrapper
-# below is read with everything up to either separator taken off.
+# are approved as readily as the bare spelling. A `/` spelling is read below
+# with its directory taken off; a `\` spelling is refused on the string as
+# typed (`_backslash_wrapper`), because bash takes an unquoted `\` out.
 # `noglob` was missing: `noglob pytest -p evil` and
 # `noglob git diff --no-index /dev/null ./.env` passed this guard, and matched
 # the allow rows. A bare `noglob` is zsh's precommand modifier, which takes no
@@ -417,6 +418,27 @@ _OPAQUE = ("$", "`", "{", "}")
 # is anywhere in it.
 _SUBSTITUTION_RE = re.compile(r"\$\(|`")
 _GUARDED_WORD_RE = re.compile(r"\b(pytest|git)\b")
+
+# A word as typed, before the shell takes quotes and backslashes out of it.
+# Claude Code's matcher finds a wrapper in the text as typed, cutting the word
+# at its last `/` or `\`, and bash does not: an unquoted `\` escapes the next
+# character and goes away, so `/usr/bin\timeout 5 pytest -q >out` is the file
+# `/usr/bintimeout` to bash -- not found, exit 127, but `out` is truncated
+# first -- while the matcher steps over `timeout` and matches `pytest *`. The
+# lexer below has already dropped the backslash, so the word it hands on is
+# `/usr/bintimeout`, no wrapper and no guarded verb. Such a word is found in
+# the string itself instead.
+_RAW_WORD_RE = re.compile(r"[^\s;&|()<>]+")
+
+
+def _backslash_wrapper(command: str) -> str | None:
+    """Return a word as typed with a `\\` in it that the matcher reads as a wrapper."""
+    for match in _RAW_WORD_RE.finditer(command):
+        word = match.group()
+        if "\\" in word and re.split(r"[\\/]", word.strip("'\""))[-1] in _WRAPPERS:
+            return word
+    return None
+
 
 # Glob metacharacters. A path may carry them -- `pytest tests/test_*.py`,
 # `git diff -- '*.py'` -- and a glob cannot walk a path out of the directory
@@ -703,12 +725,9 @@ def _check_command(words: list[str], cwd: Path) -> None:
     name = words[0].rsplit("/", 1)[-1]
 
     # A wrapper the guard cannot see through, in front of something it guards.
-    # Claude Code's matcher finds a wrapper by cutting its word at the last `/`
-    # *or* `\` (`replace(/^.*[\\/]/, "")` in 2.1.267), so it steps over
-    # `'./shim\nohup' git diff ...` and matches `Bash(git diff *)` -- and what
-    # runs is the file at that path. The wrapper is looked for the same way.
-    wrapper = re.split(r"[\\/]", words[0])[-1]
-    if wrapper in _WRAPPERS and _GUARDED_WORD_RE.search(" ".join(words)):
+    # A wrapper spelled with a `\` never gets this far: `decide` refuses it on
+    # the string as typed, since an unquoted `\` is gone from `words` by now.
+    if name in _WRAPPERS and _GUARDED_WORD_RE.search(" ".join(words)):
         raise Denied(
             f"`{words[0]}` runs another command and this guard does not model "
             f"its options, so it cannot tell what `{words[0]}` would run or "
@@ -845,6 +864,18 @@ def decide(command: str, cwd: str | os.PathLike[str] | None = None) -> str | Non
             "a command substitution next to a guarded command: the guard "
             "cannot see what the shell would run, so it cannot check the "
             "command that would actually run"
+        )
+    raw_wrapper = _backslash_wrapper(command)
+    if raw_wrapper is not None and _GUARDED_WORD_RE.search(command):
+        return (
+            f"`{raw_wrapper}` is a wrapper spelled with a backslash. Claude "
+            "Code's permission matcher cuts a word at its last `/` or `\\` and "
+            "steps over the wrapper it finds, so the allow rule matched only "
+            "the words after it; bash reads the backslash differently "
+            "(`/usr/bin\\timeout` is the file `/usr/bintimeout`), so what runs "
+            "is a file the guard never saw, and a redirection on the line is "
+            "applied even when that file does not exist. Run the command "
+            "without the wrapper"
         )
     try:
         tokens = _tokenise(command)
