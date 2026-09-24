@@ -1022,7 +1022,7 @@ def test_an_unreachable_shape_matches_no_allow_rule(family, command, why):
 
 
 def test_no_allow_rule_reaches_a_redirection_written_after_a_group():
-    """A redirection after a subshell or brace group is Claude Code's to stop.
+    """A redirection after a grouped command is Claude Code's to stop.
 
     `(git diff HEAD) >README.md` and `{ git log --stdin; } <.env` write and
     read the same files as the denied `git diff HEAD >README.md` and
@@ -1033,10 +1033,16 @@ def test_no_allow_rule_reaches_a_redirection_written_after_a_group():
     say about the command inside ("Contains subshell", "Contains
     compound_statement"). Checked on 2.1.273 and 2.1.280 with
     `Bash(git diff *)`, `Bash(git log *)` and `Bash(pytest *)` allowed, in the
-    default and acceptEdits modes. The one way such a string ran with no
-    prompt was a row that names the grouped string itself
-    (`Bash({ git diff HEAD; } >out3.txt)` ran exactly that string), or a bare
-    `Bash` row that allows everything. This fails if a row like that is added.
+    default and acceptEdits modes; the `if`, `for`, `while` and function forms
+    were asked the same way ("Contains if_statement" and so on). The one way
+    such a string ran with no prompt was a row that names the grouped string
+    itself (`Bash({ git diff HEAD; } >out3.txt)` ran exactly that string), or a
+    bare `Bash` row that allows everything. This fails if a row like that is
+    added. A row naming a compound command has a parenthesis or a brace in it,
+    or, for the keyword forms (`if ...; then ...; fi >f`), what ends each part:
+    a `;`, a newline or a lone `&` (`if true & then ... & fi >f` is the same
+    `if`). Those are what it looks for; the `&` in `&&`, `2>&1`, `&>` and `|&`
+    ends nothing and is not counted (aurora-zfs-simple#241).
     """
     entries = json.loads(_SETTINGS.read_text(encoding="utf-8"))["permissions"]["allow"]
     rules = _bash_allow_rules()
@@ -1044,14 +1050,15 @@ def test_no_allow_rule_reaches_a_redirection_written_after_a_group():
     reaching = [entry for entry in entries if entry == "Bash"] + [
         f"Bash({rule})"
         for rule in rules
-        if any(character in rule for character in "(){}")
+        if any(character in rule for character in "(){};\n")
+        or re.search(r"(?<![&<>|])&(?![&>])", rule)
         or rule.removesuffix(":*").strip() in ("", "*")
     ]
     assert reaching == [], (
-        f"{reaching} can let a command that contains a subshell or a brace group "
-        "run with no prompt, and the guard does not charge a redirection written "
-        "after the group to the command inside it. Teach the guard that before "
-        "adding the row."
+        f"{reaching} can let a command that contains a subshell, a brace group or "
+        "an if/for/while compound run with no prompt, and the guard does not charge "
+        "a redirection written after the group to the command inside it. Teach the "
+        "guard that before adding the row."
     )
 
 
