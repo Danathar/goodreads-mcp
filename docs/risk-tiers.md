@@ -31,7 +31,7 @@ Changes to tool signatures, return shapes, pagination, caps, CI, packaging, or
 permissions.
 
 Covers: new or changed `@mcp.tool` functions; `_MAX_*` / `_PAGE_SIZE` caps;
-`pyproject.toml` / `manifest.json`; `.github/workflows/**`;
+`pyproject.toml` / `manifest.json`; `.github/workflows/**`; `.github/policies/**`;
 `.claude/settings.json`; `.claude/hooks/**`.
 
 **Required:**

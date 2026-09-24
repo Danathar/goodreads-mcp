@@ -1,0 +1,25 @@
+{
+  "$comment": "The GITHUB_TOKEN permissions each workflow in .github/workflows/ may request. tests/test_workflow_permissions_policy.py reads every workflow and fails when one asks for a permission not written here, when a workflow is missing from this file, or when an entry here names a workflow or job that no longer exists. Widening what a token can do therefore takes two edits a reviewer sees side by side: the workflow and this file. `workflow` is the top-level permissions block (null means the file declares none, so the repository default applies). `jobs` lists only the jobs that declare their own block; a job not listed here must not declare one. See docs/SECURITY-AI.md.",
+  "workflows": {
+    "ai-fix.yml": {
+      "workflow": {"contents": "write", "issues": "write", "pull-requests": "write"},
+      "jobs": {}
+    },
+    "ci.yml": {
+      "workflow": {"contents": "read"},
+      "jobs": {}
+    },
+    "labeler.yml": {
+      "workflow": {"contents": "read", "pull-requests": "write"},
+      "jobs": {}
+    },
+    "nightly-compliance.yml": {
+      "workflow": {"contents": "read", "issues": "write"},
+      "jobs": {}
+    },
+    "release.yml": {
+      "workflow": {"contents": "write"},
+      "jobs": {}
+    }
+  }
+}
