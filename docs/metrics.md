@@ -3,6 +3,10 @@
 What this project measures about its own change flow, why, and how to
 recompute it. Numbers below are a snapshot — the commands are the durable part.
 
+Every command names `Danathar/goodreads-mcp`. This repository is a fork, and in
+a clone that has the parent as an `upstream` remote, a bare `gh` reads the
+parent: the first command below printed 0 instead of 10 that way.
+
 **Snapshot date:** 2026-09-16 (PRs #31–#40, the ACMM scaffolding series)
 
 Later readings of the same numbers over the whole history, each dated and left
@@ -19,9 +23,9 @@ as it was read, are in [`docs/metrics/`](metrics/2026-09-24.md).
 
 ```bash
 # scoped to the snapshot range so these stay reproducible as new PRs land
-gh pr list --state merged --limit 100 --json number \
+gh pr list --repo Danathar/goodreads-mcp --state merged --limit 100 --json number \
   --jq '[.[] | select(.number >= 31 and .number <= 40)] | length'
-gh pr list --state closed --limit 100 --json number,mergedAt \
+gh pr list --repo Danathar/goodreads-mcp --state closed --limit 100 --json number,mergedAt \
   --jq '[.[] | select(.number >= 31 and .number <= 40 and .mergedAt == null)] | length'
 ```
 
@@ -51,7 +55,7 @@ Automated review (Codex) runs on every PR. Across #31–#40:
 
 ```bash
 # inline findings for one PR
-gh api repos/{owner}/{repo}/pulls/<N>/comments \
+gh api repos/Danathar/goodreads-mcp/pulls/<N>/comments \
   --jq '[.[] | select(.user.login | contains("codex"))] | length'
 ```
 
@@ -74,7 +78,7 @@ the right resolution was merge ordering, not a code change.
 | coverage actual | 100% at `9cfcf92`, 2026-09-20 |
 
 ```bash
-gh run list --workflow ci.yml --limit 30 --json conclusion \
+gh run list --repo Danathar/goodreads-mcp --workflow ci.yml --limit 30 --json conclusion \
   --jq 'group_by(.conclusion)[] | "\(.[0].conclusion): \(length)"'
 pytest -q --cov=goodreads_mcp --cov-report=term-missing
 ```
