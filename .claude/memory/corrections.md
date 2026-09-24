@@ -125,3 +125,15 @@ and merges the change. SECURITY-AI.md and CONTRIBUTING.md say the same.
 the guard can remove the test rows that pinned it, and CI stays green. A green
 suite cannot be the bar for the file that decides what an agent can reach. See
 #129.
+
+## "A human merges everything" was a sentence, not a setting
+**Date:** 2026-09-24
+**Wrong:** The README said nothing reaches `main` without a person having read
+it, and every gate here (hold label, rubric, risk tiers, coverage) assumed it.
+`main` had no branch protection and no ruleset, so any token with
+`contents: write` could push to it and start `release.yml`.
+**Right:** `.github/rulesets/main.json` holds the ruleset, and
+`docs/branch-protection.md` says how an admin applies it and how anyone checks
+it is live (`branches/main .protected` prints `true`).
+**Why it matters:** A promise about review is only as strong as whatever
+refuses the push. Check the setting, not the prose. See #148.

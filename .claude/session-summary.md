@@ -24,25 +24,21 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-23 — #129, the agent boundary was classified as ordinary Tier 2 work
+## 2026-09-24 — #148, `main` had no protection behind "a human merges everything"
 
-**Done:** `docs/risk-tiers.md` put `.claude/settings.json` in Tier 2, which asks
-only for a green suite, and did not name `.claude/hooks/guard-bash.py` at all.
-The only wording that fit the guard was Tier 3's "agent instruction files". The
-guard's tests are its own tables, so one pull request could relax a refusal and
-drop its row and still pass. Tier 2 now names both paths and requires a human
-to read and merge a change to them. SECURITY-AI.md has a "Never widen your own
-boundary" hard rule, CONTRIBUTING.md mirrors it, and
-`test_a_change_to_the_boundary_is_held_for_a_human` pins all three. Offline
-count row 777 → 778.
+**Done:** `main` had no branch protection and no ruleset, so the hive App or
+`ai-fix.yml`'s token could push straight to it and start `release.yml`. Added
+`.github/rulesets/main.json` (default branch, no bypass, no delete or
+force-push, pull request with 0 approvals, required check `test`),
+`docs/branch-protection.md`, a Tier 2 entry for `.github/rulesets/**`, a
+"Never push to `main`" hard rule in SECURITY-AI.md, and
+`tests/test_branch_ruleset.py`. Offline count row 881 → 884.
 
-**In flight:** the PR on `sec/boundary-risk-tier`.
+**In flight:** the PR on `sec/protect-main`.
 
-**Blocked on:** nothing.
+**Blocked on:** an admin applying the ruleset after merge (command in
+`docs/branch-protection.md`). #148 closes only when
+`gh api repos/Danathar/goodreads-mcp/branches/main --jq .protected` prints `true`.
 
-**Watch:**
-- `.github/labeler.yml`'s `agent-config` label still puts `.claude/**` together
-  with the instruction files. It is a label, not a tier, so it was left alone.
-- `.claude/skills/**` stays Tier 3. Neither skill has `allowed-tools` or
-  `hooks:` frontmatter today. A skill that adds either key grants tools or
-  runs code, and would belong with the boundary.
+**Watch:** renaming the `test` job in `ci.yml` or adding a path filter to its
+`pull_request` trigger fails `tests/test_branch_ruleset.py`, on purpose.
