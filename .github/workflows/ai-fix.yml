@@ -4,6 +4,13 @@ name: AI fix requested
 # either by applying the `ai-fix-requested` label to an issue/PR, or by
 # commenting `/ai-fix` on one.
 #
+# An event sent by a bot is skipped on purpose, before any step runs. The
+# dashboard app (`danathar-atomic-hive[bot]`) applies `ai-fix-requested` to
+# every ACMM issue it opens. The collaborator API answers `none` for that
+# app, so the maintainer check below refused each of those runs and left a
+# red run nobody could act on. Skipping gives a grey run instead. The
+# maintainer check is still the real control for everyone else.
+#
 # Why not automatic: review findings need verifying before they're applied.
 # In this repo's own history, 1 of 13 automated findings was factually wrong
 # and 6 more were correct but not actionable (they flagged cross-PR ordering,
@@ -32,14 +39,17 @@ permissions:
 
 jobs:
   requested:
-    # Only maintainers, and only on an explicit request.
+    # Only maintainers, and only on an explicit request. A bot sender is
+    # skipped here rather than refused by the check below; see the header.
     if: >-
-      (
-        github.event_name == 'issues' &&
-        github.event.label.name == 'ai-fix-requested'
-      ) || (
-        github.event_name == 'issue_comment' &&
-        startsWith(github.event.comment.body, '/ai-fix')
+      github.event.sender.type != 'Bot' && (
+        (
+          github.event_name == 'issues' &&
+          github.event.label.name == 'ai-fix-requested'
+        ) || (
+          github.event_name == 'issue_comment' &&
+          startsWith(github.event.comment.body, '/ai-fix')
+        )
       )
     runs-on: ubuntu-latest
     timeout-minutes: 10
