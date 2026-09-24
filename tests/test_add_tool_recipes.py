@@ -353,8 +353,12 @@ def test_every_result_shaper_carries_the_citation_url(shaper):
 
 
 def test_server_instructions_tell_the_model_to_cite_from_url():
+    """Both recipe claims about it: citations come from `url`, and a null url is
+    said out loud, never invented. Each is one sentence, so match the sentence;
+    'url' alone appears in half a dozen bullets."""
     instructions = _squash(server.SERVER_INSTRUCTIONS)
-    assert re.search(r"\bcit", instructions, re.I) and "'url'" in instructions
+    assert re.search(r"Citations by default: every result includes source 'url' fields\.", instructions)
+    assert re.search(r"If a result's url field is null, say so rather than inventing a link\.", instructions)
 
 
 def test_no_graphql_key_or_endpoint_is_hardcoded():
@@ -371,7 +375,13 @@ def test_no_graphql_key_or_endpoint_is_hardcoded():
 
 
 def test_the_fan_out_example_enforces_its_cap():
-    assert "_MAX_COMPARE" in _names_in(_TOOLS["compare_books"])
+    """In a comparison, not just an error message that quotes it."""
+    compares = [
+        node for node in ast.walk(_TOOLS["compare_books"])
+        if isinstance(node, ast.Compare)
+        and any(isinstance(c, ast.Name) and c.id == "_MAX_COMPARE" for c in node.comparators)
+    ]
+    assert compares, "compare_books no longer compares anything against _MAX_COMPARE"
 
 
 def test_the_slug_example_resolves_to_its_numeric_id():
