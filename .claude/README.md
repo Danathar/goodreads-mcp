@@ -85,12 +85,18 @@ the whole command string and **denies** the spellings above —
   to the process the allow list started. bash's `VAR+=value` append form counts
   — it creates the variable when it is unset — and so does the export family
   (`export VAR=value`, `declare -x`, `typeset -x`, `readonly`), which reaches
-  every command bash runs later in the same string;
+  every command bash runs later in the same string, and so do a bare
+  `export VAR` that a later command assigns to and `set -a`, which exports
+  every assignment after it without naming a builtin at all;
 - a wrapper the guard does not model — `env`, `command`, `exec`, `timeout` and
   the rest — standing in front of a guarded verb. `env VAR=value git diff` puts
   the assignment where the guard reads the verb, and `env -S '...'` hides the
   whole invocation inside one word;
-- `--no-index`, `--output` and `--output-file` on `git diff` and `git log`;
+- `--no-index`, `--output`, `--output-file`, `--orderfile` and its short form
+  `-O` on `git diff` and `git log`;
+- a `git diff` operand naming a path outside the checkout: given two paths and
+  one of them outside the working tree, git diffs them as `--no-index` would,
+  with no option on the line for the list above to match;
 - a shell redirection on any of the three verbs (`2>&1` is fine — it names a
   file descriptor, not a file);
 - `$`, backticks, a brace expansion, a glob standing where an option goes, or
@@ -100,7 +106,7 @@ the whole command string and **denies** the spellings above —
 
 ### The guard only holds if it reads what the shell runs
 
-Two ways that came apart, both of them a bypass, both closed:
+Six ways that came apart, each of them a bypass, all six closed:
 
 - **`#` is not a comment mid-word.** `shlex` ends a token at `#` wherever it
   appears; a shell starts a comment only at the start of a word. So
@@ -125,6 +131,23 @@ Two ways that came apart, both of them a bypass, both closed:
   against a safe list rather than a list of the dangerous ones — the deny list
   that stood there held seven names and missed `GIT_EXTERNAL_DIFF`,
   `PYTHONWARNINGS` and `LD_PRELOAD` ([#115][115]).
+
+- **`noglob` was a wrapper the guard did not know.** Claude Code's permission
+  matcher steps over zsh's `noglob` before it compares a command with an allow
+  row, so `noglob pytest -p evil` matched `Bash(pytest *)` and the guard,
+  reading `noglob` as the verb, had no opinion. A bare `noglob` takes no
+  options, so the command after it is now checked in its place; a path
+  spelling such as `/usr/bin/noglob` is some other program and is refused.
+- **An operand outside the checkout is `--no-index` with no option written.**
+  `git diff .env /etc/hostname` prints both files whole — the `.env` that
+  `Read(./.env)` exists to withhold. The string begins `git diff `, so
+  `Bash(git diff *)` approves it, and there is no option for the denied list to
+  match. The guard now refuses an operand that resolves outside the working
+  tree, and counts a leading `~` as outside, because bash expands it first.
+- **A redirection can stand in front of the command name.** bash reads
+  `>out git diff HEAD` and `git diff HEAD >out` as the same command. The guard
+  read the operator as the command's name, fell through its dispatch, and
+  charged the write to nothing.
 
 [115]: https://github.com/Danathar/goodreads-mcp/issues/115
 
