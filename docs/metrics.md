@@ -5,6 +5,9 @@ recompute it. Numbers below are a snapshot — the commands are the durable part
 
 **Snapshot date:** 2026-09-16 (PRs #31–#40, the ACMM scaffolding series)
 
+Later readings of the same numbers over the whole history, each dated and left
+as it was read, are in [`docs/metrics/`](metrics/2026-09-24.md).
+
 ## PR acceptance
 
 | metric | value |
