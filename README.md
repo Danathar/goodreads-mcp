@@ -2,7 +2,7 @@
 [![Nightly compliance](https://github.com/Danathar/goodreads-mcp/actions/workflows/nightly-compliance.yml/badge.svg?branch=main)](https://github.com/Danathar/goodreads-mcp/actions/workflows/nightly-compliance.yml)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Danathar/goodreads-mcp)
 [![Maintenance assisted by Hivecommons Hive](https://img.shields.io/badge/maintenance%20assisted%20by-Hivecommons%20Hive-1f6feb)](https://github.com/hivecommons/hive)
-[![ACMM L4 Security-Aware](https://img.shields.io/badge/ACMM-L4%20Security--Aware-2da44e)](https://github.com/hivecommons/hive#acmm-levels)
+[![ACMM L5 Semi-Autonomous](https://img.shields.io/badge/ACMM-L5%20Semi--Autonomous-2da44e)](#how-this-repository-is-maintained)
 [![AI assisted](https://img.shields.io/badge/AI-assisted-d29922)](#about-this-project)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
@@ -118,9 +118,9 @@ GOODREADS_LIVE=1 .venv/bin/pytest      # + live network smoke tests
 
 ## how this repository is maintained
 
-Maintenance here is assisted by [**Hive**](https://github.com/hivecommons/hive) — the agent-orchestration software from the [Hivecommons](https://github.com/hivecommons) project — which runs a fleet of AI agents against this repository at **ACMM level 4 (Security-Aware)**.
+Maintenance here is assisted by [**Hive**](https://github.com/hivecommons/hive) — the agent-orchestration software from the [Hivecommons](https://github.com/hivecommons) project — which runs a fleet of AI agents against this repository at **ACMM level 5 (L5, Semi-Autonomous)**.
 
-L4 is deliberately short of autonomy: all agents may file issues; the quality, security and CI agents may additionally open pull requests carrying a hold label; every other agent stays advisory. **A human reviews and merges everything** — nothing reaches `main` without a person having read it. Once the committed ruleset is applied, GitHub enforces part of that: every change reaches `main` through a pull request that passed `test`. That a person, not a token, presses merge is still a rule rather than a setting; [docs/branch-protection.md](docs/branch-protection.md) says what is enforced and how to check. [docs/SECURITY-AI.md](docs/SECURITY-AI.md) sets out what agents may and may not touch, and the prompt-injection surface that comes with parsing an unofficial third party's payloads.
+L5 lets agents propose changes but not land them. The scanner, quality, CI, security, docs, architect and strategist agents may all file issues and open pull requests, and every agent pull request gets a hold label automatically. Three agents are new at this level: a reviewer that works through the open pull requests and backs each finding with a file:line reference, but never merges, approves or closes anything; an architect that writes RFCs and opens structural pull requests; and a strategist that coordinates the other agents. The telemetry and operations agents ship paused. **A human reviews and merges everything** — held pull requests are reviewed in batches, nothing auto-merges, and nothing reaches `main` without a person having read it. Once the committed ruleset is applied, GitHub enforces part of that: every change reaches `main` through a pull request that passed `test`. That a person, not a token, presses merge is still a rule rather than a setting; [docs/branch-protection.md](docs/branch-protection.md) says what is enforced and how to check. [docs/SECURITY-AI.md](docs/SECURITY-AI.md) sets out what agents may and may not touch, and the prompt-injection surface that comes with parsing an unofficial third party's payloads.
 
 That matters more than usual here. This server rides on endpoints Goodreads never documented and does not owe anyone stability — a `__NEXT_DATA__` shape change, a rotated GraphQL key, or the WAF extending to one more path breaks it silently. The offline suite runs on fixtures and by construction cannot see any of that, so the [nightly compliance run](.github/workflows/nightly-compliance.yml) exercises the live suite against the real endpoints and surfaces upstream drift within a day instead of at the next release.
 
@@ -133,7 +133,7 @@ Each pass is meant to leave the next one starting from a better position:
 
 [docs/quality.md](docs/quality.md) is honest about what the numbers do *not* prove — chiefly that no fixture-backed test can detect the failure mode that actually threatens this project.
 
-Learn more: [Hive](https://github.com/hivecommons/hive) · [the full ACMM policy matrix](https://github.com/hivecommons/hive/blob/v4/src/docs/acmm-policy-matrix.md)
+Learn more: [Hive](https://github.com/hivecommons/hive) · [the ACMM levels, L1 to L6](https://github.com/hivecommons/hive#acmm-levels) · [the full ACMM policy matrix](https://github.com/hivecommons/hive/blob/v4/src/docs/acmm-policy-matrix.md)
 
 ## about this project
 
