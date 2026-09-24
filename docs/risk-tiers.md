@@ -32,7 +32,7 @@ permissions.
 
 Covers: new or changed `@mcp.tool` functions; `_MAX_*` / `_PAGE_SIZE` caps;
 `pyproject.toml` / `manifest.json`; `.github/workflows/**`; `.github/policies/**`;
-`.claude/settings.json`; `.claude/hooks/**`.
+`.github/rulesets/**`; `.claude/settings.json`; `.claude/hooks/**`.
 
 **Required:**
 - `pytest -q` passing, coverage gate satisfied
@@ -42,6 +42,9 @@ Covers: new or changed `@mcp.tool` functions; `_MAX_*` / `_PAGE_SIZE` caps;
   schedule can't be proven before it fires)
 - `.claude/settings.json` or `.claude/hooks/**`: a human reads the diff and
   merges it; a green suite is not enough on its own
+- `.github/rulesets/**`: the file is what keeps `main` behind a pull request
+  once an admin applies it. Loosening it reopens the direct push; see
+  [branch protection](branch-protection.md)
 
 ### Why the agent boundary needs a human
 
