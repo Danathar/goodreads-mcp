@@ -139,6 +139,11 @@ construct the guard resolves differently from the shell is the same bug; see
   PR code — the labeler qualifies; anything that runs code does not.
 - Gate any workflow that can write to the repo on the actor's collaborator
   permission, as `ai-fix.yml` does.
+- What each workflow's token may do is written down twice: in the workflow, and
+  in [`.github/policies/workflow-permissions.json`](../.github/policies/workflow-permissions.json).
+  `tests/test_workflow_permissions_policy.py` fails when the two disagree, so a
+  workflow cannot gain a scope unless the same pull request also changes the
+  policy file.
 
 ## Reporting
 
