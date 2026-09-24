@@ -193,6 +193,14 @@ def test_the_readme_counts_the_ways_it_lists(readme: str):
     assert "both closed" not in section
 
 
+def test_the_guard_counts_the_ways_it_lists(guard):
+    """It said "Three ways that used to come apart" over six bullets (#140)."""
+    section = _squash(_between(guard.__doc__, "The guard only holds", "decided as *not reachable*"))
+    words = re.findall(r"\b(\w+) ways that used to come apart\b", section, flags=re.I)
+    assert words, "the guard docstring no longer says how many ways came apart"
+    assert [_NUMBER_WORDS[w.lower()] for w in words] == [len(_DIVERGENCES)]
+
+
 # ----------------------------------------------- what the guard denies
 
 

@@ -35,7 +35,7 @@ command, because it is the construct that moves words between them: see
 `_SUBSTITUTION_RE`.
 
 The guard only holds while the string it reads is the string the shell runs.
-Three ways that used to come apart, all of them a bypass:
+Six ways that used to come apart, all of them a bypass:
 
 * `#` starts a comment in `shlex` wherever it appears, but in a shell only at
   the start of a word. `pytest --ignore=z#z /tmp/evil.py` reached the guard as
