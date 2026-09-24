@@ -31,7 +31,10 @@ Four things were asserted by nothing and are asserted here:
   condition uses, which carries its own case table so the payload assertions
   below are not vacuous. A comment that merely mentions `/ai-fix` must not
   fire, and every event in `on:` must be named in the condition, so a trigger
-  cannot be widened without widening the gate too.
+  cannot be widened without widening the gate too. An event a bot sends must
+  not fire either: the dashboard app labels every ACMM issue it opens with
+  `ai-fix-requested`, and before #143 each of those runs failed the
+  collaborator check and left a red run behind.
 - **The collaborator check.** Run for each value GitHub's
   `collaborators/*/permission` API returns, plus the shapes that are not a
   value at all: a failed call, and an empty answer. Only `admin` and `write`
@@ -307,12 +310,14 @@ def _event(name: str, **payload) -> dict:
     return {"github": {"event_name": name, "event": payload}}
 
 
-def _labeled(label: str) -> dict:
-    return _event("issues", label={"name": label}, issue={"number": 7})
+def _labeled(label: str, sender: str = "User") -> dict:
+    return _event("issues", label={"name": label}, issue={"number": 7}, sender={"type": sender})
 
 
-def _commented(body: str) -> dict:
-    return _event("issue_comment", comment={"body": body}, issue={"number": 7})
+def _commented(body: str, sender: str = "User") -> dict:
+    return _event(
+        "issue_comment", comment={"body": body}, issue={"number": 7}, sender={"type": sender}
+    )
 
 
 @pytest.mark.parametrize(
@@ -327,6 +332,11 @@ def _commented(body: str) -> dict:
         (_commented("ai-fix"), False, "no leading slash"),
         (_commented("/ai-fixture"), True, "startsWith is a prefix test, by design"),
         (_commented(""), False, "an empty comment"),
+        # A bot sender is skipped, on either path, before the collaborator
+        # check can refuse it and turn the run red (#143).
+        (_labeled("ai-fix-requested", sender="Bot"), False,
+         "the dashboard app applying the label is not a request"),
+        (_commented("/ai-fix", sender="Bot"), False, "nor a bot writing the command"),
         # The event guards: neither branch may fire on the other's payload.
         (_event("issues", comment={"body": "/ai-fix"}, issue={"number": 7}), False,
          "a comment body on an issues event is not a request"),
