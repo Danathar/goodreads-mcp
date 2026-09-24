@@ -23,7 +23,10 @@ Requirements:
 - Never hardcode the GraphQL key or endpoint.
 
 Tests: add offline tests with fixtures to `tests/`, and a live test to
-`tests/e2e/test_smoke_live.py`. CI enforces 55% coverage.
+`tests/e2e/test_smoke_live.py`. CI enforces 55% coverage. New tests change the
+collected count, so update the offline-tests row in `docs/quality.md` to match.
 
-Finally, add the tool to the table in `README.md` and the docstring list at the
-top of `server.py`.
+Finally, update every copy of the tool registry: add the tool to the table in
+`README.md` and the docstring list at the top of `server.py`, bump the
+`@mcp.tool` count in `AGENTS.md`, and bump the `_paginated_graphql_edges`
+call-site count in `docs/reflections/2026-09-verification.md`.
