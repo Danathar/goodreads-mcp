@@ -46,8 +46,12 @@ def my_tool(book_id: str, limit: int = 10) -> dict[str, Any]:
 
 Offline fixture tests in `tests/`, a live test in
 `tests/e2e/test_smoke_live.py`. CI runs `pytest -q --cov-fail-under=55`.
+New tests change the collected count, so update the offline-tests row in
+`docs/quality.md` to match.
 
 ## Document
 
-Add the tool to the table in `README.md` and the docstring list at the top of
-`server.py`.
+Update every copy of the tool registry: add the tool to the table in
+`README.md` and the docstring list at the top of `server.py`, bump the
+`@mcp.tool` count in `AGENTS.md`, and bump the `_paginated_graphql_edges`
+call-site count in `docs/reflections/2026-09-verification.md`.

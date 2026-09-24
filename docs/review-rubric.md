@@ -67,7 +67,9 @@ This is where this project actually breaks, so it gets the most weight.
 
 - [ ] `pyproject.toml` and `manifest.json` versions in sync — release CI fails
       if they drift.
-- [ ] New tool added to the `README.md` table and the `server.py` docstring list.
+- [ ] New tool added to the `README.md` table and the `server.py` docstring list,
+      and the `@mcp.tool` count in `AGENTS.md` and the `_paginated_graphql_edges`
+      call-site count in `docs/reflections/2026-09-verification.md` bumped.
 - [ ] No generated files committed (`.coverage`, `uv.lock`, `.venv/`, `*.mcpb`).
 - [ ] A new runtime dependency goes in `pyproject.toml` only. The bundle ships
       none: `manifest.json` launches with `uv run`, which resolves that file on
