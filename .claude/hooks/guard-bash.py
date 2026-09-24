@@ -82,7 +82,7 @@ Six ways that used to come apart, all of them a bypass:
   operator used to be read as the command's name, so the guard fell through
   its dispatch and charged the write to nothing.
 
-Three shapes of the corpus are decided as *not reachable* rather than refused,
+Four shapes of the corpus are decided as *not reachable* rather than refused,
 so a later pass does not work them out again. Each rests on the allow list,
 not on a guess about what is dangerous:
 
@@ -98,6 +98,13 @@ not on a guess about what is dangerous:
   `Bash(pytest *)` wants a string beginning `pytest ` -- so it prompts on its
   own account; it is read here because a guard that recognised one spelling of
   an interpreter and not another would be deciding by accident.
+* A redirection written after a subshell or a brace group,
+  `(git diff HEAD) >README.md` or `{ git log --stdin; } <.env` (#144). bash
+  applies it to the verb inside, but the guard charges it to no verb, because
+  `(`, `)` and the `;` before `}` end the simple command it belongs to. Claude
+  Code asks before it runs any command that contains a subshell or a brace
+  group, whatever the allow rows say (checked on 2.1.273 and 2.1.280). No row
+  here names one, and `tests/test_agent_permissions.py` fails if one is added.
 
 Nothing here reasons across Bash tool calls. A call does not inherit the
 previous call's environment (verified on Claude Code 2.1.267: `export X=1` in

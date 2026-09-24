@@ -1021,6 +1021,40 @@ def test_an_unreachable_shape_matches_no_allow_rule(family, command, why):
     )
 
 
+def test_no_allow_rule_reaches_a_redirection_written_after_a_group():
+    """A redirection after a subshell or brace group is Claude Code's to stop.
+
+    `(git diff HEAD) >README.md` and `{ git log --stdin; } <.env` write and
+    read the same files as the denied `git diff HEAD >README.md` and
+    `git log --stdin <.env`, but the redirection stands outside the verb, and
+    the guard does not charge it to the verb (#144). It does not need to while
+    nothing here reaches those strings: Claude Code asks before it runs any
+    command that contains a subshell or a brace group, whatever the allow rows
+    say about the command inside ("Contains subshell", "Contains
+    compound_statement"). Checked on 2.1.273 and 2.1.280 with
+    `Bash(git diff *)`, `Bash(git log *)` and `Bash(pytest *)` allowed, in the
+    default and acceptEdits modes. The one way such a string ran with no
+    prompt was a row that names the grouped string itself
+    (`Bash({ git diff HEAD; } >out3.txt)` ran exactly that string), or a bare
+    `Bash` row that allows everything. This fails if a row like that is added.
+    """
+    entries = json.loads(_SETTINGS.read_text(encoding="utf-8"))["permissions"]["allow"]
+    rules = _bash_allow_rules()
+    assert rules
+    reaching = [entry for entry in entries if entry == "Bash"] + [
+        f"Bash({rule})"
+        for rule in rules
+        if any(character in rule for character in "(){}")
+        or rule.removesuffix(":*").strip() in ("", "*")
+    ]
+    assert reaching == [], (
+        f"{reaching} can let a command that contains a subshell or a brace group "
+        "run with no prompt, and the guard does not charge a redirection written "
+        "after the group to the command inside it. Teach the guard that before "
+        "adding the row."
+    )
+
+
 @pytest.mark.parametrize("mutation", _MUTATIONS, ids=[m[0] for m in _MUTATIONS])
 def test_disabling_a_rule_stops_a_corpus_row_being_denied(mutation, tmp_path):
     """Each new rule must be the one thing that decides its witness.
