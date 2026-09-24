@@ -52,18 +52,27 @@ does:
 - **`pull_request` with 0 approvals.** GitHub does not let anyone approve their
   own pull request. On a single-maintainer repository, requiring one approval
   means nothing can ever merge, including the change that relaxes the rule.
-  What 0 still enforces is that every change arrives as a pull request and a
-  person presses merge.
+  What 0 still enforces is that every change arrives as a pull request, and
+  the required check below makes it one that passed `test`. It does not make
+  the merger a person: a token that can write contents, like the Hive App's,
+  could merge a green pull request through the API. Until there is a second
+  reviewer, who presses merge is a rule, not a setting.
 - **One required check, `test`.** It is the job in `ci.yml`, which runs on
   every pull request to `main` with no path filter, so no pull request waits
   for a check that never starts. `release` runs on push only and `labeler`
   classifies a change rather than checking it. `integration_id` 15368 is
   GitHub Actions. `tests/test_branch_ruleset.py` fails if the job is renamed
-  or gains a filter.
+  or gains a filter. One case still waits: GitHub starts no `pull_request`
+  run while a pull request conflicts with `main`, and if `main` then moves so
+  the conflict goes away, nothing starts one (#105 merged that way, with no
+  CI run at all). Merge `main` into the branch, or close and reopen the pull
+  request, and `test` runs.
 
 Nothing in this repository pushes to `main` outside a pull request today. Every
-first-parent commit on `main` since 2026-08-01 is a pull request merge. So
-applying this should change nothing about how work lands.
+first-parent commit on `main` since 2026-08-01 is a pull request merge, and the
+last direct pushes were syncs from `shreeyachand/goodreads-mcp` on 2026-09-12
+and 2026-09-14. So applying this should change nothing about how work lands,
+except that bringing in upstream changes now takes a pull request too.
 
 ## Applying it
 
