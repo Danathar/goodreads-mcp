@@ -120,17 +120,47 @@ def _parse_step(block: list[str], item_indent: int) -> Step:
 
 
 class Workflow:
-    """The `steps:` of a single-job workflow file, keyed by step name."""
+    """The `steps:` of one workflow job, keyed by step name.
 
-    def __init__(self, path: Path):
+    Without `job`, the file must have exactly one `steps:` list. Pass `job` to
+    read one job's steps out of a multi-job file; the name must be a key
+    directly under the top-level `jobs:`.
+    """
+
+    def __init__(self, path: Path, job: str | None = None):
         self.path = path
+        self.job = job
         self.text = path.read_text(encoding="utf-8")
         self.steps = self._read_steps()
 
-    def _read_steps(self) -> list[Step]:
+    def _job_lines(self) -> list[str]:
         lines = self.text.splitlines()
+        if self.job is None:
+            return lines
+        (jobs_at,) = [i for i, line in enumerate(lines) if line.rstrip() == "jobs:"]
+        job_indent: int | None = None
+        start: int | None = None
+        for i in range(jobs_at + 1, len(lines)):
+            line = lines[i]
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            indent = len(line) - len(line.lstrip())
+            if indent == 0:
+                break
+            if job_indent is None:
+                job_indent = indent
+            if start is not None and indent <= job_indent:
+                return lines[start:i]
+            if indent == job_indent and line.strip() == f"{self.job}:":
+                start = i
+        assert start is not None, f"{self.path.name} has no job named {self.job!r}"
+        return lines[start:]
+
+    def _read_steps(self) -> list[Step]:
+        lines = self._job_lines()
+        where = self.path.name if self.job is None else f"{self.path.name} job {self.job!r}"
         starts = [i for i, line in enumerate(lines) if line.strip() == "steps:"]
-        assert len(starts) == 1, f"{self.path.name} no longer has exactly one steps: list"
+        assert len(starts) == 1, f"{where} no longer has exactly one steps: list"
         start = starts[0]
         list_indent = len(lines[start]) - len(lines[start].lstrip())
 

@@ -94,7 +94,7 @@ _GATE_IF = "steps.check_tag.outputs.exists == 'false' && steps.check_tag.outputs
 
 _OUTPUT_REF = _workflow_steps.OUTPUT_REF
 
-_WORKFLOW = _workflow_steps.Workflow(_RELEASE)
+_WORKFLOW = _workflow_steps.Workflow(_RELEASE, job="release")
 _STEPS = _WORKFLOW.steps
 _step = _WORKFLOW.step
 _write_stub = _workflow_steps.write_stub
