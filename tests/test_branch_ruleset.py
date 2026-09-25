@@ -2,8 +2,9 @@
 
 `main` had no branch protection and no ruleset, so any token with
 `contents: write` could push to it directly, past the hold label, the review
-and the coverage gate, and a push to `main` starts `release.yml`. The ruleset
-is committed here for an admin to apply; `docs/branch-protection.md` says how.
+and the coverage gate, and `release.yml` publishes what `main` carries. The
+ruleset is committed here for an admin to apply; `docs/branch-protection.md`
+says how.
 
 A pull request cannot check what GitHub enforces, only what the file says.
 These tests keep the file saying the right thing:

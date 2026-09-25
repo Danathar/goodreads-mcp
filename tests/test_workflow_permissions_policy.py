@@ -240,3 +240,14 @@ def test_a_widened_workflow_is_caught() -> None:
         "permissions:\n  contents: read\n", "permissions:\n  contents: read\n  pull-requests: write\n", 1
     )
     assert _declared(widened)["workflow"] != _POLICY[name]["workflow"]
+
+
+def test_the_release_workflow_grants_nothing_workflow_wide() -> None:
+    # release.yml holds the only tokens that tag, publish and mint an OIDC
+    # id-token (#165). `permissions: {}` at the top means a job added later
+    # starts with nothing, and each of the three jobs asks for its own.
+    declared = _declared((_WORKFLOWS / "release.yml").read_text(encoding="utf-8"))
+    assert declared["workflow"] == "{}"
+    assert set(declared["jobs"]) == {"prepare", "release", "publish-pypi"}
+    holders = {job for job, block in declared["jobs"].items() if isinstance(block, dict) and "id-token" in block}
+    assert holders == {"publish-pypi"}, "only the PyPI job may mint an id-token"

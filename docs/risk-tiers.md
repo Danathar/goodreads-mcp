@@ -37,7 +37,10 @@ Covers: new or changed `@mcp.tool` functions; `_MAX_*` / `_PAGE_SIZE` caps;
 **Required:**
 - `pytest -q` passing, coverage gate satisfied
 - Return-shape changes noted in `README.md` and the `server.py` docstring list
-- Version bumps applied to `pyproject.toml` **and** `manifest.json` together
+- Version bumps applied to `pyproject.toml` **and** `manifest.json` together,
+  in the release pull request the `prepare` run opens. The version is CalVer
+  (`YYYY.M.PATCH`); merging that pull request is what approves the number,
+  and the release workflow tags it and never sets it
 - Workflow changes: state what was verified and what couldn't be (a cron
   schedule can't be proven before it fires)
 - `.claude/settings.json` or `.claude/hooks/**`: a human reads the diff and

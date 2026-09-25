@@ -35,9 +35,11 @@ Two tokens here can write `main`:
 - `ai-fix.yml`, which holds `contents: write`. Its agent step is not wired up
   yet. Once it is, a model that reads issue bodies holds that token.
 
-A push to `main` starts `release.yml`. If it bumps the version in
-`pyproject.toml` and `manifest.json`, that job publishes a `.mcpb` built from
-the pushed tree as a GitHub release, and no person has read the change.
+`release.yml` publishes whatever `main` carries. It no longer runs on a push
+(#165), but its monthly run, or anyone's run by hand, tags the version in
+`pyproject.toml` and publishes a `.mcpb` built from that tree. A direct push
+that bumps the version is released at the next run, and no person has read
+the change.
 
 ## The ruleset
 
@@ -59,7 +61,7 @@ does:
   reviewer, who presses merge is a rule, not a setting.
 - **One required check, `test`.** It is the job in `ci.yml`, which runs on
   every pull request to `main` with no path filter, so no pull request waits
-  for a check that never starts. `release` runs on push only and `labeler`
+  for a check that never starts. `release` runs on a schedule or by hand and `labeler`
   classifies a change rather than checking it. `integration_id` 15368 is
   GitHub Actions. `tests/test_branch_ruleset.py` fails if the job is renamed
   or gains a filter. One case still waits: GitHub starts no `pull_request`

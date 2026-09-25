@@ -55,6 +55,7 @@ _README = _ROOT / "README.md"
 _AGENTS = _ROOT / "AGENTS.md"
 _LABELER = _ROOT / ".github" / "labeler.yml"
 _SETTINGS = _ROOT / ".claude" / "settings.json"
+_RELEASE = _ROOT / ".github" / "workflows" / "release.yml"
 
 _NUMBER_WORDS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
@@ -458,6 +459,8 @@ _LITERALS = {
     "11870085-the-fault-in-our-stars": _ROOT / "tests" / "e2e" / "test_smoke_live.py",
     "@mcp.tool": _SERVER_PY,
     "@mcp.tool(annotations=_READ_ONLY)": _SERVER_PY,
+    "prepare": _RELEASE,  # the workflow_dispatch input and the job (#165)
+    "YYYY.M.PATCH": _RELEASE,
 }
 # Commands; each is checked where it runs, not here.
 _COMMANDS = {
@@ -519,3 +522,28 @@ def test_every_cap_glob_matches_a_constant_and_every_cap_is_covered():
     assert caps, "server.py has no integer caps"
     uncovered = {c for c in caps if not any(fnmatch.fnmatch(c, p) for p in patterns)}
     assert not uncovered, f"caps Tier 2 does not cover: {sorted(uncovered)}"
+
+
+# ================================================ the release flow (#165)
+
+
+def test_the_release_claims_are_what_release_yml_does():
+    """Rubric §6 and Tier 2 describe the CalVer flow; each clause is a step here."""
+    rubric = _squashed(_RUBRIC)
+    tiers = _squashed(_TIERS)
+    assert "The version changes only in a release pull request, opened by the `prepare` run" in rubric
+    assert (
+        "Release CI refuses a version that is not CalVer, is already tagged, or is not newer than the last release."
+        in rubric
+    )
+    assert "in the release pull request the `prepare` run opens" in tiers
+    assert "the release workflow tags it and never sets it" in tiers
+
+    text = _RELEASE.read_text(encoding="utf-8")
+    assert "  prepare:\n" in text and "gh pr create" in text
+    assert 'branch="release/$VERSION"' in text
+    for refusal in ("is not CalVer", "already exists", "is not newer than the latest release"):
+        assert refusal in text, f"release.yml no longer refuses: {refusal!r}"
+    # The release job reads the number; only prepare writes it.
+    release_job = text.split("\n  release:\n", 1)[1].split("\n  publish-pypi:\n", 1)[0]
+    assert "jq --arg v" not in release_job and "path.write_text" not in release_job
