@@ -1,80 +1,490 @@
 name: Release MCPB
 
-on:
-  push:
-    branches: [main]
-  workflow_dispatch:
+# CalVer, YYYY.M.PATCH: 2026.10.0, 2026.10.1, 2026.11.0 (#165).
+#
+# The 0.1.x line is retired. A year-based number always sorts above it, so
+# nobody who installed 0.1.1 is ever offered a downgrade. Tags carry no "v"
+# prefix; v0.1.1 is the last tag that does.
+#
+# The version lives in pyproject.toml and manifest.json, and it changes the
+# way every other file here changes: in a pull request, reviewed, and merged
+# under the ruleset on main (docs/branch-protection.md). This workflow never
+# writes main. It tags a commit that is already there and publishes it, so the
+# number it releases is one that passed CI and review, not one a workflow run
+# invented.
+#
+# Two jobs, and a run is only ever one of them:
+#
+#   * `prepare` opens the version-bump pull request and stops. Nothing is
+#     tagged or published, and the only branch it pushes is a release/* one.
+#   * `release` tags the version pyproject.toml carries on the checked-out
+#     commit and publishes it: monthly on a schedule, or by hand. Guarded;
+#     see "Decide whether to release" below, because most months here change
+#     only docs, tests and agent config, and a release people are prompted to
+#     install should contain something they can observe.
+#
+# `publish-pypi` follows `release` and uploads the distributions that job
+# built and tested, only when it really published.
+#
+# The version is never derived from commit messages.
 
-permissions:
-  contents: write
+on:
+  schedule:
+    # 09:00 UTC on the 1st. GitHub disables scheduled workflows after 60 days
+    # with no repository activity.
+    - cron: "0 9 1 * *"
+  workflow_dispatch:
+    inputs:
+      prepare:
+        description: "Open the version-bump pull request instead of releasing"
+        type: boolean
+        default: false
+      version:
+        description: "CalVer YYYY.M.PATCH (e.g. 2026.10.0). Leave blank to derive it."
+        required: false
+      prerelease:
+        description: "Publish as a pre-release (version must end b1, rc2, ...)"
+        type: boolean
+        default: false
+      force:
+        description: "Release even if nothing under goodreads_mcp/ changed"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Validate only - do not tag or publish"
+        type: boolean
+        default: false
+
+# Nothing is granted workflow-wide; each job asks for what it needs, so a job
+# added later cannot quietly inherit the ability to write to this repository.
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  # The one definition of a release number, shared by both jobs so the check
+  # guarding the pull request and the check guarding the tag cannot drift
+  # apart. Four-digit year, unpadded 1-12 month, unpadded patch, and an
+  # optional b1/rc1 pre-release suffix. Valid PEP 440 as written, so PyPI
+  # takes it unchanged.
+  #
+  # Every step applies it with bash's `[[ $value =~ $CALVER_PATTERN ]]`, which
+  # anchors to the whole string. `grep -E` anchors to each line, so a value
+  # carrying a newline passes when any one line matches.
+  CALVER_PATTERN: '^[0-9]{4}\.(1[0-2]|[1-9])\.(0|[1-9][0-9]*)((b|rc)[1-9][0-9]*)?$'
 
 jobs:
-  release:
+  # ------------------------------------------------------------------------
+  # Propose the next version. This is the only place the version changes, and
+  # it changes through a pull request like anything else.
+  # ------------------------------------------------------------------------
+  prepare:
+    if: github.event_name == 'workflow_dispatch' && inputs.prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
+    # Pushes a release/* branch and opens a pull request, never main. The
+    # ruleset that governs main governs this pull request too, which is the
+    # point: release automation must not become a second route around it.
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # Derived from the date, not from commit messages: this month's line if
+      # it has no stable release yet, otherwise the next patch in it.
+      - name: Decide the next version
+        id: version
+        env:
+          # Through the environment, never interpolated into the script below.
+          # `${{ }}` is substituted before bash parses the file, so an input
+          # containing shell syntax would otherwise become part of the program
+          # rather than data for it, and this job can write to the repository.
+          GIVEN_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          given="$GIVEN_VERSION"
+
+          if [ -n "$given" ]; then
+            # Checked before it is used for anything: as a branch name, as a
+            # commit message, or written to $GITHUB_OUTPUT, where an unchecked
+            # value carrying a newline forges outputs for later steps.
+            if ! [[ "$given" =~ $CALVER_PATTERN ]]; then
+              echo "::error::'$given' is not CalVer YYYY.M.PATCH (e.g. 2026.10.0)," >&2
+              echo "optionally with a b1/rc1 suffix for a pre-release." >&2
+              echo "Month must not be zero-padded; no 'v' prefix." >&2
+              exit 1
+            fi
+            version="$given"
+            echo "Using the version given: $version"
+          else
+            month="$(date -u +%Y).$(date -u +%-m)"
+            # `|| true` is load-bearing: with no tags yet, git prints nothing,
+            # grep -v exits 1 on empty input, and pipefail turns that into a
+            # failed step. The no-tags case is exactly the first release.
+            latest="$(git tag --list "${month}.*" | grep -vE '(b|rc)[0-9]+$' | sort -V | tail -1 || true)"
+
+            if [ -z "$latest" ]; then
+              version="${month}.0"
+            else
+              version="${month}.$(( ${latest##*.} + 1 ))"
+            fi
+
+            echo "Derived $version (latest this month: ${latest:-none})."
+          fi
+
+          if git rev-parse --quiet --verify "refs/tags/$version" >/dev/null; then
+            echo "::error::Tag $version already exists." >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Bump pyproject.toml and manifest.json
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # jq, not sed: it cannot corrupt the JSON, and it fails loudly.
+          jq --arg v "$VERSION" '.version = $v' manifest.json > manifest.json.tmp
+          mv manifest.json.tmp manifest.json
+
+          # pyproject.toml is edited as text, so its comments and layout
+          # survive, then read back with tomllib: the edit must change the
+          # project version and nothing else, or the step fails.
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+          import tomllib
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          path = Path("pyproject.toml")
+          before_text = path.read_text(encoding="utf-8")
+          before = tomllib.loads(before_text)
+
+          project = re.search(r"^\[project\]\s*$", before_text, re.M)
+          if not project:
+              sys.exit("::error::pyproject.toml has no [project] table")
+          head, tail = before_text[: project.end()], before_text[project.end() :]
+          tail, count = re.subn(r'^version = "[^"\n]*"$', f'version = "{version}"', tail, count=1, flags=re.M)
+          if count != 1:
+              sys.exit('::error::no `version = "..."` line under [project] in pyproject.toml')
+          after_text = head + tail
+
+          after = tomllib.loads(after_text)
+          if after.get("project", {}).get("version") != version:
+              sys.exit(f"::error::pyproject.toml's project version reads back as {after.get('project', {}).get('version')}, not {version}")
+          before["project"]["version"] = version
+          if after != before:
+              sys.exit("::error::the edit changed more of pyproject.toml than the version")
+          path.write_text(after_text, encoding="utf-8")
+          PY
+
+          MANIFEST_VERSION="$(jq -r .version manifest.json)"
+          if [ "$MANIFEST_VERSION" != "$VERSION" ]; then
+            echo "::error::manifest.json reads back as $MANIFEST_VERSION, not $VERSION." >&2
+            exit 1
+          fi
+          git --no-pager diff -- pyproject.toml manifest.json
+
+      - name: Open the pull request
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet; then
+            echo "::error::pyproject.toml and manifest.json are already at $VERSION." >&2
+            echo "If that version has not been released, run this workflow" >&2
+            echo "without 'prepare' to tag and publish it." >&2
+            exit 1
+          fi
+
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          branch="release/$VERSION"
+          git checkout -b "$branch"
+          git add pyproject.toml manifest.json
+          git commit -m "chore(release): $VERSION"
+          git push origin "HEAD:refs/heads/$branch"
+
+          gh pr create \
+            --base "$GITHUB_REF_NAME" \
+            --head "$branch" \
+            --title "chore(release): $VERSION" \
+            --body "Sets the version in \`pyproject.toml\` and \`manifest.json\` to \`$VERSION\`.
+
+          Merging this is what approves the number. The Release MCPB workflow
+          then tags the commit that lands and publishes it; it does not change
+          the version itself."
+
+          echo "Opened the version-bump pull request for **$VERSION**." >> "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------------------
+  # Tag an approved commit and publish it. Reads the version; never sets it.
+  # ------------------------------------------------------------------------
+  release:
+    if: github.event_name != 'workflow_dispatch' || !inputs.prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Pushes a tag and creates a release; no step in this job writes a branch.
+    # `checks: read` is for the green-checks gate.
+    permissions:
+      contents: write
+      checks: read
+    outputs:
+      # True only when the GitHub release was really published: not on a dry
+      # run, not on a skipped month, not when a gate refused.
+      released: ${{ steps.publish.outcome == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The scheduled path is opt-in. Merging this workflow must not, by
+      # itself, start publishing releases; someone has to decide that and set
+      # the variable. A manual run is always allowed: a person is already in
+      # the loop.
+      - name: Check the schedule is enabled
+        id: enabled
+        env:
+          OPTED_IN: ${{ vars.AUTO_RELEASE_ENABLED == 'true' }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "schedule" ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$OPTED_IN" = "true" ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "Monthly releases are off. Set the repository variable" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`AUTO_RELEASE_ENABLED\` to \`true\` to enable them." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # A month whose only commits are docs, tests and agent config has
+      # nothing for a user to install, and a release anyway trains people to
+      # ignore the update. Only the runtime package counts: every bump pull
+      # request touches pyproject.toml and manifest.json, so counting those
+      # would make this gate always pass. A dependency-only change in
+      # pyproject.toml is the one case it misses; use `force` for that.
+      - name: Decide whether to release
+        id: decide
+        if: steps.enabled.outputs.go == 'true'
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          # `|| true` is load-bearing: with no CalVer tags yet, git prints
+          # nothing, grep -v exits 1 on empty input, and pipefail turns that
+          # into a failed step. That case is exactly the first release. The
+          # v0.1.x tags never match the pattern, so they are not counted.
+          last="$(git tag --list '[0-9][0-9][0-9][0-9].*' | grep -vE '(b|rc)[0-9]+$' | sort -V | tail -1 || true)"
+
+          if [ -z "$last" ]; then
+            echo "No previous CalVer release; this is the first."
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed="$(git diff --name-only "$last"..HEAD -- goodreads_mcp | wc -l)"
+          echo "Files under goodreads_mcp/ changed since $last: $changed."
+
+          if [ "$changed" -gt 0 ] || [ "$FORCE" = "true" ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### No release"
+              echo
+              echo "Nothing under \`goodreads_mcp/\` changed since **$last**."
+              echo "Re-run by hand with \`force\` if you want one anyway."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # An automatic release publishes whatever is on main without a person
+      # looking first. The least it can do is refuse when main's own checks
+      # are not green.
+      - name: Require green checks on this commit
+        if: steps.decide.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bad="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
+            --jq '[.check_runs[]
+                   | select(.name != "release")
+                   | select((.conclusion // "pending") | IN("success","skipped","neutral") | not)
+                   | "\(.name): \(.conclusion // .status)"] | .[]')"
+
+          if [ -n "$bad" ]; then
+            echo "::error::Not releasing - checks on ${GITHUB_SHA::12} are not green:" >&2
+            printf '%s\n' "$bad" >&2
+            exit 1
+          fi
+          echo "All checks on ${GITHUB_SHA::12} are green."
+
       - name: Set up Python 3.11
+        if: steps.decide.outputs.go == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Set up Node 20
+        if: steps.decide.outputs.go == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - name: Set up uv
+        if: steps.decide.outputs.go == 'true'
         uses: astral-sh/setup-uv@v6
 
       - name: Upgrade pip
+        if: steps.decide.outputs.go == 'true'
         run: python -m pip install --upgrade pip
 
-      - name: Read version from pyproject.toml
+      # The number comes off the merged pyproject.toml, not from this run.
+      # That file changed in a reviewed pull request, which is what makes the
+      # version an approved one; a workflow input can only confirm it.
+      - name: Read the version from pyproject.toml
         id: version
+        if: steps.decide.outputs.go == 'true'
+        env:
+          # Through the environment, never interpolated into the script below:
+          # this job holds contents: write.
+          GIVEN_VERSION: ${{ inputs.version }}
         run: |
-          VER=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])" 2>/dev/null || python -c "import tomli; print(tomli.load(open('pyproject.toml','rb'))['project']['version'])")
-          echo "version=$VER" >> "$GITHUB_OUTPUT"
-          echo "tag=v$VER" >> "$GITHUB_OUTPUT"
-          echo "Version: $VER"
+          set -euo pipefail
+          given="$GIVEN_VERSION"
+          version="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          echo "pyproject.toml on this commit says $version."
 
-      - name: Read version from manifest.json
+          if [ -n "$given" ] && ! [[ "$given" =~ $CALVER_PATTERN ]]; then
+            echo "::error::'$given' is not CalVer YYYY.M.PATCH (e.g. 2026.10.0)," >&2
+            echo "optionally with a b1/rc1 suffix for a pre-release." >&2
+            echo "Month must not be zero-padded; no 'v' prefix." >&2
+            exit 1
+          fi
+
+          # $GITHUB_OUTPUT is a file of key=value lines, so a value carrying a
+          # newline forges outputs for every later step that reads them.
+          # Nothing unchecked is written to it.
+          if ! [[ "$version" =~ $CALVER_PATTERN ]]; then
+            echo "::error::the pyproject.toml version '$version' is not CalVer YYYY.M.PATCH." >&2
+            echo "Run this workflow with 'prepare' to open the version-bump pull request." >&2
+            exit 1
+          fi
+
+          # An explicit input confirms the number; it does not choose it.
+          if [ -n "$given" ] && [ "$given" != "$version" ]; then
+            echo "::error::asked for $given, but pyproject.toml says $version." >&2
+            echo "This workflow tags what main already carries; it does not" >&2
+            echo "change the version. Run it with 'prepare' to open the" >&2
+            echo "version-bump pull request for $given, and merge that first." >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Version: $version"
+
+      - name: Check manifest.json matches pyproject.toml
+        if: steps.decide.outputs.go == 'true'
         run: |
           MVER=$(python -c "import json; print(json.load(open('manifest.json'))['version'])")
-          PVER=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])" 2>/dev/null || python -c "import tomli; print(tomli.load(open('pyproject.toml','rb'))['project']['version'])")
+          PVER=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           if [ "$MVER" != "$PVER" ]; then
             echo "::error::manifest.json version ($MVER) != pyproject.toml version ($PVER). Keep them in sync."
             exit 1
           fi
 
-      - name: Check if tag already exists (skip if version not bumped)
-        id: check_tag
+      # Everything that can be wrong is checked before anything is written.
+      # Deleting a tag does not un-download a bundle or un-publish a PyPI
+      # version.
+      - name: Validate the version
+        if: steps.decide.outputs.go == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
         run: |
-          TAG="${{ steps.version.outputs.tag }}"
-          if git show-ref --tags --verify --quiet "refs/tags/$TAG"; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Tag $TAG already exists — skipping release (bump version to release again)."
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+
+          if ! [[ "$VERSION" =~ $CALVER_PATTERN ]]; then
+            echo "::error::'$VERSION' is not CalVer YYYY.M.PATCH (e.g. 2026.10.0)," >&2
+            echo "optionally with a b1/rc1 suffix for a pre-release." >&2
+            echo "Month must not be zero-padded; no 'v' prefix." >&2
+            exit 1
           fi
-          # Also check remote
-          if git ls-remote --tags origin | grep -q "refs/tags/$TAG$"; then
-            echo "remote_exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "remote_exists=false" >> "$GITHUB_OUTPUT"
+
+          # The `inputs` context is empty on a scheduled run, so an absent
+          # checkbox is an unticked one. Without this the monthly release
+          # compares "false" against "" and refuses every stable version.
+          prerelease="$PRERELEASE"
+          [ -n "$prerelease" ] || prerelease=false
+
+          # The suffix and the checkbox have to agree. Either alone publishes
+          # the wrong kind of release: a stable release named 2026.10.0b1, or
+          # a beta offered to everyone as the latest.
+          case "$VERSION" in
+            *b[0-9]*|*rc[0-9]*) has_suffix=true ;;
+            *) has_suffix=false ;;
+          esac
+          if [ "$has_suffix" != "$prerelease" ]; then
+            echo "::error::version '$VERSION' and prerelease=$prerelease disagree." >&2
+            echo "A pre-release version must end b1/rc1, and a stable one must not." >&2
+            exit 1
+          fi
+
+          # The tag being free is also what proves the version moved: if this
+          # number is already published, main still carries the version of the
+          # last release and there is nothing new to tag. The remote is asked
+          # too, in case another run tagged it after this checkout.
+          # Assigned on its own line so a remote that cannot be reached fails
+          # the step instead of reading as "no such tag".
+          remote="$(git ls-remote --tags origin "refs/tags/$VERSION")"
+          if git rev-parse --quiet --verify "refs/tags/$VERSION" >/dev/null || [ -n "$remote" ]; then
+            echo "::error::Tag $VERSION already exists, so pyproject.toml and" >&2
+            echo "manifest.json have not been bumped since that release. Run this" >&2
+            echo "workflow with 'prepare' to open the version-bump pull request," >&2
+            echo "merge it, then release the commit that lands." >&2
+            exit 1
+          fi
+
+          # A release older than the one people already have is worse than no
+          # release. Stable tags only: a beta must never become the number a
+          # later stable is measured against. A pre-release is measured by the
+          # version it leads up to, so 2026.10.0b1 is refused once 2026.10.0
+          # is out, although `sort -V` alone would put the beta after it.
+          newest="$(git tag --list '[0-9][0-9][0-9][0-9].*' | grep -vE '(b|rc)[0-9]+$' | sort -V | tail -1 || true)"
+          base="$(printf '%s' "$VERSION" | sed -E 's/(b|rc)[0-9]+$//')"
+          echo "newest stable tag: ${newest:-none} | releasing: $VERSION"
+
+          if [ -n "$newest" ]; then
+            older="$(printf '%s\n%s\n' "$newest" "$base" | sort -V | head -1)"
+            if [ "$older" = "$base" ]; then
+              echo "::error::$VERSION is not newer than the latest release $newest." >&2
+              exit 1
+            fi
           fi
 
       - name: Install test deps and run tests
-        if: steps.check_tag.outputs.exists == 'false' && steps.check_tag.outputs.remote_exists == 'false'
+        if: steps.decide.outputs.go == 'true'
         run: |
           pip install -e ".[test]"
           pytest -q
 
       - name: Pack MCPB
-        if: steps.check_tag.outputs.exists == 'false' && steps.check_tag.outputs.remote_exists == 'false'
+        if: steps.decide.outputs.go == 'true'
         run: |
           # The bundle ships no dependencies. manifest.json launches the server
           # with `uv run`, which resolves pyproject.toml on the user's machine,
@@ -86,7 +496,7 @@ jobs:
           ls -lh *.mcpb 2>/dev/null || ls -lh ./*.mcpb 2>/dev/null || find . -maxdepth 2 -name "*.mcpb" -ls
 
       - name: Check the bundle carries no compiled code
-        if: steps.check_tag.outputs.exists == 'false' && steps.check_tag.outputs.remote_exists == 'false'
+        if: steps.decide.outputs.go == 'true'
         run: |
           # A compiled module was built for one platform and one Python; a
           # bundle that carries one cannot also be for the platforms the
@@ -115,7 +525,7 @@ jobs:
           PY
 
       - name: Start the packed bundle the way the manifest launches it
-        if: steps.check_tag.outputs.exists == 'false' && steps.check_tag.outputs.remote_exists == 'false'
+        if: steps.decide.outputs.go == 'true'
         run: |
           # Resolve the bundle's dependencies once, here, the way a user's
           # machine will: unpack the .mcpb and run its manifest's own command
@@ -142,17 +552,86 @@ jobs:
           sys.exit(subprocess.run(argv, stdin=subprocess.DEVNULL).returncode)
           PY
 
+      - name: Build the PyPI distributions
+        if: steps.decide.outputs.go == 'true'
+        run: |
+          # Built after the bundle is packed so dist/ never ends up inside it,
+          # and uploaded so the publish job ships exactly what this job tested.
+          # Built on a dry run too: a build that fails is a release that fails.
+          uv build --out-dir dist
+
+      - name: Upload the PyPI distributions
+        if: steps.decide.outputs.go == 'true' && !inputs.dry_run
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypi-dist
+          path: dist/
+          if-no-files-found: error
+
+      - name: Tag the approved commit
+        if: steps.decide.outputs.go == 'true' && !inputs.dry_run
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # The tag is the only ref this job writes. The commit under it is
+          # already on main, having gone through a pull request and the
+          # ruleset, so a protected main needs no bypass for releases.
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push origin "refs/tags/$VERSION"
+
       - name: Create GitHub Release and upload .mcpb
-        if: steps.check_tag.outputs.exists == 'false' && steps.check_tag.outputs.remote_exists == 'false'
+        id: publish
+        if: steps.decide.outputs.go == 'true' && !inputs.dry_run
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: ${{ steps.version.outputs.tag }}
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
           generate_release_notes: true
+          prerelease: ${{ inputs.prerelease == true }}
           files: "*.mcpb"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Summarise
+        if: steps.decide.outputs.go == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "Dry run: **$VERSION** is valid and its bundle starts. Nothing was tagged or published." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Released **$VERSION**." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Clean up the bundle (avoid committing)
         if: always()
         run: rm -rf *.mcpb
+
+  publish-pypi:
+    # Trusted Publishing (OIDC): no stored token. Only this job can mint an
+    # id-token; the release job, which runs tests and npx, cannot. It runs
+    # only after the release job really published, so a dry run, a skipped
+    # month or a refused version never reaches PyPI.
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/goodreads-mcp-ai
+    permissions:
+      id-token: write
+    steps:
+      - name: Download the PyPI distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: pypi-dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
