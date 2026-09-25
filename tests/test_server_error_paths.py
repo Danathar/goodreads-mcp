@@ -258,6 +258,7 @@ def test_get_reviews_stops_when_a_page_token_repeats(monkeypatch):
 
     assert len(calls) == 2, "the repeated cursor must end the loop"
     assert result["returned"] == 0
+    assert result["has_more"] is True, "Goodreads still offered a cursor"
 
 
 def test_get_reviews_has_more_is_false_once_reviews_run_out(monkeypatch):
