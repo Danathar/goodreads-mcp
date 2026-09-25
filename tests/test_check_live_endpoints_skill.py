@@ -401,7 +401,7 @@ def test_a_bare_pytest_run_collects_the_offline_suite():
 def test_the_symptom_table_has_a_row_per_way_a_surface_can_break():
     rows = _table(_sections()["Read the failure by surface"])
     assert rows[0] == ["symptom", "surface", "what happened"]
-    assert len(rows) == 8, "header plus seven symptoms"
+    assert len(rows) == 10, "header plus nine symptoms"
     assert all(len(row) == 3 for row in rows)
 
 
@@ -526,8 +526,8 @@ def test_the_graphql_row_names_the_exception_a_dataless_body_raises(mock_goodrea
 def test_the_graphql_row_statuses_are_the_ones_that_force_re_discovery(
     mock_goodreads,
 ):
-    """`or 401/403` is the rotation path: each one re-resolves once and retries."""
-    statuses = [int(s) for s in re.findall(r"\b(\d{3})\b", _symptom("GraphQLError"))]
+    """The 401/403 row is the rotation path: each one re-resolves once and retries."""
+    statuses = [int(s) for s in re.findall(r"\b(\d{3})\b", _symptom("401/403"))]
     assert statuses, "the row no longer names a status"
 
     for status in statuses:

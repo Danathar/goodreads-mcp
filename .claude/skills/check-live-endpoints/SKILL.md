@@ -32,7 +32,9 @@ moved, rule out:
 |---|---|---|
 | `WAFChallenge` raised | HTML pages | AWS WAF now gates that path (HTTP 202) |
 | `LoginRequired` raised | HTML pages | the path redirected to `/user/sign_in` (the review-list page did in Sep 2026, #91), or the profile is private |
-| `GraphQLError`, or 401/403 | AppSync GraphQL | key or endpoint rotated |
+| `GraphQLError` raised | AppSync GraphQL | the query was rejected with no `data`: a schema field or argument was renamed |
+| `httpx.HTTPStatusError` 401/403 | AppSync GraphQL | key or endpoint rotated, and the one forced re-discovery did not fix it |
+| `ValueError` from `graphql_config` | AppSync GraphQL | the discovery page or its `_app` bundle changed shape |
 | `ValueError: No __NEXT_DATA__ blob` | page JSON | page is no longer Next.js, or is WAF-gated |
 | fields present but `None` | page JSON / GraphQL | Apollo state keys or schema fields renamed |
 | RSS returns no items | shelf RSS | shelf went private, or feed shape changed |
