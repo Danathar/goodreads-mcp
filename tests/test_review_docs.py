@@ -21,14 +21,12 @@ not), which is exactly the fact Tier 1 turns on.
 
 The rubric had drifted in the way a checklist does: by stating a rule more
 broadly than the code keeps it. §4 said "`returned` / `has_more` present on
-paginated results", but `get_reviews` pages through `nextPageToken` by hand
-(§3 says so) and has never returned `has_more` — it returns `returned` and
-`total_text_reviews`. A reviewer holding a new hand-paginated tool to the
-rubric would have asked for a key the one existing precedent does not carry,
-or taken `get_reviews` for a bug. The line now names the helper and the
-exception, and `test_the_paging_contract_names_every_tool_that_breaks_it`
-derives the exception set from the return dicts, so a fix to `get_reviews`
-turns it red until the rubric stops excusing it.
+paginated results" while `get_reviews` paged through `nextPageToken` by hand
+without `has_more`, so the line was narrowed to name the helper and the
+exception. `get_reviews` has since gained `has_more` (#152) and the exception
+is gone; `test_the_paging_contract_names_every_tool_that_breaks_it` derives
+the exception set from the return dicts, so a paging tool that drops
+`has_more` turns it red until the rubric names it.
 
 Everything is checked against the code, not against a second copy of the
 claim, and the backtick vocabulary of both pages is partitioned exhaustively
@@ -262,6 +260,7 @@ def test_the_helper_and_its_caps_are_what_the_rubric_says():
 @pytest.mark.parametrize(
     "tool, caps",
     [
+        ("get_reviews", {"_MAX_REVIEWS", "_MAX_REVIEW_PAGES"}),
         ("popular_books", {"_MAX_POPULAR", "_POPULAR_PAGE_SIZE"}),
         ("compare_books", {"_MAX_COMPARE"}),
     ],
@@ -292,14 +291,13 @@ def test_popular_books_passes_after_and_limit_as_top_level_variables():
 # ============================================ rubric §4 — the tool contract
 
 def test_the_paging_contract_names_every_tool_that_breaks_it():
-    """Rubric §4: which paging tools carry `has_more`, and which one does not.
+    """Rubric §4: which paging tools carry `has_more`, and which do not.
 
-    Every paging tool returns `returned`. `has_more` is carried by the helper
-    tools and `popular_books`; the tools that page but do not carry it are
-    derived from the return dicts and must be exactly the ones the rubric
-    names on that line — so `get_reviews` gaining `has_more` turns this red
-    until the rubric stops excusing it, and a new tool dropping it turns this
-    red until someone decides.
+    Every paging tool returns `returned`. The tools that page but do not carry
+    `has_more` are derived from the return dicts and must be exactly the ones
+    the rubric excuses on that line (an "instead" clause) — so a tool dropping
+    `has_more` turns this red until someone decides, and an excuse outliving
+    its tool does too.
     """
     paging = _HELPER_TOOLS | _HAND_PAGINATORS
     for tool in paging:
@@ -311,7 +309,8 @@ def test_the_paging_contract_names_every_tool_that_breaks_it():
     )
     assert line, "rubric §4 no longer states the has_more contract"
     rule, _, exception = line.partition(". ")
-    assert "instead" in exception, "rubric §4 no longer names the tools without has_more"
+    if missing:
+        assert "instead" in exception, "rubric §4 no longer names the tools without has_more"
     carriers = {t for t in _backticks(rule) if t in _TOOLS}
     excused = {t for t in _backticks(exception) if t in _TOOLS}
     assert excused == missing, f"rubric §4 excuses {sorted(excused)}; code lacks has_more in {sorted(missing)}"

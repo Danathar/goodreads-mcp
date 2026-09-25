@@ -203,9 +203,13 @@ query($filters: BookReviewsFilterInput!, $pagination: PaginationInput){
   }
 }"""
 
-# Be a polite guest: cap how many reviews one call will page through.
+# Be a polite guest: cap how many reviews one call will page through, and how
+# many pages it may request. exclude_spoilers filters after the fetch, so the
+# review cap alone does not bound requests; the page cap allows twice the 4
+# pages an unfiltered call at _MAX_REVIEWS needs.
 _MAX_REVIEWS = 100
 _REVIEW_PAGE_SIZE = 30
+_MAX_REVIEW_PAGES = 8
 
 # Resolve a book to the kca ids the discovery queries need.
 _Q_BOOK_IDS = (
@@ -589,7 +593,10 @@ def get_reviews(
     limit: max reviews to return (capped at 100 to stay polite).
     min_rating / max_rating: server-side star filters, each 1-5, e.g.
         min_rating=4 for positive reviews, max_rating=2 for the critical ones.
-    exclude_spoilers: drop reviews flagged as spoilers.
+    exclude_spoilers: drop reviews flagged as spoilers. Paging is capped, so
+        a book whose reviews are mostly spoilers can return fewer than limit.
+
+    'has_more' is true when Goodreads has reviews this call did not read.
     """
     # Goodreads answers an impossible star filter with an empty page, which
     # would read as "this book has no reviews"; refuse it here instead.
@@ -617,17 +624,22 @@ def get_reviews(
     reviews: list[dict[str, Any]] = []
     total: int | None = None
     token: str | None = None
-    while len(reviews) < want:
+    has_more = False
+    seen_tokens: set[str] = set()
+    pages = 0
+    while len(reviews) < want and pages < _MAX_REVIEW_PAGES:
         pagination: dict[str, Any] = {"limit": _REVIEW_PAGE_SIZE}
         if token:
             pagination["after"] = token
         conn = gr.graphql(
             _Q_REVIEWS, {"filters": filters, "pagination": pagination}
         ).get("getReviews") or {}
+        pages += 1
         if total is None:
             total = conn.get("totalCount")
         edges = conn.get("edges") or []
-        for edge in edges:
+        unread = 0
+        for index, edge in enumerate(edges):
             rev = edge.get("node") or {}
             spoiler = bool(rev.get("spoilerStatus"))
             if exclude_spoilers and spoiler:
@@ -647,16 +659,24 @@ def get_reviews(
                 }
             )
             if len(reviews) >= want:
+                unread = len(edges) - index - 1
                 break
         token = (conn.get("pageInfo") or {}).get("nextPageToken")
+        # A remaining cursor means unread reviews, even on an empty page.
+        has_more = bool(unread or token)
         if not token or not edges:
             break
+        # A server that hands back the same cursor must not loop forever.
+        if token in seen_tokens:
+            break
+        seen_tokens.add(token)
 
     return {
         "book_id": book.get("legacyId"),
         "title": book.get("titleComplete") or book.get("title"),
         "total_text_reviews": total,
         "returned": len(reviews),
+        "has_more": has_more,
         "reviews": reviews,
     }
 

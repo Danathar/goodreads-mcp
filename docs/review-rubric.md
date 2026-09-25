@@ -42,7 +42,8 @@ This is where this project actually breaks, so it gets the most weight.
       shape — don't demand it where it doesn't fit. Two tools legitimately
       paginate by hand and should stay that way:
       `get_reviews` (client-side spoiler filtering changes the returned count,
-      so it needs its own loop) and `popular_books` (passes `after` and `limit`
+      so it needs its own loop, with its own `_MAX_REVIEWS` / `_MAX_REVIEW_PAGES`
+      caps) and `popular_books` (passes `after` and `limit`
       as top-level variables, with its own `_MAX_POPULAR` / `_POPULAR_PAGE_SIZE`
       caps). `compare_books` likewise has its own `_MAX_COMPARE` fan-out cap.
 
@@ -52,8 +53,8 @@ This is where this project actually breaks, so it gets the most weight.
 - [ ] Results carry a source `url` so the model can cite them; null is explicit,
       never fabricated.
 - [ ] `returned` / `has_more` present on results paged through
-      `_paginated_graphql_edges` and on `popular_books`. `get_reviews` pages
-      by hand and returns `returned` with `total_text_reviews` instead.
+      `_paginated_graphql_edges` and on the hand-paginated `popular_books` and
+      `get_reviews`.
 - [ ] Results shaped so tools chain — one tool's `book_id` feeds the next.
 
 ## 5. Tests
