@@ -1,0 +1,12 @@
+# Design notes
+
+How `goodreads-mcp` reaches Goodreads without an API, and the rules it follows while doing it. The [README](../README.md) lists the tools; this page explains the choices behind them.
+
+- **Request-first, no browser automation.** Everything is `httpx` against JSON/RSS/embedded-JSON/GraphQL surfaces; the only HTML regex is in `list_shelves` and the GraphQL config discovery.
+- **GraphQL backbone.** `get_reviews` and the discovery tools call Goodreads' AppSync GraphQL endpoint — the same backend the website uses. The web app injects a public read-only API key into page-level `__NEXT_DATA__` and keeps the production endpoint in its `_app` bundle; the client resolves both at runtime and caches them, so rotations self-heal (`client.graphql_config`). Legacy bundles that carry a paired key and endpoint are still supported. This is what enables real pagination (past the ~30 reviews a page embeds) and server-side rating filters. GraphQL partial-success is respected: a deleted review's sub-resource just comes back `null` rather than failing the call.
+- **WAF-aware.** Book pages sit behind an AWS WAF JS challenge; `get_book` uses the `.xml` path that isn't gated, and the client raises `WAFChallenge` if it ever gets a challenge body so failures are loud, not silent. (The GraphQL endpoint is a separate AppSync host and isn't WAF-gated.)
+- **Login walls are loud too.** The review-list page (`/review/list/{uid}`) went login-only in Sep 2026. The client raises `LoginRequired` when a request is redirected to sign-in, the same way it raises `WAFChallenge`, and `list_shelves` reads the public profile page instead (raising `LoginRequired` for a private profile).
+- **Read-only by declaration.** Every tool is registered with the same MCP tool annotations (`_READ_ONLY` in `server.py`): read-only, non-destructive, idempotent, open-world.
+- **Polite client.** Single persistent session, browser-faithful headers, exponential backoff on 429/503. `get_reviews` caps paging at 100 reviews and 8 pages per call, and reports `has_more`. The GraphQL discovery tools page in batches of 20 up to 100 results (`popular_books` up to 50).
+- **Off the event loop, with a concurrency cap.** Tool bodies are plain blocking functions. `OffLoopFastMCP` runs each call in a worker thread, so the server keeps answering pings while a request is in flight, and `client.MAX_IN_FLIGHT` (2) caps how many Goodreads requests are on the wire at once.
+- **Caveats**: all of this is unofficial and depends on markup/endpoints/keys that can drift.

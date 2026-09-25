@@ -2,48 +2,61 @@
 [![Nightly compliance](https://github.com/Danathar/goodreads-mcp/actions/workflows/nightly-compliance.yml/badge.svg?branch=main)](https://github.com/Danathar/goodreads-mcp/actions/workflows/nightly-compliance.yml)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Danathar/goodreads-mcp)
 [![Maintenance assisted by Hivecommons Hive](https://img.shields.io/badge/maintenance%20assisted%20by-Hivecommons%20Hive-1f6feb)](https://github.com/hivecommons/hive)
-[![ACMM L5 Semi-Autonomous](https://img.shields.io/badge/ACMM-L5%20Semi--Autonomous-2da44e)](#how-this-repository-is-maintained)
+[![ACMM L5 Semi-Autonomous](https://img.shields.io/badge/ACMM-L5%20Semi--Autonomous-2da44e)](docs/maintenance.md)
 [![AI assisted](https://img.shields.io/badge/AI-assisted-d29922)](#about-this-project)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
 # 📚 goodreads-mcp
 
-A **read-only** MCP server for Goodreads — built without the Goodreads API, because there hasn't been one since December 2020. Lets an LLM find and research books, ratings, and reviews. Tools ride on RSS feeds, the JSON autocomplete endpoint, and the `__NEXT_DATA__` blob embedded in book pages. No login, no cookies, no writes — public data only.
+A **read-only** MCP server for Goodreads — built without the Goodreads API, because there hasn't been one since December 2020. Lets an LLM find and research books, ratings, and reviews. Tools ride on RSS feeds, the JSON autocomplete endpoint, the `__NEXT_DATA__` blob embedded in book pages, and the AppSync GraphQL backend the Goodreads website itself uses. No login, no cookies, no writes — public data only.
 
 ## tools
 
-| tool | stability |
+| tool | source / what it returns |
 |---|---|
-| `search_books` | stable (JSON endpoint) |
-| `get_book` | stable (`__NEXT_DATA__` via `.xml` path) — details, cover, ratings histogram, all series memberships, review-language breakdown |
-| `get_reviews` | GraphQL — paginated reader reviews (text, rating, likes, date, spoiler flag, permalink) with server-side `min_rating` / `max_rating` and `exclude_spoilers`; `limit` up to 100 |
-| `similar_books` | GraphQL — paginated "readers also enjoyed" recommendations |
-| `author_books` | GraphQL — paginated author bibliography (from any of their books) |
-| `series_books` | GraphQL — paginated series books with reading-order placement; selectable membership for books in multiple series |
-| `get_editions` | GraphQL — paginated editions (format, ISBN, publisher, date) |
-| `book_lists` | GraphQL — paginated Listopia lists a book appears on (title, votes, size) |
-| `popular_books` | GraphQL — most popular books by release year (or year+month), ranked |
-| `compare_books` | takes several book ids, ranks them by rating with positive/critical share |
-| `get_shelf` | stable (RSS) — public shelves |
-| `list_shelves` | best effort (HTML) — public profiles |
+| `search_books` | JSON autocomplete endpoint (stable) — book_id, title, author, rating, cover; `max_results` defaults to 10, but the endpoint returns about 5 matches at most |
+| `get_book` | `__NEXT_DATA__` via the `.xml` page (stable) — details, cover, ratings histogram, every series membership, review-language breakdown (`review_language_limit`, default 5, max 25) |
+| `get_reviews` | GraphQL — paginated reader reviews (text, rating, likes, date, spoiler flag, permalink); `limit` default 10, capped at 100; server-side `min_rating` / `max_rating` (1–5, min ≤ max) and `exclude_spoilers`; reports `has_more` |
+| `similar_books` | GraphQL — paginated "readers also enjoyed" recommendations; `limit` up to 100 |
+| `author_books` | GraphQL — paginated author bibliography, ranked by popularity, from any of their books, plus `author_url`; `limit` up to 100 |
+| `series_books` | GraphQL — paginated series books with reading-order placement; `series_index` (zero-based, in `get_book`'s `series_memberships` order) picks the series; `limit` up to 100 |
+| `get_editions` | GraphQL — paginated editions (format, ISBN, publisher, date); `limit` up to 100 |
+| `book_lists` | GraphQL — paginated Listopia lists a book appears on (title, votes, size); `limit` up to 100 |
+| `popular_books` | GraphQL — most popular books by release `year`, or a single `month` (1–12), ranked; `limit` capped at 50 |
+| `compare_books` | `get_book` for each id (`__NEXT_DATA__` via `.xml`) — ranks 1–10 books by rating with positive/critical share; more than 10 ids is refused; a book that fails comes back as an `error` entry |
+| `get_shelf` | shelf RSS feed (stable) — books on a public shelf; `page` starts at 1, about 100 items per page; `user_id` overrides the configured user |
+| `list_shelves` | best-effort HTML scrape of the public profile page — shelf names; raises `LoginRequired` for a private profile |
+
+Every tool is registered with MCP read-only annotations (read-only, non-destructive, idempotent).
 
 The discovery tools all take a `book_id` and return results carrying `book_id`/title/author/rating/url, so an agent can chain them — e.g. `similar_books` → `get_reviews` on a recommendation. This is the structured book graph a general web search can't assemble.
 
-GraphQL discovery tools page in batches of 20 and accept a total `limit` up to
-100. Responses include `returned` and `has_more`, keeping larger lookups useful
-without allowing unbounded traffic.
+The five paginated discovery tools (`similar_books`, `author_books`, `series_books`, `get_editions`, `book_lists`) page in batches of 20 and accept a total `limit` up to 100; `popular_books` caps `limit` at 50. Responses include `returned` and `has_more`, keeping larger lookups useful without allowing unbounded traffic.
 
-> **WAF note:** Goodreads book HTML pages now sit behind an AWS WAF JavaScript
-> challenge (HTTP 202) that plain HTTP clients can't solve. `get_book` routes
-> around it via the `.xml`-suffixed page, so it still works without a browser. If
-> Goodreads ever extends the WAF to a path we depend on, the client raises
-> `WAFChallenge` with a clear message instead of a confusing parse error.
+> **WAF and login note:** Goodreads book HTML pages now sit behind an AWS WAF
+> JavaScript challenge (HTTP 202) that plain HTTP clients can't solve. `get_book`
+> routes around it via the `.xml`-suffixed page, so it still works without a
+> browser. If Goodreads ever extends the WAF to a path we depend on, the client
+> raises `WAFChallenge` with a clear message instead of a confusing parse error.
+> The review-list page (`/review/list/{uid}`) became login-only in Sep 2026; the
+> client raises `LoginRequired` on a sign-in redirect for the same reason, and
+> `list_shelves` reads the public profile page instead.
 
 ## install
+
+With pip:
 
 ```bash
 cd goodreads-mcp
 python3.10 -m venv .venv && .venv/bin/pip install -e .
+```
+
+Or with [uv](https://docs.astral.sh/uv/), which is also what the Claude Desktop bundle uses:
+
+```bash
+cd goodreads-mcp
+uv sync
+uv run goodreads-mcp
 ```
 
 Requires Python ≥ 3.10.
@@ -59,13 +72,13 @@ cat > ~/.config/goodreads-mcp/config.json << 'EOF'
 EOF
 ```
 
-Env var `GOODREADS_USER_ID` overrides the file.
+Env var `GOODREADS_USER_ID` overrides the file. A config file that can't be read, isn't valid JSON, isn't a JSON object, or has a non-string `user_id` is ignored with a warning on stderr; the server still starts.
 
 ## Claude Desktop config
 
-**Bundle.** Each [release](https://github.com/Danathar/goodreads-mcp/releases) carries a `goodreads-mcp.mcpb`; open it in Claude Desktop to install. The bundle ships no dependencies — the manifest launches the server with `uv run`, and the host resolves `pyproject.toml` into a private environment on first launch — so one bundle runs on macOS, Windows and Linux with any Python ≥ 3.10.
+**Bundle.** Each [release](https://github.com/Danathar/goodreads-mcp/releases) carries a `goodreads-mcp.mcpb`; open it in Claude Desktop to install. The bundle ships no dependencies — the manifest launches the server with `uv run`, and the host resolves `pyproject.toml` into a private environment on first launch — so one bundle runs on macOS, Windows and Linux with any Python ≥ 3.10. The bundle's optional "Goodreads User ID" setting (`user_config.goodreads_user_id`) is passed to the server as `GOODREADS_USER_ID`.
 
-**Manual.** `~/Library/Application Support/Claude/claude_desktop_config.json`:
+**Manual.** Add the server to `claude_desktop_config.json` — on macOS `~/Library/Application Support/Claude/claude_desktop_config.json`, on Windows `%APPDATA%\Claude\claude_desktop_config.json`; in any version, Settings → Developer → Edit Config opens it:
 
 ```json
 {
@@ -89,51 +102,29 @@ The endpoints are unofficial, so verify in this order:
 4. `get_shelf("to-read")` — checks your `user_id` + RSS
 5. `list_shelves()` — best-effort shelf-name scrape
 
+For an end-to-end example that chains the tools, see [prompts/research-a-book.md](prompts/research-a-book.md).
+
 ## tests
 
 ```bash
-.venv/bin/pip install -e ".[test]"
+.venv/bin/pip install -e ".[test]"     # pytest + pytest-cov
 .venv/bin/pytest                       # offline parser/unit tests
 GOODREADS_LIVE=1 .venv/bin/pytest      # + live network smoke tests
 ```
 
-## design notes
+The offline suite runs on fixtures; CI runs it with `pytest-cov` and enforces a coverage floor (`--cov-fail-under` in [ci.yml](.github/workflows/ci.yml)). The live smoke tests are in [tests/e2e/test_smoke_live.py](tests/e2e/test_smoke_live.py) and skip unless `GOODREADS_LIVE=1` is set. The [nightly compliance run](.github/workflows/nightly-compliance.yml) runs the live suite against the real endpoints every night, so upstream drift shows up within a day.
 
-- **Request-first, no browser automation.** Everything is `httpx` against JSON/RSS/embedded-JSON/GraphQL surfaces; the only HTML regex is in `list_shelves` and the GraphQL config discovery.
-- **GraphQL backbone (reviews).** `get_reviews` calls Goodreads' AppSync GraphQL endpoint — the same backend the website uses. The web app injects a public read-only API key into page-level `__NEXT_DATA__` and keeps the production endpoint in its `_app` bundle; the client resolves both at runtime and caches them, so rotations self-heal (`client.graphql_config`). Legacy bundles that carry a paired key and endpoint are still supported. This is what enables real pagination (past the ~30 reviews a page embeds) and server-side rating filters. GraphQL partial-success is respected: a deleted review's sub-resource just comes back `null` rather than failing the call.
-- **WAF-aware.** Book pages sit behind an AWS WAF JS challenge; `get_book` uses the `.xml` path that isn't gated, and the client raises `WAFChallenge` if it ever gets a challenge body so failures are loud, not silent. (The GraphQL endpoint is a separate AppSync host and isn't WAF-gated.)
-- **Polite client.** Single persistent session, browser-faithful headers, exponential backoff on 429/503; `get_reviews` caps paging at 100 reviews and 8 pages per call, and reports `has_more`.
-- **Caveats**: all of this is unofficial and depends on markup/endpoints/keys that can drift.
+## documentation
 
-## shipped since v0.1
-
-- **richer book data** — `get_book` includes covers, the ratings histogram, every series membership, normalized publication dates, and configurable review-language depth; `series_books` can traverse any listed membership, and `get_reviews` returns paginated, filterable reader reviews.
-- **author bibliography** — `author_books` returns an author's works (ranked by popularity) plus a link to their author page (`author_url`).
-- **bounded discovery pagination** — similar books, bibliographies, series, editions, and Listopia memberships can return up to 100 results with `has_more` metadata.
-
-## ideas for v2
-
-- author page detail (bio, photo, follower count) — not currently exposed cleanly: the author page is legacy server-rendered HTML with no structured JSON, and there's no discoverable GraphQL contributor-detail query, so this would require brittle DOM scraping. `author_books` links to the page instead.
-- caching layer for repeated lookups (the discovery tools each resolve the book first; a small TTL cache would cut duplicate GraphQL calls)
-
-## how this repository is maintained
-
-Maintenance here is assisted by [**Hive**](https://github.com/hivecommons/hive) — the agent-orchestration software from the [Hivecommons](https://github.com/hivecommons) project — which runs a fleet of AI agents against this repository at **ACMM level 5 (L5, Semi-Autonomous)**.
-
-L5 lets agents propose changes but not land them. The scanner, quality, CI, security, docs, architect and strategist agents may all file issues and open pull requests, and every agent pull request gets a hold label automatically. Three agents are new at this level: a reviewer that works through the open pull requests and backs each finding with a file:line reference, but never merges, approves or closes anything; an architect that writes RFCs and opens structural pull requests; and a strategist that coordinates the other agents. The telemetry and operations agents ship paused. **A human reviews and merges everything** — held pull requests are reviewed in batches, nothing auto-merges, and nothing reaches `main` without a person having read it. Once the committed ruleset is applied, GitHub enforces part of that: every change reaches `main` through a pull request that passed `test`. That a person, not a token, presses merge is still a rule rather than a setting; [docs/branch-protection.md](docs/branch-protection.md) says what is enforced and how to check. [docs/SECURITY-AI.md](docs/SECURITY-AI.md) sets out what agents may and may not touch, and the prompt-injection surface that comes with parsing an unofficial third party's payloads.
-
-That matters more than usual here. This server rides on endpoints Goodreads never documented and does not owe anyone stability — a `__NEXT_DATA__` shape change, a rotated GraphQL key, or the WAF extending to one more path breaks it silently. The offline suite runs on fixtures and by construction cannot see any of that, so the [nightly compliance run](.github/workflows/nightly-compliance.yml) exercises the live suite against the real endpoints and surfaces upstream drift within a day instead of at the next release.
-
-Each pass is meant to leave the next one starting from a better position:
-
-- **The gates ratchet.** A coverage floor is enforced on every pull request (`ci.yml`, via `--cov-fail-under`). [`.github/auto-qa-tuning.json`](.github/auto-qa-tuning.json) records the rule for when raising it is warranted — sustained headroom over a full release cycle — but nothing applies the raise automatically; that stays a human decision.
-- **Risk is classified, not guessed.** Every pull request declares a [risk tier](docs/risk-tiers.md) in its description — a judgment call a reviewer can disagree with, not an automated verdict. The [labeler](.github/labeler.yml) applies path labels (`client`, `server`, `live-tests`, `ci`) that inform that call without determining it. Either way a change to the client or the GraphQL config discovery is held to a different standard than a change to a doc.
-- **Lessons are written down where the next pass will read them.** [`docs/reflections/`](docs/reflections/) holds what a piece of work taught about this codebase, [docs/review-rubric.md](docs/review-rubric.md) is the review checklist, and [AGENTS.md](AGENTS.md) is the standing brief.
-- **The measurement is of outcomes, not activity.** [`docs/metrics.md`](docs/metrics.md) tracks acceptance rate, time to merge and review rounds — not lines written or PRs opened.
-
-[docs/quality.md](docs/quality.md) is honest about what the numbers do *not* prove — chiefly that no fixture-backed test can detect the failure mode that actually threatens this project.
-
-Learn more: [Hive](https://github.com/hivecommons/hive) · [the ACMM levels, L1 to L6](https://github.com/hivecommons/hive#acmm-levels) · [the full ACMM policy matrix](https://github.com/hivecommons/hive/blob/v4/src/docs/acmm-policy-matrix.md)
+- [docs/design.md](docs/design.md) — design notes: the data surfaces, WAF and login handling, politeness and concurrency
+- [docs/roadmap.md](docs/roadmap.md) — ideas not built yet
+- [docs/maintenance.md](docs/maintenance.md) — how this repository is maintained (Hive, ACMM L5, human review)
+- [docs/quality.md](docs/quality.md) — what the tests and numbers do and do not prove
+- [docs/risk-tiers.md](docs/risk-tiers.md) — the risk tier every pull request declares
+- [docs/review-rubric.md](docs/review-rubric.md) — the review checklist
+- [docs/metrics.md](docs/metrics.md) — outcome metrics
+- [docs/reflections/](docs/reflections/) — lessons learned about this codebase
+- [docs/SECURITY-AI.md](docs/SECURITY-AI.md) — what AI agents may and may not touch
 
 ## about this project
 
