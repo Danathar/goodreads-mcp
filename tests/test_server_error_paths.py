@@ -202,6 +202,106 @@ def test_get_reviews_stops_when_a_page_is_empty_despite_a_next_token(monkeypatch
     assert len(recorder.calls) == 2
 
 
+def _spoiler_page(calls: list[dict[str, Any]], token: Any) -> dict[str, Any]:
+    """A full page of spoiler-flagged reviews; ``token`` maps call count to cursor."""
+    return {
+        "getReviews": {
+            "totalCount": 10_000,
+            "edges": [
+                {"node": {"rating": 3, "spoilerStatus": True, "creator": {"name": "S"}}}
+                for _ in range(server._REVIEW_PAGE_SIZE)
+            ],
+            "pageInfo": {"nextPageToken": token(len(calls))},
+        }
+    }
+
+
+def test_get_reviews_stops_at_the_page_cap_when_every_review_is_a_spoiler(monkeypatch):
+    """Filtered-out spoilers never count toward limit, so pages must be capped."""
+    calls: list[dict[str, Any]] = []
+
+    def graphql(query, variables):
+        if query == server._Q_BOOK_BY_LEGACY:
+            return {"getBookByLegacyId": {"legacyId": 1, "title": "A Book", "work": {"id": "w"}}}
+        calls.append(variables)
+        if len(calls) > server._MAX_REVIEW_PAGES:
+            raise AssertionError(f"page request past the cap: {variables!r}")
+        return _spoiler_page(calls, lambda n: f"page-{n + 1}")
+
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    result = server.get_reviews("1", limit=10, exclude_spoilers=True)
+
+    assert len(calls) == server._MAX_REVIEW_PAGES
+    assert result["returned"] == 0
+    assert result["has_more"] is True
+
+
+def test_get_reviews_stops_when_a_page_token_repeats(monkeypatch):
+    """A server that hands back the same cursor must not loop forever."""
+    calls: list[dict[str, Any]] = []
+
+    def graphql(query, variables):
+        if query == server._Q_BOOK_BY_LEGACY:
+            return {"getBookByLegacyId": {"legacyId": 1, "title": "A Book", "work": {"id": "w"}}}
+        calls.append(variables)
+        # Refuse a third page so a regression fails here instead of being
+        # masked by the page cap.
+        if len(calls) > 2:
+            raise AssertionError(f"unexpected third page request: {variables!r}")
+        return _spoiler_page(calls, lambda n: "same-token")
+
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    result = server.get_reviews("1", limit=10, exclude_spoilers=True)
+
+    assert len(calls) == 2, "the repeated cursor must end the loop"
+    assert result["returned"] == 0
+
+
+def test_get_reviews_has_more_is_false_once_reviews_run_out(monkeypatch):
+    recorder = _Recorder(
+        [
+            {"getBookByLegacyId": {"legacyId": 1, "title": "A Book", "work": {"id": "w"}}},
+            {
+                "getReviews": {
+                    "totalCount": 1,
+                    "edges": [{"node": {"rating": 5, "creator": {"name": "A"}}}],
+                    "pageInfo": {"nextPageToken": None},
+                }
+            },
+        ]
+    )
+    monkeypatch.setattr(server.gr, "graphql", recorder)
+
+    assert server.get_reviews("1", limit=10)["has_more"] is False
+
+
+def test_get_reviews_has_more_when_it_stops_mid_page(monkeypatch):
+    """The last page had reviews past limit, even though Goodreads sent no cursor."""
+    recorder = _Recorder(
+        [
+            {"getBookByLegacyId": {"legacyId": 1, "title": "A Book", "work": {"id": "w"}}},
+            {
+                "getReviews": {
+                    "totalCount": 2,
+                    "edges": [
+                        {"node": {"rating": 5, "creator": {"name": "A"}}},
+                        {"node": {"rating": 4, "creator": {"name": "B"}}},
+                    ],
+                    "pageInfo": {"nextPageToken": None},
+                }
+            },
+        ]
+    )
+    monkeypatch.setattr(server.gr, "graphql", recorder)
+
+    result = server.get_reviews("1", limit=1)
+
+    assert result["returned"] == 1
+    assert result["has_more"] is True
+
+
 # ------------------------------------------------------------- author_books
 
 
