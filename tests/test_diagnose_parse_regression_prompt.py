@@ -332,6 +332,27 @@ def test_the_quoted_discovery_message_is_the_one_a_changed_bundle_raises(goodrea
     assert str(_raised(goodreads, handler, call)) == quoted.group(1)
 
 
+def test_the_discovery_route_sends_the_reader_to_the_regexes_graphql_config_uses():
+    """"The discovery regexes in `client.py`" must exist: compiled `*_RE`
+    names that `graphql_config` reaches, directly or through a `parse_*`."""
+    cause = _route(_prompt_routes(), "ValueError", "graphql_config")
+    assert "the discovery regexes in `client.py` need updating" in cause
+
+    tree = ast.parse(_CLIENT_PY.read_text(encoding="utf-8"))
+    functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    reached: set[str] = set()
+    queue: list[ast.AST] = [_function(_CLIENT_PY, "graphql_config")]
+    while queue:
+        for used in ast.walk(queue.pop()):
+            if isinstance(used, ast.Name) and used.id not in reached:
+                reached.add(used.id)
+                if used.id in functions:
+                    queue.append(functions[used.id])
+    regexes = {n for n in reached if n.endswith("_RE")}
+    assert {"APP_CHUNK_RE", "NEXT_DATA_RE"} <= regexes
+    assert all(isinstance(getattr(client_mod, n), re.Pattern) for n in regexes)
+
+
 def test_the_rotation_route_statuses_are_the_ones_graphql_re_discovers_on(goodreads):
     symptom = next(s for s, _ in _prompt_routes() if "HTTPStatusError" in s)
     named = {int(s) for s in re.findall(r"\b(\d{3})\b", symptom)}
