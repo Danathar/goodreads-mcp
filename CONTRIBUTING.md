@@ -32,8 +32,34 @@ are out of scope.
 
 ## Pull requests
 
-Keep changes focused. Update `pyproject.toml` and `manifest.json` versions
-together when publishing a release — CI checks they match.
+Keep changes focused. Don't change the version in a feature pull request;
+releases have their own (see below).
+
+## Releases
+
+Releases are automatic and monthly, numbered by date: CalVer `YYYY.M.PATCH`,
+such as `2026.10.0`, `2026.10.1`, `2026.11.0`. Pre-releases end `b1` or `rc1`.
+Tags have no `v` prefix. The `0.1.x` line is retired, and `2026.x` sorts above
+it. Everything runs in [`release.yml`](.github/workflows/release.yml):
+
+1. **Propose a version.** Run the workflow by hand with `prepare` ticked. It
+   takes the next number from the date (or the `version` you give it), sets it
+   in `pyproject.toml` and `manifest.json`, pushes `release/<version>` and opens
+   the pull request. Merging that pull request approves the number.
+2. **Release.** On 09:00 UTC on the 1st of each month, or when run by hand
+   without `prepare`, the workflow tags the version the merged `pyproject.toml`
+   carries, attaches the `.mcpb` to a GitHub release, and publishes to PyPI.
+   It never changes the version itself.
+
+The scheduled run does nothing until the repository variable
+`AUTO_RELEASE_ENABLED` is `true`; a run by hand always proceeds. A release is
+skipped when nothing under `goodreads_mcp/` changed since the last release;
+tick `force` to release anyway (for a dependency-only change, say). It is
+refused when the commit's checks are not green, when the two files disagree,
+when the version is not CalVer, is already tagged or is not newer than the
+last release, or when a `b1`/`rc1` suffix and the `prerelease` box disagree.
+Tick `dry_run` to run every check and build the bundle without tagging or
+publishing.
 
 A change to `.claude/settings.json` or `.claude/hooks/**` is a change to the
 agent permission boundary. A human reads it and merges it, whoever wrote it

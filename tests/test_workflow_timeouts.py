@@ -111,7 +111,7 @@ def test_the_new_workflow_is_covered_too():
     """A sixth workflow file must arrive with this test already applying to it.
 
     The parametrisation above is built from whatever is on disk, so a new file
-    is covered the moment it lands. This asserts the five known jobs are still
+    is covered the moment it lands. This asserts the known jobs are still
     among them, which is what catches a file being renamed out of the glob
     rather than fixed.
     """
@@ -121,6 +121,8 @@ def test_the_new_workflow_is_covered_too():
         ("ci.yml", "test"),
         ("labeler.yml", "label"),
         ("nightly-compliance.yml", "live"),
+        ("release.yml", "prepare"),
         ("release.yml", "release"),
+        ("release.yml", "publish-pypi"),
     }
     assert expected <= seen, f"workflow jobs have gone missing: {sorted(expected - seen)}"

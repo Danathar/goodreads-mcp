@@ -76,7 +76,7 @@ Env var `GOODREADS_USER_ID` overrides the file. A config file that can't be read
 
 ## Claude Desktop config
 
-**Bundle.** Each [release](https://github.com/Danathar/goodreads-mcp/releases) carries a `goodreads-mcp.mcpb`; open it in Claude Desktop to install. The bundle ships no dependencies — the manifest launches the server with `uv run`, and the host resolves `pyproject.toml` into a private environment on first launch — so one bundle runs on macOS, Windows and Linux with any Python ≥ 3.10. The bundle's optional "Goodreads User ID" setting (`user_config.goodreads_user_id`) is passed to the server as `GOODREADS_USER_ID`.
+**Bundle.** Each [release](https://github.com/Danathar/goodreads-mcp/releases) carries a `goodreads-mcp.mcpb`. Releases come out monthly when the server itself changed, numbered by date (`2026.10.0`, `2026.10.1`, `2026.11.0`); `0.1.1` was the last of the old numbering, and every date-numbered release is newer than it. See [CONTRIBUTING.md](CONTRIBUTING.md#releases) for how one is cut. Open the `.mcpb` in Claude Desktop to install. The bundle ships no dependencies — the manifest launches the server with `uv run`, and the host resolves `pyproject.toml` into a private environment on first launch — so one bundle runs on macOS, Windows and Linux with any Python ≥ 3.10. The bundle's optional "Goodreads User ID" setting (`user_config.goodreads_user_id`) is passed to the server as `GOODREADS_USER_ID`.
 
 **Manual.** Add the server to `claude_desktop_config.json` — on macOS `~/Library/Application Support/Claude/claude_desktop_config.json`, on Windows `%APPDATA%\Claude\claude_desktop_config.json`; in any version, Settings → Developer → Edit Config opens it:
 
