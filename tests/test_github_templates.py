@@ -323,7 +323,7 @@ def test_the_two_versions_the_checklist_pairs_agree_today():
 
 def test_release_yml_still_enforces_the_pairing_the_checklist_defers_to():
     """The checklist says "(if publishing a release)" — that gate must exist."""
-    body = _workflow_steps.Workflow(_RELEASE).step("Read version from manifest.json").run
+    body = _workflow_steps.Workflow(_RELEASE, job="release").step("Read version from manifest.json").run
     assert "manifest.json" in body and "pyproject.toml" in body
     assert "exit 1" in body, "the version-sync step no longer fails the release"
 
