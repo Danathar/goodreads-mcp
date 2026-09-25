@@ -25,9 +25,18 @@ A goodreads-mcp tool is returning wrong or empty data. Diagnose it.
    - `WAFChallenge` raised → the path is now WAF-gated. Find an alternate
      endpoint (`.xml` book page, RSS, JSON autocomplete). Do not try to solve
      the challenge.
-   - `GraphQLError` or 401/403 → key/endpoint rotation. `graphql_config`
-     should self-heal; if it doesn't, the discovery regexes in `client.py`
-     need updating.
+   - `ValueError` from `graphql_config` (such as "No AppSync (key,
+     endpoint) pair found in bundle.") → config discovery broke: the
+     discovery page or its `_app` bundle changed shape, so the discovery
+     regexes in `client.py` need updating.
+   - `httpx.HTTPStatusError` with 401/403 from a GraphQL call → key/endpoint
+     rotation that re-discovery did not fix. `graphql` already re-discovers
+     once on a 401/403, so a fresh `graphql_config` still found a stale or
+     wrong pair; check what `graphql_config(force=True)` returns.
+   - `GraphQLError` → AppSync rejected the query itself and sent no `data`,
+     which means a schema change (a field or argument was renamed; the
+     message reads like "Validation error of type FieldUndefined"), not a
+     rotated key. Compare the query document in `server.py` with the error.
    - Empty/None fields from `__NEXT_DATA__` → Apollo state keys were renamed.
      Fetch the page, dump the blob, and diff the shape against what the
      parser expects.
