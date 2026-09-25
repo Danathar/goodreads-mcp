@@ -662,7 +662,8 @@ def get_reviews(
                 unread = len(edges) - index - 1
                 break
         token = (conn.get("pageInfo") or {}).get("nextPageToken")
-        has_more = bool(unread or (token and edges))
+        # A remaining cursor means unread reviews, even on an empty page.
+        has_more = bool(unread or token)
         if not token or not edges:
             break
         # A server that hands back the same cursor must not loop forever.

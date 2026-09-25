@@ -200,6 +200,7 @@ def test_get_reviews_stops_when_a_page_is_empty_despite_a_next_token(monkeypatch
     assert result["returned"] == 0
     assert result["reviews"] == []
     assert len(recorder.calls) == 2
+    assert result["has_more"] is True, "Goodreads still offered a cursor"
 
 
 def _spoiler_page(calls: list[dict[str, Any]], token: Any) -> dict[str, Any]:
