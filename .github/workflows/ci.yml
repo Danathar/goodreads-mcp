@@ -6,6 +6,20 @@ on:
   push:
     branches: [main]
 
+# Pull requests: one run per pull request. A new push cancels the run for the
+# commit it replaced, so the check reports on the head that is actually under
+# review.
+#
+# Pushes to main: one group per commit, so no main run is ever cancelled or
+# queued out. `cancel-in-progress: false` alone is not enough: GitHub Actions
+# keeps at most one *pending* run per group and replaces that pending run when
+# another is queued, so a shared group would still leave an intermediate main
+# commit with a cancelled run. release.yml refuses to release a commit whose
+# check-runs are not green, and a cancelled CI run is not green.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # Least privilege: this job reads the repository and fetches from PyPI and npm.
 # It calls no GitHub API, so read on contents is the whole requirement. Pinning
 # it here also stops the token's scope from depending on a repository setting
