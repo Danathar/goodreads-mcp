@@ -185,6 +185,13 @@ def _legacy_id(book_id: str) -> int:
     return int(m.group(0))
 
 
+def _book_id(legacy_id: Any) -> str | None:
+    """Render a GraphQL ``legacyId`` (an Int) as the string every tool's
+    ``book_id`` parameter takes, so one tool's output feeds the next through
+    the MCP layer without the host coercing it (#193). None stays None."""
+    return None if legacy_id is None else str(legacy_id)
+
+
 # --- GraphQL query documents (recovered from the web app's JS bundles) ----
 _Q_BOOK_BY_LEGACY = (
     "query($id: Int!){ getBookByLegacyId(legacyId:$id)"
@@ -385,7 +392,7 @@ def _resolve_book_ids(book_id: str) -> dict[str, Any]:
         )
     first_series = series_memberships[0] if series_memberships else {}
     return {
-        "legacy_id": book.get("legacyId"),
+        "legacy_id": _book_id(book.get("legacyId")),
         "title": book.get("titleComplete") or book.get("title"),
         "book_kca": book.get("id"),
         "work_kca": (book.get("work") or {}).get("id"),
@@ -403,7 +410,7 @@ def _book_summary(node: dict[str, Any]) -> dict[str, Any]:
     stats = (node.get("work") or {}).get("stats") or {}
     author = (node.get("primaryContributorEdge") or {}).get("node") or {}
     return {
-        "book_id": node.get("legacyId"),
+        "book_id": _book_id(node.get("legacyId")),
         "title": node.get("title"),
         "author": author.get("name"),
         "average_rating": stats.get("averageRating"),
@@ -419,7 +426,7 @@ def _work_summary(node: dict[str, Any]) -> dict[str, Any]:
     stats = node.get("stats") or {}
     author = (best.get("primaryContributorEdge") or {}).get("node") or {}
     return {
-        "book_id": best.get("legacyId"),
+        "book_id": _book_id(best.get("legacyId")),
         "title": best.get("title"),
         "author": author.get("name"),
         "average_rating": stats.get("averageRating"),
@@ -440,7 +447,7 @@ def _node_summary(node: dict[str, Any]) -> dict[str, Any]:
         stats = node.get("stats") or {}
         author = (best.get("primaryContributorEdge") or {}).get("node") or {}
         return {
-            "book_id": best.get("legacyId"),
+            "book_id": _book_id(best.get("legacyId")),
             "title": best.get("title"),
             "author": author.get("name"),
             "average_rating": stats.get("averageRating"),
@@ -550,7 +557,7 @@ def get_book(book_id: str, review_language_limit: int = 5) -> dict[str, Any]:
     } or None
 
     return {
-        "book_id": book.get("legacyId"),
+        "book_id": _book_id(book.get("legacyId")),
         "title": book.get("titleComplete") or book.get("title"),
         "author": author.get("name"),
         "cover": book.get("imageUrl"),
@@ -673,7 +680,7 @@ def get_reviews(
         seen_tokens.add(token)
 
     return {
-        "book_id": book.get("legacyId"),
+        "book_id": _book_id(book.get("legacyId")),
         "title": book.get("titleComplete") or book.get("title"),
         "total_text_reviews": total,
         "returned": len(reviews),
@@ -814,7 +821,7 @@ def get_editions(book_id: str, limit: int = 20) -> dict[str, Any]:
         details = node.get("details") or {}
         editions.append(
             {
-                "book_id": node.get("legacyId"),
+                "book_id": _book_id(node.get("legacyId")),
                 "title": node.get("title"),
                 "cover": node.get("imageUrl"),
                 "format": details.get("format"),

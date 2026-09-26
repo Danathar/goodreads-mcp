@@ -664,7 +664,7 @@ def test_similar_books_hands_back_ids_and_links_so_the_chain_can_continue():
         mp.setattr(server.gr, "graphql", fake)
         out = server.similar_books("7", limit=5)
     first = out["similar"][0]
-    assert first["book_id"] == 11 and first["url"].endswith("/book/show/11")
+    assert first["book_id"] == "11" and first["url"].endswith("/book/show/11")
     assert first["average_rating"] == 3.9
 
 

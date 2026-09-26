@@ -24,25 +24,27 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-26 — #189, resolve every README link target
+## 2026-09-26 — #193, book_id is a string on both sides
 
-**Done:** `tests/test_readme_links.py`. Every link and image in `README.md`
-is classified — `blob/main/<path>[#anchor]` (tracked file, heading slug),
-`tree/main/<dir>/` (tracked directory), `<repo>#anchor` (README heading),
-`actions/workflows/<file>` and its badge (workflow file, `?branch=main`),
-`/releases`, `pypi.org/project/<project.name>/`, or external — and an
-unclassified link into this repository fails. Link text that is a path is
-held to its target both ways. The `## documentation` list is checked against
-`docs/*.md` with `_NOT_IN_INDEX` naming the deliberate omission
-(`docs/branch-protection.md`). Offline count row 1103 → 1185 (1182 + #188's two + the link-forms test).
+**Done:** every tool now emits `book_id` as a string. The GraphQL tools
+copied `legacyId` (a GraphQL `Int`) straight through, while every `book_id`
+parameter is `str`, so `mcp.call_tool("get_book", {"book_id": 54493401})`
+failed validation — the chaining the README promises broke at the MCP layer,
+and the offline suite calls the bodies directly so it never saw it.
+`server._book_id` renders `legacyId` (None stays None) in `_resolve_book_ids`,
+the three summary helpers, `get_book`, `get_reviews` and `get_editions`.
+`tests/test_book_id_chaining.py` drives every tool through
+`server.mcp.call_tool`, collects every emitted `book_id` and feeds each into
+every tool whose schema has one (the consumer list is read off
+`list_tools`). Offline count row 1185 → 1198. Live suite 24/24 after the
+change; `test_smoke_live.py` now pins `book["book_id"] == "11870085"`.
 
-**In flight:** the PR on `test/189-readme-link-targets`. #188 (open) also
-edits the `docs/quality.md` count row; whichever merges second must re-pin it
+**In flight:** the PR on `fix/193-book-id-string`. It edits the
+`docs/quality.md` count row; whichever open PR merges second must re-pin it
 (`pytest -q tests/test_coverage_thresholds.py` prints the right row).
 
-**Blocked on:** nothing. Whether `docs/branch-protection.md` belongs in the
-README index is the maintainer's call: delete it from `_NOT_IN_INDEX` and the
-test says where to list it.
+**Blocked on:** nothing. `list_id` in `book_lists` is still an int; no tool
+takes one, so it was left alone.
 
 **Watch:** `goodreads-mcp-ai` on PyPI and the registry listing still wait for
 the first date-numbered release (#180); the `publish-registry` job pins

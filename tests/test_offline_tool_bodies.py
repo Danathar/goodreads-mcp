@@ -528,13 +528,13 @@ def test_similar_books_summarizes_book_nodes(monkeypatch):
 
     (variables,) = graphql.variables_for(server._Q_SIMILAR)
     assert variables["id"] == "kca://book/1"
-    assert result["book_id"] == 1
+    assert result["book_id"] == "1"
     assert result["title"] == "A Book: Complete"
     assert result["returned"] == 1
     assert result["has_more"] is True
     assert result["similar"] == [
         {
-            "book_id": 2,
+            "book_id": "2",
             "title": "Another Book",
             "author": "Author 2",
             "average_rating": 4.3,
@@ -583,7 +583,7 @@ def test_author_books_reports_the_contributor_and_total(monkeypatch):
     assert result["has_more"] is True
     assert result["works"] == [
         {
-            "book_id": 3,
+            "book_id": "3",
             "title": "Earlier Work",
             "author": "Author 3",
             "average_rating": 3.9,
@@ -628,7 +628,7 @@ def test_series_books_returns_reading_order_placements(monkeypatch):
     (variables,) = graphql.variables_for(server._Q_SERIES)
     assert variables["input"] == {"id": "kca://series/5"}
     # The input book is echoed like every other discovery tool does (#95).
-    assert result["book_id"] == 1
+    assert result["book_id"] == "1"
     assert result["title"] == "A Book: Complete"
     assert result["series"] == "Arc"
     assert result["series_index"] == 0
@@ -664,7 +664,7 @@ def test_series_books_notes_a_standalone_without_a_second_call(monkeypatch):
 
     result = server.series_books("1")
 
-    assert result["book_id"] == 1
+    assert result["book_id"] == "1"
     assert result["title"] == "A Standalone"
     assert result["series"] is None
     assert result["note"] == "This book isn't part of a Goodreads series."
@@ -724,12 +724,12 @@ def test_get_editions_flattens_the_edition_details(monkeypatch):
 
     (variables,) = graphql.variables_for(server._Q_EDITIONS)
     assert variables["id"] == "kca://work/1"
-    assert result["book_id"] == 1
+    assert result["book_id"] == "1"
     assert result["total_editions"] == 1
     assert result["returned"] == 1
     assert result["editions"] == [
         {
-            "book_id": 11,
+            "book_id": "11",
             "title": "A Book (Hardcover)",
             "cover": "https://images.example/11.jpg",
             "format": "Hardcover",
@@ -756,7 +756,7 @@ def test_get_editions_tolerates_an_edition_without_details(monkeypatch):
 
     (edition,) = server.get_editions("1", limit=1)["editions"]
 
-    assert edition["book_id"] == 12
+    assert edition["book_id"] == "12"
     assert edition["format"] is None
     assert edition["language"] is None
     assert edition["isbn13"] is None
@@ -794,7 +794,7 @@ def test_book_lists_summarizes_listopia_entries(monkeypatch):
 
     (variables,) = graphql.variables_for(server._Q_BOOK_LISTS)
     assert variables["id"] == "kca://book/1"
-    assert result["book_id"] == 1
+    assert result["book_id"] == "1"
     assert result["returned"] == 1
     assert result["lists"] == [
         {
@@ -895,7 +895,7 @@ def test_popular_books_carries_rank_and_count_onto_the_summary(monkeypatch):
 
     assert entry["rank"] == 1
     assert entry["count"] == 9001
-    assert entry["book_id"] == 6
+    assert entry["book_id"] == "6"
     assert entry["title"] == "A Popular Work"
     assert entry["author"] == "Author 6"
     assert entry["average_rating"] == 4.0
@@ -919,7 +919,7 @@ def test_popular_books_reads_a_work_node_nested_under_details(monkeypatch):
 
     (entry,) = server.popular_books(2024, limit=5)["books"]
 
-    assert entry["book_id"] == 8
+    assert entry["book_id"] == "8"
     assert entry["title"] == "Nested Best Book"
     assert entry["average_rating"] == 4.8
 
@@ -1030,7 +1030,7 @@ def test_popular_books_caps_the_request_at_the_maximum(monkeypatch):
 
 def _compared(book_id: str, rating: float | None, hist: dict[str, int] | None):
     return {
-        "book_id": int(book_id),
+        "book_id": book_id,
         "title": f"Book {book_id}",
         "author": f"Author {book_id}",
         "average_rating": rating,
@@ -1052,11 +1052,11 @@ def test_compare_books_ranks_by_rating_and_computes_polarization(monkeypatch):
 
     assert result["compared"] == 2
     assert result["ranked_by"] == "average_rating (desc)"
-    assert [b["book_id"] for b in result["books"]] == [2, 1]
-    low, = [b for b in result["books"] if b["book_id"] == 1]
+    assert [b["book_id"] for b in result["books"]] == ["2", "1"]
+    low, = [b for b in result["books"] if b["book_id"] == "1"]
     assert low["pct_positive"] == 80.0
     assert low["pct_critical"] == 20.0
-    high, = [b for b in result["books"] if b["book_id"] == 2]
+    high, = [b for b in result["books"] if b["book_id"] == "2"]
     assert high["pct_positive"] == 100.0
     assert high["pct_critical"] == 0.0
 
@@ -1082,7 +1082,7 @@ def test_compare_books_puts_unrated_then_failed_books_last(monkeypatch):
     result = server.compare_books(["1", "2", "3"])
 
     assert result["compared"] == 2  # the failed id is not counted as compared
-    assert [b.get("book_id") for b in result["books"]] == [1, 2, "3"]
+    assert [b.get("book_id") for b in result["books"]] == ["1", "2", "3"]
     assert result["books"][-1]["error"] == "No book found for id '3'."
 
 
