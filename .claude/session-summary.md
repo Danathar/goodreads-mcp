@@ -48,3 +48,27 @@ PR template. Policy file and tests updated. Offline count row 1066 → 1072.
 and skipped months; the artifact publishes nothing. Bumping the `mcpb` pin
 means all three files, or `test_the_packer_is_pinned_to_the_version_ci_validates_with`
 and `test_the_mcpb_command_is_the_one_ci_runs_verbatim` fail.
+## 2026-09-26 — #174, `release.yml` tagged whatever branch it was dispatched on
+
+**Done:** the `release` job never checked that its commit was on `main`, and
+its green-checks gate passed a commit with no check runs (an empty list has
+nothing red in it; the `release/*` branches `prepare` pushes with
+`github.token` are exactly such commits). Added a first step, "Refuse any
+commit that is not on main": `github.ref` must be the default branch and
+`GITHUB_SHA` must be an ancestor of origin's default branch, fetched fresh.
+"Require green checks on this commit" now also refuses when no `test` check
+run concluded `success`; `test` is read from the step's `REQUIRED_CHECK` env
+and a test joins it to `.github/rulesets/main.json`. CONTRIBUTING's refusal
+sentence, `docs/quality.md`'s gate row and `docs/branch-protection.md` say so.
+Offline count row 1066 → 1080.
+
+**In flight:** the PR on `sec/174-release-only-from-main`. #176
+(`sec/175-build-pypi-before-third-party-code`) also edits `release.yml`'s
+`release` job; whichever merges second rebases.
+
+**Blocked on:** #174's third item is a repository setting, owner only: the
+`pypi` environment's deployment branches are unrestricted
+(`deployment_branch_policy: null`). Set them to "Selected branches", `main`.
+
+**Watch:** `.github/workflows/**` is Tier 2; a human merges. The main ruleset
+(#148) is still not applied.

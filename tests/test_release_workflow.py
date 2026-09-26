@@ -30,13 +30,18 @@ The contracts here that are load-bearing:
   and `docs/risk-tiers.md` makes the paired bump a Tier 2 rule. That promise is
   five lines of shell in one step. It is exercised here both ways, and the
   committed tree is put through it.
-- **The release gates.** A scheduled run is opt-in; a month with no change
-  under `goodreads_mcp/` is skipped; red checks refuse; a version that is not
-  CalVer, is already tagged, is not newer than the last stable release, or
-  whose `b1`/`rc1` suffix disagrees with the `prerelease` box is refused before
-  anything is written. Every `steps.<id>.outputs.<name>` reference in the file
-  is joined back to the body that writes it, because a typo there does not fail
-  anything — it quietly skips the release.
+- **The release gates.** The job refuses, first, any run that is not on the
+  default branch and any commit that origin's default branch does not carry
+  (#174: `workflow_dispatch` runs on whatever branch is picked). A scheduled
+  run is opt-in; a month with no change under `goodreads_mcp/` is skipped; a
+  red check refuses, and so does the absence of a passing `test` check, the
+  one `.github/rulesets/main.json` requires (a commit with no check runs has
+  nothing red on it); a version that is not CalVer, is already tagged, is not
+  newer than the last stable release, or whose `b1`/`rc1` suffix disagrees
+  with the `prerelease` box is refused before anything is written. Every
+  `steps.<id>.outputs.<name>` reference in the file is joined back to the
+  body that writes it, because a typo there does not fail anything — it
+  quietly skips the release.
 - **The bundle is portable.** The v0.1.1 bundle vendored mcp's dependency
   closure with `pip install --target` on one runner, and four of those packages
   are compiled: the `.mcpb` declared three platforms and started on one (#89).
@@ -78,6 +83,7 @@ _MANIFEST = _ROOT / "manifest.json"
 _RUBRIC = _ROOT / "docs" / "review-rubric.md"
 
 # Every step in the release job that carries a `run:`. Names are the workflow's own.
+_BRANCH_STEP = "Refuse any commit that is not on main"
 _ENABLED_STEP = "Check the schedule is enabled"
 _DECIDE_STEP = "Decide whether to release"
 _CHECKS_STEP = "Require green checks on this commit"
@@ -97,6 +103,7 @@ _SUMMARY_STEP = "Summarise"
 _CLEANUP_STEP = "Clean up the bundle (avoid committing)"
 
 _EXECUTED = {
+    _BRANCH_STEP,
     _ENABLED_STEP,
     _DECIDE_STEP,
     _CHECKS_STEP,
@@ -501,6 +508,110 @@ def _remote_tags(work: Path) -> list[str]:
 
 
 # --------------------------------------------------------------------------
+# Refuse any commit that is not on main — the first thing the release job does
+# --------------------------------------------------------------------------
+
+
+def _branch_gate(work: Path, ref: str, sha: str, default: str = "main") -> subprocess.CompletedProcess[str]:
+    return _run(_body(_BRANCH_STEP), work, env={"REF": ref, "DEFAULT": default, "GITHUB_SHA": sha})
+
+
+def _head(work: Path) -> str:
+    return _git(work, "rev-parse", "HEAD").strip()
+
+
+def test_the_head_of_main_is_let_through(tmp_path: Path):
+    work = _repo_with_remote(tmp_path)
+    head = _head(work)
+
+    result = _branch_gate(work, "refs/heads/main", head)
+
+    assert result.returncode == 0, result.stderr
+    assert f"{head[:12]} is on main" in result.stdout
+
+
+def test_an_older_commit_that_main_has_moved_past_is_still_on_main(tmp_path: Path):
+    """`is-ancestor`, not equality: the remote can move between checkout and this step."""
+    work = _repo_with_remote(tmp_path)
+    older = _head(work)
+    _commit(work, "docs/notes.md", "later\n")
+    _git(work, "push", "--quiet", "origin", "HEAD:refs/heads/main")
+
+    assert _branch_gate(work, "refs/heads/main", older).returncode == 0
+
+
+@pytest.mark.parametrize("ref", ["refs/heads/release/2026.10.0", "refs/heads/sec/some-fix", "refs/tags/2026.10.0"])
+def test_a_run_dispatched_on_another_ref_is_refused_before_anything_is_fetched(tmp_path: Path, ref: str):
+    """The version-bump branch is the one most likely to be picked by mistake: it
+    carries the right version and has not been merged (#174)."""
+    work = _repo_with_remote(tmp_path)
+
+    result = _branch_gate(work, ref, _head(work))
+
+    assert result.returncode == 1
+    assert f"Releases run from main only; this run is on {ref}." in result.stderr
+    assert not (work / ".git" / "FETCH_HEAD").exists(), "the ref was refused, so nothing should have been fetched"
+
+
+def test_a_commit_the_remote_main_does_not_carry_is_refused(tmp_path: Path):
+    """The ref says main, but the commit is not on origin's main: an unpushed or
+    unmerged commit must not become a tag."""
+    work = _repo_with_remote(tmp_path)
+    _git(work, "checkout", "--quiet", "-b", "release/2026.10.0")
+    _commit(work, "pyproject.toml", _pyproject("2026.10.0"))
+    unmerged = _head(work)
+
+    result = _branch_gate(work, "refs/heads/main", unmerged)
+
+    assert result.returncode == 1
+    assert f"Releases run from main only; {unmerged[:12]} is not on it." in result.stderr
+
+
+def test_the_ancestry_check_asks_the_remote_not_the_checkout(tmp_path: Path):
+    """A local `main` that has been moved onto the commit proves nothing; the
+    step fetches origin's main and compares against that."""
+    work = _repo_with_remote(tmp_path)
+    _commit(work, "goodreads_mcp/server.py", "unpushed\n")
+    unpushed = _head(work)
+    assert _git(work, "branch", "--contains", unpushed).strip() == "* main"
+
+    result = _branch_gate(work, "refs/heads/main", unpushed)
+
+    assert result.returncode == 1
+    assert f"{unpushed[:12]} is not on it" in result.stderr
+
+
+def test_the_gate_follows_a_renamed_default_branch(tmp_path: Path):
+    """The ruleset targets `~DEFAULT_BRANCH`; the gate reads the same setting, not the string "main"."""
+    work = _repo_with_remote(tmp_path)
+    _git(work, "push", "--quiet", "origin", "HEAD:refs/heads/trunk")
+
+    assert _branch_gate(work, "refs/heads/trunk", _head(work), default="trunk").returncode == 0
+    assert _branch_gate(work, "refs/heads/main", _head(work), default="trunk").returncode == 1
+
+
+def test_an_unreachable_remote_refuses_instead_of_passing(tmp_path: Path):
+    work = _repo_with_remote(tmp_path)
+    _git(work, "remote", "set-url", "origin", f"file://{tmp_path / 'nowhere.git'}")
+
+    assert _branch_gate(work, "refs/heads/main", _head(work)).returncode != 0
+
+
+def test_the_gate_reads_the_ref_and_the_default_branch_from_the_event():
+    step = _step(_BRANCH_STEP)
+    assert step.env["REF"] == "${{ github.ref }}"
+    assert step.env["DEFAULT"] == "${{ github.event.repository.default_branch }}"
+
+
+def test_the_gate_is_the_first_step_after_the_checkout_and_is_unconditional():
+    """Before the opt-in check, before the decision, before a dry run's exemptions:
+    no input can turn it off, and nothing runs on an unreviewed commit first."""
+    assert _STEPS[0].uses.startswith("actions/checkout@")
+    assert _STEPS[1].name == _BRANCH_STEP
+    assert _STEPS[1].if_ == ""
+
+
+# --------------------------------------------------------------------------
 # Check the schedule is enabled
 # --------------------------------------------------------------------------
 
@@ -626,25 +737,41 @@ def test_the_baseline_is_sorted_as_versions_not_as_text(tmp_path: Path):
 # --------------------------------------------------------------------------
 
 
-def _check_runs(tmp_path: Path, runs: list[dict]) -> subprocess.CompletedProcess[str]:
-    """Run the step with a `gh` that applies the step's own `--jq` to `runs`."""
+def _check_runs(tmp_path: Path, *pages: list[dict]) -> subprocess.CompletedProcess[str]:
+    """Run the step with a `gh` that answers the check-runs call with `pages`.
+
+    The stub behaves like the real `gh api`: without `--paginate` only the first
+    page is served, and the `--jq` expression is applied to each page in turn.
+    Every call's path and flags are appended to `gh-args`, one line per call.
+    """
     if shutil.which("jq") is None:
         pytest.skip("jq is not installed")
-    (tmp_path / "runs.json").write_text(json.dumps({"check_runs": runs}), encoding="utf-8")
+    for index, runs in enumerate(pages or ([],)):
+        (tmp_path / f"page-{index}.json").write_text(json.dumps({"check_runs": runs}), encoding="utf-8")
     stubs = tmp_path / "bin"
     stubs.mkdir()
     _write_stub(
         stubs,
         "gh",
-        'printf "%s\\n" "$2" > gh-path\n'
-        'while [ "$#" -gt 0 ]; do [ "$1" = "--jq" ] && filter="$2"; shift; done\n'
-        'exec jq -r "$filter" runs.json\n',
+        'printf "%s\\n" "$*" >> gh-args\n'
+        "paginate=false; filter=.\n"
+        'while [ $# -gt 0 ]; do\n'
+        '  case "$1" in\n'
+        "    --paginate) paginate=true ;;\n"
+        '    --jq) filter="$2"; shift ;;\n'
+        "  esac\n"
+        "  shift\n"
+        "done\n"
+        'for page in page-*.json; do\n'
+        '  jq "$filter" "$page"\n'
+        '  [ "$paginate" = true ] || break\n'
+        "done\n",
     )
     return _run(
         _body(_CHECKS_STEP),
         tmp_path,
         path_dirs=[stubs],
-        env={"GH_TOKEN": "x", "GITHUB_REPOSITORY": "o/r", "GITHUB_SHA": "a" * 40},
+        env={"GH_TOKEN": "x", "GITHUB_REPOSITORY": "o/r", "GITHUB_SHA": "a" * 40, "REQUIRED_CHECK": "test"},
     )
 
 
@@ -659,7 +786,41 @@ def test_green_checks_let_the_release_through(tmp_path: Path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / "gh-path").read_text(encoding="utf-8").strip() == f"repos/o/r/commits/{'a' * 40}/check-runs"
+    calls = (tmp_path / "gh-args").read_text(encoding="utf-8").splitlines()
+    assert len(calls) == 1, "the check runs are read once, so both questions see one snapshot"
+    assert f"repos/o/r/commits/{'a' * 40}/check-runs" in calls[0]
+
+
+# The check-runs endpoint's default page size, which the step does not
+# override; the paginated fixtures split their runs at exactly this boundary.
+_CHECK_RUNS_PAGE = 30
+
+
+def test_the_required_check_is_found_when_it_has_fallen_off_the_first_page(tmp_path: Path):
+    """Main's head keeps collecting check runs after CI is done (nightly-compliance
+    daily, ai-fix.yml per issue event), newest first. After a quiet week `test`
+    is on the second page, and a gate that read one page would refuse a commit
+    that passed CI."""
+    noise = [{"name": "requested", "status": "completed", "conclusion": "skipped"}] * _CHECK_RUNS_PAGE
+    result = _check_runs(
+        tmp_path,
+        noise,
+        [{"name": "test", "status": "completed", "conclusion": "success"}],
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--paginate" in (tmp_path / "gh-args").read_text(encoding="utf-8")
+
+
+def test_a_red_check_on_a_later_page_still_stops_the_release(tmp_path: Path):
+    result = _check_runs(
+        tmp_path,
+        [{"name": "test", "status": "completed", "conclusion": "success"}] * _CHECK_RUNS_PAGE,
+        [{"name": "live", "status": "completed", "conclusion": "failure"}],
+    )
+
+    assert result.returncode == 1
+    assert "live: failure" in result.stderr
 
 
 def test_a_red_or_unfinished_check_stops_the_release(tmp_path: Path):
@@ -676,6 +837,40 @@ def test_a_red_or_unfinished_check_stops_the_release(tmp_path: Path):
     assert "test: failure" in result.stderr
     assert "live: queued" in result.stderr
     assert "ok:" not in result.stderr
+
+
+def test_a_commit_with_no_checks_at_all_is_refused(tmp_path: Path):
+    """The branches `prepare` pushes with github.token get no CI run, so their
+    head has an empty check_runs list: nothing red, and nothing passed. That
+    is the commit the gate used to wave through (#174)."""
+    result = _check_runs(tmp_path, [])
+
+    assert result.returncode == 1
+    assert f"no successful 'test' check on {'a' * 12}" in result.stderr
+
+
+def test_green_checks_without_the_required_one_are_refused(tmp_path: Path):
+    """Only the `release` job's own run and a skipped labeler: nothing failed, and `test` never ran."""
+    result = _check_runs(
+        tmp_path,
+        [
+            {"name": "label", "status": "completed", "conclusion": "skipped"},
+            {"name": "release", "status": "in_progress", "conclusion": None},
+        ],
+    )
+
+    assert result.returncode == 1
+    assert "are not green" not in result.stderr
+    assert "no successful 'test' check" in result.stderr
+
+
+def test_the_required_check_is_the_one_the_ruleset_on_main_requires():
+    """One name in two files: the check `release.yml` insists on is the check
+    `.github/rulesets/main.json` makes a pull request wait for."""
+    ruleset = json.loads((_ROOT / ".github" / "rulesets" / "main.json").read_text(encoding="utf-8"))
+    (rule,) = [rule for rule in ruleset["rules"] if rule["type"] == "required_status_checks"]
+    contexts = [check["context"] for check in rule["parameters"]["required_status_checks"]]
+    assert contexts == [_step(_CHECKS_STEP).env["REQUIRED_CHECK"]]
 
 
 # --------------------------------------------------------------------------
@@ -1090,6 +1285,7 @@ def test_only_the_steps_that_write_are_skipped_on_a_dry_run():
 def test_everything_is_checked_before_anything_is_written():
     order = [step.name for step in _STEPS]
     checks = [
+        _BRANCH_STEP,
         _CHECKS_STEP,
         _VERSION_STEP,
         _SYNC_STEP,

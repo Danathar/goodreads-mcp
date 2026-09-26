@@ -49,13 +49,16 @@ it. Everything runs in [`release.yml`](.github/workflows/release.yml):
 2. **Release.** On 09:00 UTC on the 1st of each month, or when run by hand
    without `prepare`, the workflow tags the version the merged `pyproject.toml`
    carries, attaches the `.mcpb` to a GitHub release, and publishes to PyPI.
-   It never changes the version itself.
+   It never changes the version itself, and it only ever tags a commit that
+   is on `main`: run it from `main` in "Use workflow from", or it stops before
+   doing anything.
 
 The scheduled run does nothing until the repository variable
 `AUTO_RELEASE_ENABLED` is `true`; a run by hand always proceeds. A release is
 skipped when nothing under `goodreads_mcp/` changed since the last release;
 tick `force` to release anyway (for a dependency-only change, say). It is
-refused when the commit's checks are not green, when the two files disagree,
+refused when the run is not on `main`, when the commit's checks are not green,
+when the commit has no passing `test` check, when the two files disagree,
 when a `version` given by hand is not the one `pyproject.toml` carries, when
 the version is not CalVer, is already tagged or is not newer than the last
 release, or when a `b1`/`rc1` suffix and the `prerelease` box disagree.

@@ -20,10 +20,11 @@ name: Release MCPB
 #   * `build-pypi` builds the wheel and sdist from a fresh checkout and
 #     uploads them, before any job has run third-party code in a tree.
 #   * `release` tags the version pyproject.toml carries on the checked-out
-#     commit and publishes it: monthly on a schedule, or by hand. Guarded;
-#     see "Decide whether to release" below, because most months here change
-#     only docs, tests and agent config, and a release people are prompted to
-#     install should contain something they can observe.
+#     commit and publishes it: monthly on a schedule, or by hand. It refuses
+#     any commit that is not on main, whichever branch it was started from.
+#     Guarded; see "Decide whether to release" below, because most months
+#     here change only docs, tests and agent config, and a release people are
+#     prompted to install should contain something they can observe.
 #
 # `publish-pypi` follows `release` and uploads the distributions `build-pypi`
 # built, only when `release` really published.
@@ -305,6 +306,35 @@ jobs:
           # `build-pypi` is one; that is tracked apart from this.
           persist-credentials: false
 
+      # The schedule always runs on the default branch. `workflow_dispatch`
+      # runs on whichever branch is picked under "Use workflow from", and the
+      # commit it checks out is that branch's head. Everything below assumes a
+      # commit that reached main through a pull request and the ruleset, so
+      # that is checked here instead of trusted from the dropdown. The
+      # version-bump branch `prepare` pushes is the easiest one to pick by
+      # mistake: it carries the right version and has not been merged.
+      #
+      # Two checks, because they answer different questions. The ref is what
+      # the dropdown chose. The ancestry check asks the remote whether the
+      # commit is really on that branch now, so a stale or rewritten ref
+      # cannot make an unreviewed commit look reviewed.
+      - name: Refuse any commit that is not on main
+        env:
+          REF: ${{ github.ref }}
+          DEFAULT: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ "$REF" != "refs/heads/$DEFAULT" ]; then
+            echo "::error::Releases run from $DEFAULT only; this run is on $REF." >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "refs/heads/$DEFAULT"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
+            echo "::error::Releases run from $DEFAULT only; ${GITHUB_SHA::12} is not on it." >&2
+            exit 1
+          fi
+          echo "${GITHUB_SHA::12} is on $DEFAULT."
+
       # The scheduled path is opt-in. Merging this workflow must not, by
       # itself, start publishing releases; someone has to decide that and set
       # the variable. A manual run is always allowed: a person is already in
@@ -370,25 +400,51 @@ jobs:
 
       # An automatic release publishes whatever is on main without a person
       # looking first. The least it can do is refuse when main's own checks
-      # are not green.
+      # are not green. "Green" means two things, and the second is the one
+      # that bites: no check may be red or unfinished, and the check the
+      # ruleset on main requires (`test`, .github/rulesets/main.json) must
+      # have passed. A commit with no check runs at all has nothing red on it.
+      # The branches this workflow's own `prepare` job pushes are exactly such
+      # commits: a push made with github.token starts no workflow run, so
+      # ci.yml never reports on them.
+      #
+      # Every page is read. The API returns 30 runs a page, newest first, and
+      # main's head keeps collecting runs after CI is done: nightly-compliance
+      # adds one a day and ai-fix.yml adds one per issue event, each in its
+      # own check suite. After a quiet week `test` is not on the first page,
+      # and a gate that read only that page would refuse a commit CI passed.
       - name: Require green checks on this commit
         if: steps.decide.outputs.go == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          REQUIRED_CHECK: test
         run: |
           set -euo pipefail
-          bad="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
-            --jq '[.check_runs[]
-                   | select(.name != "release")
-                   | select((.conclusion // "pending") | IN("success","skipped","neutral") | not)
-                   | "\(.name): \(.conclusion // .status)"] | .[]')"
+          # `--paginate` applies `--jq` to each page, so the runs are flattened
+          # and gathered back into one document that both questions read.
+          runs="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
+                    --jq '.check_runs[]' | jq -s '{check_runs: .}')"
+
+          bad="$(jq -r '[.check_runs[]
+                         | select(.name != "release")
+                         | select((.conclusion // "pending") | IN("success","skipped","neutral") | not)
+                         | "\(.name): \(.conclusion // .status)"] | .[]' <<< "$runs")"
 
           if [ -n "$bad" ]; then
             echo "::error::Not releasing - checks on ${GITHUB_SHA::12} are not green:" >&2
             printf '%s\n' "$bad" >&2
             exit 1
           fi
-          echo "All checks on ${GITHUB_SHA::12} are green."
+
+          passed="$(jq -r --arg name "$REQUIRED_CHECK" \
+            '[.check_runs[] | select(.name == $name and .conclusion == "success")] | length' <<< "$runs")"
+
+          if [ "$passed" -eq 0 ]; then
+            echo "::error::Not releasing - no successful '$REQUIRED_CHECK' check on ${GITHUB_SHA::12}." >&2
+            echo "A commit with no checks is one CI never ran on, not one that passed." >&2
+            exit 1
+          fi
+          echo "All checks on ${GITHUB_SHA::12} are green, and '$REQUIRED_CHECK' passed."
 
       - name: Set up Python 3.11
         if: steps.decide.outputs.go == 'true'
@@ -623,7 +679,8 @@ jobs:
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           # The tag is the only ref this job writes. The commit under it is
-          # already on main, having gone through a pull request and the
+          # on main ("Refuse any commit that is not on main" checked, rather
+          # than assumed, that), having gone through a pull request and the
           # ruleset, so a protected main needs no bypass for releases.
           git tag -a "$VERSION" -m "Release $VERSION"
           # The same header actions/checkout would have written to .git/config,
