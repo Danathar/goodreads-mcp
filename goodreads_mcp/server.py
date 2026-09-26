@@ -900,6 +900,7 @@ def popular_books(
     entries: list[dict[str, Any]] = []
     token: str | None = None
     has_more = False
+    seen_tokens: set[str] = set()
     while len(entries) < want:
         page = gr.graphql(
             _Q_TOP_LIST,
@@ -926,6 +927,10 @@ def popular_books(
             has_more = True
         if not edges or not has_more:
             break
+        # A server that hands back the same cursor must not loop forever.
+        if token in seen_tokens:
+            break
+        seen_tokens.add(token)
 
     return {
         "year": year,

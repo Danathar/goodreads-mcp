@@ -398,6 +398,33 @@ def test_popular_books_stops_when_the_page_says_there_is_no_next(monkeypatch):
     assert len(recorder.calls) == 1, "hasNextPage=False must end the loop"
 
 
+def test_popular_books_stops_when_a_page_token_repeats(monkeypatch):
+    """A server that hands back the same cursor must not loop forever."""
+    calls: list[dict[str, Any]] = []
+
+    def graphql(query, variables):
+        calls.append(variables)
+        # Refuse a third page so a regression fails here instead of being
+        # masked by the limit exit, which would otherwise allow 50 requests.
+        if len(calls) > 2:
+            raise AssertionError(f"unexpected third page request: {variables!r}")
+        n = len(calls)
+        return {
+            "getTopList": {
+                "edges": [{"rank": n, "count": 1, "node": {"legacyId": n}}],
+                "pageInfo": {"hasNextPage": True, "nextPageToken": "same-token"},
+            }
+        }
+
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    result = server.popular_books(2024, limit=50)
+
+    assert len(calls) == 2, "the repeated cursor must end the loop"
+    assert [b["book_id"] for b in result["books"]] == [1, 2]
+    assert result["has_more"] is True, "Goodreads still offered a cursor"
+
+
 def test_popular_books_stops_when_a_page_is_empty(monkeypatch):
     recorder = _Recorder(
         [
