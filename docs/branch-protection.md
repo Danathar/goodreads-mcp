@@ -6,17 +6,19 @@ it.
 
 ## Status
 
-The ruleset below is committed but **not yet applied** (#148). Until an admin
-applies it, `main` takes a direct push from any token with `contents: write`.
-Check it yourself; neither call needs admin rights:
+The ruleset below is **active**. An admin applied it on 2026-09-24 (#148) as
+ruleset `23955646`, and the live rules match the committed file. Check it
+yourself; neither call needs admin rights:
 
 ```bash
 gh api repos/Danathar/goodreads-mcp/branches/main --jq .protected
 gh api repos/Danathar/goodreads-mcp/rulesets
 ```
 
-Once it is applied, the first prints `true` and the second lists `protect
-main`. `false` and `[]` mean `main` is unprotected.
+The first prints `true` and the second lists `protect main` with
+`"enforcement": "active"`. `false`, `[]` or any other enforcement means the
+ruleset was removed or disabled, and `main` takes a direct push from any token
+with `contents: write` again.
 
 ## Why it matters here
 
@@ -77,24 +79,24 @@ does:
 Nothing in this repository pushes to `main` outside a pull request today. Every
 first-parent commit on `main` since 2026-08-01 is a pull request merge, and the
 last direct pushes were syncs from `shreeyachand/goodreads-mcp` on 2026-09-12
-and 2026-09-14. So applying this should change nothing about how work lands,
-except that bringing in upstream changes now takes a pull request too.
+and 2026-09-14. So applying it changed nothing about how work lands, except
+that bringing in upstream changes now takes a pull request too.
 
 ## Applying it
 
-A pull request cannot change repository settings. A repository admin applies
-it once, with:
+A pull request cannot change repository settings. A repository admin applied
+it once, on 2026-09-24, with:
 
 ```bash
 gh api --method POST repos/Danathar/goodreads-mcp/rulesets \
   --input .github/rulesets/main.json
 ```
 
-To change it later, edit the file through a pull request, then update the live
-ruleset from the file, using the id the first call returned:
+To change it, edit the file through a pull request, then update the live
+ruleset from the file. `23955646` is the id that first call returned:
 
 ```bash
-gh api --method PUT repos/Danathar/goodreads-mcp/rulesets/RULESET_ID \
+gh api --method PUT repos/Danathar/goodreads-mcp/rulesets/23955646 \
   --input .github/rulesets/main.json
 ```
 
