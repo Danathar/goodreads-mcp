@@ -32,7 +32,11 @@ could rewrite `goodreads_mcp/` before Trusted Publishing signed it. The build
 now lives in its own `build-pypi` job (`contents: read`,
 `persist-credentials: false`); `release` needs it, `publish-pypi` needs both.
 The `release` checkout persists no credentials; only "Tag the approved commit"
-holds the token, through `env:` and one `git -c http.…extraheader` push.
+holds the token, through `env:` and one `git -c http.…extraheader` push. That
+keeps it off disk, not out of reach: earlier steps in the same job can still
+get at it (`$GITHUB_ENV` → `BASH_ENV`, or a `.git/hooks` hook that runs inside
+`git tag`/`git push`). Real isolation is a separate tag-and-release job;
+tracked apart from #175.
 `@anthropic-ai/mcpb` is pinned to `2.1.2` in `release.yml`, `ci.yml` and the
 PR template. Policy file and tests updated. Offline count row 1066 → 1072.
 

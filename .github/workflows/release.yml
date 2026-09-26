@@ -298,6 +298,11 @@ jobs:
           # closures. With the default, the checkout leaves this job's
           # `contents: write` token in .git/config for all of them to read.
           # Only "Tag the approved commit" gets it, through its own `env:`.
+          # That keeps the token off disk; it does not isolate it. A step
+          # in this job can still reach a later step's env (`$GITHUB_ENV`
+          # sets `BASH_ENV`; a hook written to .git/hooks runs inside `git
+          # tag` and `git push`). Isolation means a separate job, the way
+          # `build-pypi` is one; that is tracked apart from this.
           persist-credentials: false
 
       # The scheduled path is opt-in. Merging this workflow must not, by
@@ -607,9 +612,10 @@ jobs:
         if: steps.decide.outputs.go == 'true' && !inputs.dry_run
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          # The checkout above persisted no credentials, so this is the only
-          # step of the job that can reach the repository with the job's
-          # `contents: write`, and it holds the token only for the push.
+          # The checkout above persisted no credentials, so the token is not
+          # on disk for the steps before this one to read; it reaches only
+          # this step's env and one push. Same job, though: see the note on
+          # the checkout for what that does not prevent.
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
