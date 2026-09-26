@@ -40,7 +40,7 @@ def test_get_book_live_bypasses_waf():
 
 def test_get_book_accepts_slug_form_live():
     book = server.get_book("11870085-the-fault-in-our-stars")
-    assert book["book_id"] == 11870085
+    assert book["book_id"] == "11870085"
 
 
 def test_get_book_histogram_and_languages_live():

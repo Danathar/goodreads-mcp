@@ -368,7 +368,7 @@ def test_popular_books_skips_edges_without_a_node(monkeypatch):
         {
             "rank": 2,
             "count": 9,
-            "book_id": 7,
+            "book_id": "7",
             "title": "Kept",
             "author": None,
             "average_rating": None,
@@ -421,7 +421,7 @@ def test_popular_books_stops_when_a_page_token_repeats(monkeypatch):
     result = server.popular_books(2024, limit=50)
 
     assert len(calls) == 2, "the repeated cursor must end the loop"
-    assert [b["book_id"] for b in result["books"]] == [1, 2]
+    assert [b["book_id"] for b in result["books"]] == ["1", "2"]
     assert result["has_more"] is True, "Goodreads still offered a cursor"
 
 
