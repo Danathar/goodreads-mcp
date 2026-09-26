@@ -3,7 +3,7 @@
 # unrelated project, so this one publishes as goodreads-mcp-ai. The import
 # package (goodreads_mcp) and the console script (goodreads-mcp) are unchanged.
 name = "goodreads-mcp-ai"
-version = "2026.9.0"
+version = "2026.9.1"
 description = "Read-only MCP server for Goodreads (no API required): search, books, shelves, ratings"
 readme = "README.md"
 license = "GPL-3.0-only"
