@@ -56,8 +56,9 @@ The scheduled run does nothing until the repository variable
 skipped when nothing under `goodreads_mcp/` changed since the last release;
 tick `force` to release anyway (for a dependency-only change, say). It is
 refused when the commit's checks are not green, when the two files disagree,
-when the version is not CalVer, is already tagged or is not newer than the
-last release, or when a `b1`/`rc1` suffix and the `prerelease` box disagree.
+when a `version` given by hand is not the one `pyproject.toml` carries, when
+the version is not CalVer, is already tagged or is not newer than the last
+release, or when a `b1`/`rc1` suffix and the `prerelease` box disagree.
 Tick `dry_run` to run every check and build the bundle without tagging or
 publishing.
 

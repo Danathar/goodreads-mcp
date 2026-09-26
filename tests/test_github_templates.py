@@ -311,7 +311,7 @@ def test_ci_is_the_workflow_that_runs_on_a_pull_request():
 
 
 def test_the_two_versions_the_checklist_pairs_agree_today():
-    """The checklist asks for them to be bumped together; they start together."""
+    """The checklist names the pair and #165's `prepare` run sets both; they agree."""
     manifest = json.loads(_text(_ROOT / "manifest.json"))["version"]
     match = re.search(r'^version = "(.+?)"', _text(_ROOT / "pyproject.toml"), re.M)
     assert match, "pyproject.toml no longer declares a version the checklist can pair"
@@ -322,7 +322,7 @@ def test_the_two_versions_the_checklist_pairs_agree_today():
 
 
 def test_release_yml_still_enforces_the_pairing_the_checklist_defers_to():
-    """The checklist says "(if publishing a release)" — that gate must exist."""
+    """The release job refuses a pair that disagrees, whatever changed it."""
     body = _workflow_steps.Workflow(_RELEASE, job="release").step("Check manifest.json matches pyproject.toml").run
     assert "manifest.json" in body and "pyproject.toml" in body
     assert "exit 1" in body, "the version-sync step no longer fails the release"

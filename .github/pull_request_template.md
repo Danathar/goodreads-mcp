@@ -6,4 +6,4 @@
 
 - [ ] `pytest -q` passes locally
 - [ ] `npx -y @anthropic-ai/mcpb validate ./manifest.json` passes (if `manifest.json` changed)
-- [ ] `pyproject.toml` / `manifest.json` versions bumped together (if publishing a release)
+- [ ] Version in `pyproject.toml` / `manifest.json` left unchanged (only the release workflow's `prepare` pull request changes it)
