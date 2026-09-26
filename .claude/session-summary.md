@@ -24,27 +24,26 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-26 — #180, list the server on the official MCP registry
+## 2026-09-26 — #189, resolve every README link target
 
-**Done:** `server.json` (`io.github.Danathar/goodreads-mcp-ai`, PyPI package
-`goodreads-mcp-ai`, `runtimeHint: uvx`, placeholder version `0.0.0`), the
-`mcp-name:` ownership comment in `README.md` that the registry reads off the
-PyPI description, a `goodreads-mcp-ai` console script so `uvx goodreads-mcp-ai`
-runs (uv refused it before: the only executable was `goodreads-mcp`), and a
-`publish-registry` job in `release.yml` after `publish-pypi`: waits for PyPI to
-serve the version, writes the released number into a copy of `server.json`,
-`mcp-publisher login github-oidc`, publish. Policy file, labeler, risk tiers,
-CONTRIBUTING and AGENTS.md say so; `tests/test_registry_listing.py` pins the
-three things the registry checks. Offline count row 1088 → 1102.
+**Done:** `tests/test_readme_links.py`. Every link and image in `README.md`
+is classified — `blob/main/<path>[#anchor]` (tracked file, heading slug),
+`tree/main/<dir>/` (tracked directory), `<repo>#anchor` (README heading),
+`actions/workflows/<file>` and its badge (workflow file, `?branch=main`),
+`/releases`, `pypi.org/project/<project.name>/`, or external — and an
+unclassified link into this repository fails. Link text that is a path is
+held to its target both ways. The `## documentation` list is checked against
+`docs/*.md` with `_NOT_IN_INDEX` naming the deliberate omission
+(`docs/branch-protection.md`). Offline count row 1103 → 1185 (1182 + #188's two + the link-forms test).
 
-**In flight:** the PR on `feat/180-mcp-registry-publish`.
+**In flight:** the PR on `test/189-readme-link-targets`. #188 (open) also
+edits the `docs/quality.md` count row; whichever merges second must re-pin it
+(`pytest -q tests/test_coverage_thresholds.py` prints the right row).
 
-**Blocked on:** the first date-numbered release. `goodreads-mcp-ai` is not on
-PyPI yet (`pypi.org/pypi/goodreads-mcp-ai/json` is a 404; the last release is
-`v0.1.1`), and the registry validates a listing against the PyPI version page,
-so the listing cannot be submitted by hand before that release either.
+**Blocked on:** nothing. Whether `docs/branch-protection.md` belongs in the
+README index is the maintainer's call: delete it from `_NOT_IN_INDEX` and the
+test says where to list it.
 
-**Watch:** the registry job installs `mcp-publisher` pinned to `v1.8.1` and
-checks its sha256. If a publish fails with "invalid audience" or another auth
-error, bump both env values in the "Install mcp-publisher" step to the newest
-release and its checksums file line.
+**Watch:** `goodreads-mcp-ai` on PyPI and the registry listing still wait for
+the first date-numbered release (#180); the `publish-registry` job pins
+`mcp-publisher` `v1.8.1` by sha256 — bump both env values on an auth error.
