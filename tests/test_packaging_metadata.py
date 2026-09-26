@@ -56,7 +56,7 @@ def test_the_readme_links_work_on_the_pypi_page():
     import re
 
     readme = (_ROOT / _PROJECT["readme"]).read_text(encoding="utf-8")
-    targets = re.findall(r"\]\(([^)\s]+)\)", readme) + re.findall(r'\b(?:src|href)\s*=\s*"([^"]+)"', readme)
+    targets = re.findall(r"\]\(([^)\s]+)\)", readme) + re.findall(r'\b(?i:src|href)\s*=\s*"([^"]+)"', readme)
     assert targets, "found no links in README.md; the pattern is wrong"
     relative = [t for t in targets if not re.match(r"(?:https?:|mailto:)", t)]
     assert relative == [], f"README.md links that break on PyPI: {relative}"
