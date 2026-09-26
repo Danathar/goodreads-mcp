@@ -47,7 +47,9 @@ _NOT_IN_INDEX = {
 # Markdown `[text](target)` / `![alt](target)` with no bracket inside the text.
 # `_md_links` peels a badge, `[![alt](image)](page)`, from the inside out.
 _MD_LINK = re.compile(r"!?\[([^\[\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
-_HTML_LINK = re.compile(r'\b(?:src|href)="([^"]+)"')
+# HTML allows whitespace around `=`; the same spacing is accepted everywhere
+# an attribute is read or guarded below and in tests/test_packaging_metadata.py.
+_HTML_LINK = re.compile(r'\b(?:src|href)\s*=\s*"([^"]+)"')
 # Link forms `_MD_LINK` and `_HTML_LINK` do not see. Any of these in the README
 # would carry a target no test resolves, so their presence fails
 # `test_the_readme_uses_only_link_forms_this_file_resolves`.
@@ -57,7 +59,7 @@ _UNSUPPORTED_LINK_FORMS = {
     "autolink `<https://...>`": re.compile(r"<https?://[^>\s]+>"),
     # `_HTML_LINK` reads double-quoted attributes only; the other two spellings
     # HTML allows would otherwise be a target nothing checks.
-    "single-quoted or unquoted HTML attribute `href='...'` / `src=...`": re.compile(r"\b(?:src|href)=(?:'|[^\"'\s])"),
+    "single-quoted or unquoted HTML attribute `href='...'` / `src=...`": re.compile(r"\b(?:src|href)\s*=\s*(?:'|[^\"'\s])"),
     # Anything else: a URL not opened by `(`, `"`, `<` or a backtick. A URL
     # after `'` counts, so a single-quoted attribute is caught twice, on
     # purpose, and a URL quoted in prose is not a hidden link.
@@ -189,7 +191,7 @@ def test_the_link_pattern_finds_the_absolute_link_test_finds():
     """Same targets as `test_the_readme_links_work_on_the_pypi_page`, so neither
     pattern silently sees a subset of the README."""
     raw = (_ROOT / _README).read_text(encoding="utf-8")
-    loose = re.findall(r"\]\(([^)\s]+)\)", raw) + re.findall(r'\b(?:src|href)="([^"]+)"', raw)
+    loose = re.findall(r"\]\(([^)\s]+)\)", raw) + re.findall(r'\b(?:src|href)\s*=\s*"([^"]+)"', raw)
     assert sorted(loose) == sorted(target for _, target in _LINKS)
 
 
