@@ -55,7 +55,13 @@ _UNSUPPORTED_LINK_FORMS = {
     "reference-style link `[text][ref]` / `[text][]`": re.compile(r"\]\[[^\]]*\]"),
     "reference definition `[ref]: target`": re.compile(r"^[ \t]{0,3}\[[^\]]+\]:[ \t]", re.M),
     "autolink `<https://...>`": re.compile(r"<https?://[^>\s]+>"),
-    "bare URL": re.compile(r"(?<![(\"'<`])https?://[^\s)\"'>`]+"),
+    # `_HTML_LINK` reads double-quoted attributes only; the other two spellings
+    # HTML allows would otherwise be a target nothing checks.
+    "single-quoted or unquoted HTML attribute `href='...'` / `src=...`": re.compile(r"\b(?:src|href)=(?:'|[^\"'\s])"),
+    # Anything else: a URL not opened by `(`, `"`, `<` or a backtick. A URL
+    # after `'` counts, so a single-quoted attribute is caught twice, on
+    # purpose, and a URL quoted in prose is not a hidden link.
+    "bare URL": re.compile(r"(?<![(\"<`])https?://[^\s)\"'>`]+"),
 }
 _HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$", re.M)
 # Link text that reads as a path: `docs/design.md`, `ci.yml`, `docs/reflections/`,
