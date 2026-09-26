@@ -806,6 +806,13 @@ jobs:
           # Both the server version and the package version: the registry
           # refuses a version it has already seen, and the package version is
           # the PyPI release it validates against.
+          #
+          # A pre-release keeps its PEP 440 spelling (2026.10.0rc1) in the
+          # server version too, on purpose. The schema only says the field
+          # SHOULD be semver, and `validate` accepts it. The registry ranks
+          # a non-semver version below every semver one, so an rc never
+          # becomes the listing's latest over a stable release. Rewritten
+          # as semver (2026.10.0-rc.1) it would outrank 2026.9.0.
           jq --arg v "$VERSION" '.version = $v | .packages[].version = $v' server.json > server.release.json
           if [ "$(jq -r '[.version, .packages[].version] | unique | join(",")' server.release.json)" != "$VERSION" ]; then
             echo "::error::server.release.json does not carry $VERSION in every version field." >&2
