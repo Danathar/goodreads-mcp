@@ -34,7 +34,7 @@ is classified — `blob/main/<path>[#anchor]` (tracked file, heading slug),
 unclassified link into this repository fails. Link text that is a path is
 held to its target both ways. The `## documentation` list is checked against
 `docs/*.md` with `_NOT_IN_INDEX` naming the deliberate omission
-(`docs/branch-protection.md`). Offline count row 1103 → 1182.
+(`docs/branch-protection.md`). Offline count row 1103 → 1185 (1182 + #188's two + the link-forms test).
 
 **In flight:** the PR on `test/189-readme-link-targets`. #188 (open) also
 edits the `docs/quality.md` count row; whichever merges second must re-pin it

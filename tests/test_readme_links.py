@@ -48,6 +48,15 @@ _NOT_IN_INDEX = {
 # `_md_links` peels a badge, `[![alt](image)](page)`, from the inside out.
 _MD_LINK = re.compile(r"!?\[([^\[\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 _HTML_LINK = re.compile(r'\b(?:src|href)="([^"]+)"')
+# Link forms `_MD_LINK` and `_HTML_LINK` do not see. Any of these in the README
+# would carry a target no test resolves, so their presence fails
+# `test_the_readme_uses_only_link_forms_this_file_resolves`.
+_UNSUPPORTED_LINK_FORMS = {
+    "reference-style link `[text][ref]` / `[text][]`": re.compile(r"\]\[[^\]]*\]"),
+    "reference definition `[ref]: target`": re.compile(r"^[ \t]{0,3}\[[^\]]+\]:[ \t]", re.M),
+    "autolink `<https://...>`": re.compile(r"<https?://[^>\s]+>"),
+    "bare URL": re.compile(r"(?<![(\"'<`])https?://[^\s)\"'>`]+"),
+}
 _HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$", re.M)
 # Link text that reads as a path: `docs/design.md`, `ci.yml`, `docs/reflections/`,
 # `LICENSE.MIT`, `LICENSE`. A word with neither a slash nor a dot is prose,
@@ -153,6 +162,20 @@ def _classify(target: str) -> tuple[str, str]:
     pytest.fail(
         f"{target} is a link into this repository of a shape this test does not resolve. "
         "Classify it in tests/test_readme_links.py::_classify so it is checked."
+    )
+
+
+def test_the_readme_uses_only_link_forms_this_file_resolves():
+    """A reference-style link, its `[ref]: target` definition, an autolink or a
+    bare URL is a target `_readme_links` never sees, so a dead one would ship
+    unchecked. The README uses none today; this keeps it that way, or makes
+    adding a parser for the form a visible step."""
+    prose = _prose(_README)
+    found = {name: pattern.findall(prose) for name, pattern in _UNSUPPORTED_LINK_FORMS.items()}
+    found = {name: hits for name, hits in found.items() if hits}
+    assert not found, (
+        f"{_README} uses link forms tests/test_readme_links.py does not resolve: {found}. "
+        "Rewrite them as inline `[text](target)` links, or extend `_readme_links` to parse the form."
     )
 
 
