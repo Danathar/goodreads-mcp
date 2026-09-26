@@ -366,7 +366,7 @@ jobs:
           set -euo pipefail
           # `--paginate` applies `--jq` to each page, so the runs are flattened
           # and gathered back into one document that both questions read.
-          runs="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
+          runs="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
                     --jq '.check_runs[]' | jq -s '{check_runs: .}')"
 
           bad="$(jq -r '[.check_runs[]

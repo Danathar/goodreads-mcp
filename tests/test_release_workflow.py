@@ -778,7 +778,12 @@ def test_green_checks_let_the_release_through(tmp_path: Path):
     assert result.returncode == 0, result.stderr
     calls = (tmp_path / "gh-args").read_text(encoding="utf-8").splitlines()
     assert len(calls) == 1, "the check runs are read once, so both questions see one snapshot"
-    assert f"repos/o/r/commits/{'a' * 40}/check-runs?per_page=100" in calls[0]
+    assert f"repos/o/r/commits/{'a' * 40}/check-runs" in calls[0]
+
+
+# The check-runs endpoint's default page size, which the step does not
+# override; the paginated fixtures split their runs at exactly this boundary.
+_CHECK_RUNS_PAGE = 30
 
 
 def test_the_required_check_is_found_when_it_has_fallen_off_the_first_page(tmp_path: Path):
@@ -786,7 +791,7 @@ def test_the_required_check_is_found_when_it_has_fallen_off_the_first_page(tmp_p
     daily, ai-fix.yml per issue event), newest first. After a quiet week `test`
     is on the second page, and a gate that read one page would refuse a commit
     that passed CI."""
-    noise = [{"name": "requested", "status": "completed", "conclusion": "skipped"} for _ in range(30)]
+    noise = [{"name": "requested", "status": "completed", "conclusion": "skipped"}] * _CHECK_RUNS_PAGE
     result = _check_runs(
         tmp_path,
         noise,
@@ -800,7 +805,7 @@ def test_the_required_check_is_found_when_it_has_fallen_off_the_first_page(tmp_p
 def test_a_red_check_on_a_later_page_still_stops_the_release(tmp_path: Path):
     result = _check_runs(
         tmp_path,
-        [{"name": "test", "status": "completed", "conclusion": "success"}] * 30,
+        [{"name": "test", "status": "completed", "conclusion": "success"}] * _CHECK_RUNS_PAGE,
         [{"name": "live", "status": "completed", "conclusion": "failure"}],
     )
 
