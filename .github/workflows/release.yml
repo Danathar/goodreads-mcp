@@ -351,6 +351,12 @@ jobs:
       # The branches this workflow's own `prepare` job pushes are exactly such
       # commits: a push made with github.token starts no workflow run, so
       # ci.yml never reports on them.
+      #
+      # Every page is read. The API returns 30 runs a page, newest first, and
+      # main's head keeps collecting runs after CI is done: nightly-compliance
+      # adds one a day and ai-fix.yml adds one per issue event, each in its
+      # own check suite. After a quiet week `test` is not on the first page,
+      # and a gate that read only that page would refuse a commit CI passed.
       - name: Require green checks on this commit
         if: steps.decide.outputs.go == 'true'
         env:
@@ -358,8 +364,10 @@ jobs:
           REQUIRED_CHECK: test
         run: |
           set -euo pipefail
-          # Fetched once so both questions are asked of the same snapshot.
-          runs="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs")"
+          # `--paginate` applies `--jq` to each page, so the runs are flattened
+          # and gathered back into one document that both questions read.
+          runs="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
+                    --jq '.check_runs[]' | jq -s '{check_runs: .}')"
 
           bad="$(jq -r '[.check_runs[]
                          | select(.name != "release")

@@ -727,14 +727,36 @@ def test_the_baseline_is_sorted_as_versions_not_as_text(tmp_path: Path):
 # --------------------------------------------------------------------------
 
 
-def _check_runs(tmp_path: Path, runs: list[dict]) -> subprocess.CompletedProcess[str]:
-    """Run the step with a `gh` that answers the check-runs call with `runs`."""
+def _check_runs(tmp_path: Path, *pages: list[dict]) -> subprocess.CompletedProcess[str]:
+    """Run the step with a `gh` that answers the check-runs call with `pages`.
+
+    The stub behaves like the real `gh api`: without `--paginate` only the first
+    page is served, and the `--jq` expression is applied to each page in turn.
+    Every call's path and flags are appended to `gh-args`, one line per call.
+    """
     if shutil.which("jq") is None:
         pytest.skip("jq is not installed")
-    (tmp_path / "runs.json").write_text(json.dumps({"check_runs": runs}), encoding="utf-8")
+    for index, runs in enumerate(pages or ([],)):
+        (tmp_path / f"page-{index}.json").write_text(json.dumps({"check_runs": runs}), encoding="utf-8")
     stubs = tmp_path / "bin"
     stubs.mkdir()
-    _write_stub(stubs, "gh", 'printf "%s\\n" "$2" >> gh-path\ncat runs.json\n')
+    _write_stub(
+        stubs,
+        "gh",
+        'printf "%s\\n" "$*" >> gh-args\n'
+        "paginate=false; filter=.\n"
+        'while [ $# -gt 0 ]; do\n'
+        '  case "$1" in\n'
+        "    --paginate) paginate=true ;;\n"
+        '    --jq) filter="$2"; shift ;;\n'
+        "  esac\n"
+        "  shift\n"
+        "done\n"
+        'for page in page-*.json; do\n'
+        '  jq "$filter" "$page"\n'
+        '  [ "$paginate" = true ] || break\n'
+        "done\n",
+    )
     return _run(
         _body(_CHECKS_STEP),
         tmp_path,
@@ -754,9 +776,36 @@ def test_green_checks_let_the_release_through(tmp_path: Path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / "gh-path").read_text(encoding="utf-8").splitlines() == [
-        f"repos/o/r/commits/{'a' * 40}/check-runs"
-    ], "the check runs are read once, so both questions see one snapshot"
+    calls = (tmp_path / "gh-args").read_text(encoding="utf-8").splitlines()
+    assert len(calls) == 1, "the check runs are read once, so both questions see one snapshot"
+    assert f"repos/o/r/commits/{'a' * 40}/check-runs?per_page=100" in calls[0]
+
+
+def test_the_required_check_is_found_when_it_has_fallen_off_the_first_page(tmp_path: Path):
+    """Main's head keeps collecting check runs after CI is done (nightly-compliance
+    daily, ai-fix.yml per issue event), newest first. After a quiet week `test`
+    is on the second page, and a gate that read one page would refuse a commit
+    that passed CI."""
+    noise = [{"name": "requested", "status": "completed", "conclusion": "skipped"} for _ in range(30)]
+    result = _check_runs(
+        tmp_path,
+        noise,
+        [{"name": "test", "status": "completed", "conclusion": "success"}],
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--paginate" in (tmp_path / "gh-args").read_text(encoding="utf-8")
+
+
+def test_a_red_check_on_a_later_page_still_stops_the_release(tmp_path: Path):
+    result = _check_runs(
+        tmp_path,
+        [{"name": "test", "status": "completed", "conclusion": "success"}] * 30,
+        [{"name": "live", "status": "completed", "conclusion": "failure"}],
+    )
+
+    assert result.returncode == 1
+    assert "live: failure" in result.stderr
 
 
 def test_a_red_or_unfinished_check_stops_the_release(tmp_path: Path):
