@@ -616,7 +616,7 @@ def test_the_readme_badge_points_at_this_workflow():
     """The badge is how a reader learns the nightly exists at all."""
     readme = _README.read_text(encoding="utf-8")
     assert "actions/workflows/nightly-compliance.yml/badge.svg" in readme
-    assert "(.github/workflows/nightly-compliance.yml)" in readme
+    assert "(https://github.com/Danathar/goodreads-mcp/blob/main/.github/workflows/nightly-compliance.yml)" in readme
     name = re.search(r"^name: (.+)$", _WORKFLOW.text, re.M).group(1)
     assert f"[![{name}]" in readme, "the badge label no longer matches the workflow's name:"
 

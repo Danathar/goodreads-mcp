@@ -47,3 +47,16 @@ def test_the_package_page_links_point_at_this_fork():
     assert urls["Homepage"] == _FORK_URL
     assert urls["Repository"] == _FORK_URL
     assert all(url.startswith(_FORK_URL) for url in urls.values())
+
+
+def test_the_readme_links_work_on_the_pypi_page():
+    """README.md is the PyPI description, and PyPI resolves a relative link against
+    pypi.org, so `docs/maintenance.md` or `#about-this-project` lands on a PyPI 404.
+    Every link and image in it must be absolute."""
+    import re
+
+    readme = (_ROOT / _PROJECT["readme"]).read_text(encoding="utf-8")
+    targets = re.findall(r"\]\(([^)\s]+)\)", readme) + re.findall(r'\b(?:src|href)="([^"]+)"', readme)
+    assert targets, "found no links in README.md; the pattern is wrong"
+    relative = [t for t in targets if not re.match(r"(?:https?:|mailto:)", t)]
+    assert relative == [], f"README.md links that break on PyPI: {relative}"

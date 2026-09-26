@@ -2,9 +2,9 @@
 [![Nightly compliance](https://github.com/Danathar/goodreads-mcp/actions/workflows/nightly-compliance.yml/badge.svg?branch=main)](https://github.com/Danathar/goodreads-mcp/actions/workflows/nightly-compliance.yml)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Danathar/goodreads-mcp)
 [![Maintenance assisted by Hivecommons Hive](https://img.shields.io/badge/maintenance%20assisted%20by-Hivecommons%20Hive-1f6feb)](https://github.com/hivecommons/hive)
-[![ACMM L5 Semi-Autonomous](https://img.shields.io/badge/ACMM-L5%20Semi--Autonomous-2da44e)](docs/maintenance.md)
-[![AI assisted](https://img.shields.io/badge/AI-assisted-d29922)](#about-this-project)
-[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+[![ACMM L5 Semi-Autonomous](https://img.shields.io/badge/ACMM-L5%20Semi--Autonomous-2da44e)](https://github.com/Danathar/goodreads-mcp/blob/main/docs/maintenance.md)
+[![AI assisted](https://img.shields.io/badge/AI-assisted-d29922)](https://github.com/Danathar/goodreads-mcp#about-this-project)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](https://github.com/Danathar/goodreads-mcp/blob/main/LICENSE)
 
 # 📚 goodreads-mcp
 
@@ -67,7 +67,7 @@ uv run goodreads-mcp
 
 Requires Python ≥ 3.10.
 
-Each date-numbered release is also published to PyPI as [`goodreads-mcp-ai`](https://pypi.org/project/goodreads-mcp-ai/) (the `goodreads-mcp` name there belongs to an unrelated project) and listed on the [official MCP registry](https://registry.modelcontextprotocol.io) as `io.github.Danathar/goodreads-mcp-ai`, from [`server.json`](server.json). The listing carries a `uvx` runtime hint; a client that follows it runs `uvx goodreads-mcp-ai`, which you can also run yourself.
+Each date-numbered release is also published to PyPI as [`goodreads-mcp-ai`](https://pypi.org/project/goodreads-mcp-ai/) (the `goodreads-mcp` name there belongs to an unrelated project) and listed on the [official MCP registry](https://registry.modelcontextprotocol.io) as `io.github.Danathar/goodreads-mcp-ai`, from [`server.json`](https://github.com/Danathar/goodreads-mcp/blob/main/server.json). The listing carries a `uvx` runtime hint; a client that follows it runs `uvx goodreads-mcp-ai`, which you can also run yourself.
 
 ## config (optional)
 
@@ -84,7 +84,7 @@ Env var `GOODREADS_USER_ID` overrides the file. A config file that can't be read
 
 ## Claude Desktop config
 
-**Bundle.** Each [release](https://github.com/Danathar/goodreads-mcp/releases) carries a `goodreads-mcp.mcpb`. Releases come out monthly when the server itself changed, numbered by date (`2026.10.0`, `2026.10.1`, `2026.11.0`); `0.1.1` was the last of the old numbering, and every date-numbered release is newer than it. See [CONTRIBUTING.md](CONTRIBUTING.md#releases) for how one is cut. Open the `.mcpb` in Claude Desktop to install. The bundle ships no dependencies — the manifest launches the server with `uv run`, and the host resolves `pyproject.toml` into a private environment on first launch — so one bundle runs on macOS, Windows and Linux with any Python ≥ 3.10. The bundle's optional "Goodreads User ID" setting (`user_config.goodreads_user_id`) is passed to the server as `GOODREADS_USER_ID`.
+**Bundle.** Each [release](https://github.com/Danathar/goodreads-mcp/releases) carries a `goodreads-mcp.mcpb`. Releases come out monthly when the server itself changed, numbered by date (`2026.10.0`, `2026.10.1`, `2026.11.0`); `0.1.1` was the last of the old numbering, and every date-numbered release is newer than it. See [CONTRIBUTING.md](https://github.com/Danathar/goodreads-mcp/blob/main/CONTRIBUTING.md#releases) for how one is cut. Open the `.mcpb` in Claude Desktop to install. The bundle ships no dependencies — the manifest launches the server with `uv run`, and the host resolves `pyproject.toml` into a private environment on first launch — so one bundle runs on macOS, Windows and Linux with any Python ≥ 3.10. The bundle's optional "Goodreads User ID" setting (`user_config.goodreads_user_id`) is passed to the server as `GOODREADS_USER_ID`.
 
 **Manual.** Add the server to `claude_desktop_config.json` — on macOS `~/Library/Application Support/Claude/claude_desktop_config.json`, on Windows `%APPDATA%\Claude\claude_desktop_config.json`; in any version, Settings → Developer → Edit Config opens it:
 
@@ -110,7 +110,7 @@ The endpoints are unofficial, so verify in this order:
 4. `get_shelf("to-read")` — checks your `user_id` + RSS
 5. `list_shelves()` — best-effort shelf-name scrape
 
-For an end-to-end example that chains the tools, see [prompts/research-a-book.md](prompts/research-a-book.md).
+For an end-to-end example that chains the tools, see [prompts/research-a-book.md](https://github.com/Danathar/goodreads-mcp/blob/main/prompts/research-a-book.md).
 
 ## tests
 
@@ -120,19 +120,19 @@ For an end-to-end example that chains the tools, see [prompts/research-a-book.md
 GOODREADS_LIVE=1 .venv/bin/pytest      # + live network smoke tests
 ```
 
-The offline suite runs on fixtures; CI runs it with `pytest-cov` and enforces a coverage floor (`--cov-fail-under` in [ci.yml](.github/workflows/ci.yml)). The live smoke tests are in [tests/e2e/test_smoke_live.py](tests/e2e/test_smoke_live.py) and skip unless `GOODREADS_LIVE=1` is set. The [nightly compliance run](.github/workflows/nightly-compliance.yml) runs the live suite against the real endpoints every night, so upstream drift shows up within a day.
+The offline suite runs on fixtures; CI runs it with `pytest-cov` and enforces a coverage floor (`--cov-fail-under` in [ci.yml](https://github.com/Danathar/goodreads-mcp/blob/main/.github/workflows/ci.yml)). The live smoke tests are in [tests/e2e/test_smoke_live.py](https://github.com/Danathar/goodreads-mcp/blob/main/tests/e2e/test_smoke_live.py) and skip unless `GOODREADS_LIVE=1` is set. The [nightly compliance run](https://github.com/Danathar/goodreads-mcp/blob/main/.github/workflows/nightly-compliance.yml) runs the live suite against the real endpoints every night, so upstream drift shows up within a day.
 
 ## documentation
 
-- [docs/design.md](docs/design.md) — design notes: the data surfaces, WAF and login handling, politeness and concurrency
-- [docs/roadmap.md](docs/roadmap.md) — ideas not built yet
-- [docs/maintenance.md](docs/maintenance.md) — how this repository is maintained (Hive, ACMM L5, human review)
-- [docs/quality.md](docs/quality.md) — what the tests and numbers do and do not prove
-- [docs/risk-tiers.md](docs/risk-tiers.md) — the risk tier every pull request declares
-- [docs/review-rubric.md](docs/review-rubric.md) — the review checklist
-- [docs/metrics.md](docs/metrics.md) — outcome metrics
-- [docs/reflections/](docs/reflections/) — lessons learned about this codebase
-- [docs/SECURITY-AI.md](docs/SECURITY-AI.md) — what AI agents may and may not touch
+- [docs/design.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/design.md) — design notes: the data surfaces, WAF and login handling, politeness and concurrency
+- [docs/roadmap.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/roadmap.md) — ideas not built yet
+- [docs/maintenance.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/maintenance.md) — how this repository is maintained (Hive, ACMM L5, human review)
+- [docs/quality.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/quality.md) — what the tests and numbers do and do not prove
+- [docs/risk-tiers.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/risk-tiers.md) — the risk tier every pull request declares
+- [docs/review-rubric.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/review-rubric.md) — the review checklist
+- [docs/metrics.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/metrics.md) — outcome metrics
+- [docs/reflections/](https://github.com/Danathar/goodreads-mcp/tree/main/docs/reflections/) — lessons learned about this codebase
+- [docs/SECURITY-AI.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/SECURITY-AI.md) — what AI agents may and may not touch
 
 ## about this project
 
@@ -145,6 +145,6 @@ The offline suite runs on fixtures; CI runs it with `pytest-cov` and enforces a 
 
 ## license
 
-This fork is licensed under the [GNU General Public License v3.0](LICENSE), version 3 only (`GPL-3.0-only`) — no automatic upgrade to later versions.
+This fork is licensed under the [GNU General Public License v3.0](https://github.com/Danathar/goodreads-mcp/blob/main/LICENSE), version 3 only (`GPL-3.0-only`) — no automatic upgrade to later versions.
 
-It incorporates code from [`shreeyachand/goodreads-mcp`](https://github.com/shreeyachand/goodreads-mcp), Copyright (c) 2026 Shreeya Chand, released under the MIT License. That code remains under MIT; its licence text and copyright notice are preserved in [LICENSE.MIT](LICENSE.MIT) as the MIT licence requires. The combined work — upstream code together with this fork's changes — is distributed under GPL-3.0.
+It incorporates code from [`shreeyachand/goodreads-mcp`](https://github.com/shreeyachand/goodreads-mcp), Copyright (c) 2026 Shreeya Chand, released under the MIT License. That code remains under MIT; its licence text and copyright notice are preserved in [LICENSE.MIT](https://github.com/Danathar/goodreads-mcp/blob/main/LICENSE.MIT) as the MIT licence requires. The combined work — upstream code together with this fork's changes — is distributed under GPL-3.0.
