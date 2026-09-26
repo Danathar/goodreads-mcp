@@ -21,6 +21,7 @@
       "workflow": "{}",
       "jobs": {
         "prepare": {"contents": "write", "pull-requests": "write"},
+        "build-pypi": {"contents": "read"},
         "release": {"contents": "write", "checks": "read"},
         "publish-pypi": {"id-token": "write"}
       }

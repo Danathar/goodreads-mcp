@@ -16,8 +16,9 @@ exactly as the runner hands it over — in a temp directory, against fixture
 files and real throwaway git repositories, with recording stubs on `PATH` for
 the tools that would reach the network.
 
-Since #165 the workflow has two jobs that each run on their own: `prepare`
-opens the CalVer version-bump pull request, and `release` tags and publishes
+Since #165 the workflow has jobs that each run on their own: `prepare` opens
+the CalVer version-bump pull request; `build-pypi` builds the wheel and sdist
+in a checkout nothing else has run in (#175); and `release` tags and publishes
 the version the merged `pyproject.toml` carries — monthly, or by hand. Inputs
 reach every script through `env:`, so no `run:` body holds a `${{ }}` at all,
 and the tests pass inputs the same way.
@@ -56,6 +57,7 @@ this file and `tests/test_nightly_compliance_workflow.py` share.
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 import re
@@ -106,11 +108,18 @@ _EXECUTED = {
     _PACK_STEP,
     _COMPILED_STEP,
     _LAUNCH_STEP,
-    _PYPI_BUILD_STEP,
     _TAG_STEP,
     _SUMMARY_STEP,
     _CLEANUP_STEP,
 }
+
+# The build job's one `run:` step.
+_BUILD_EXECUTED = {_PYPI_BUILD_STEP}
+
+# The packer, pinned: `npx -y <this> pack`. ci.yml validates with the same one.
+_PACKER_MATCH = re.search(r"npx -y (@anthropic-ai/mcpb\S*) pack", _RELEASE_TEXT)
+assert _PACKER_MATCH, "release.yml no longer packs with npx -y @anthropic-ai/mcpb"
+_PACKER = _PACKER_MATCH.group(1)
 
 # The prepare job's `run:` steps.
 _NEXT_STEP = "Decide the next version"
@@ -136,6 +145,7 @@ _STEPS = _WORKFLOW.steps
 _step = _WORKFLOW.step
 _PREPARE = _workflow_steps.Workflow(_RELEASE, job="prepare")
 _PUBLISH_PYPI = _workflow_steps.Workflow(_RELEASE, job="publish-pypi")
+_BUILD_PYPI = _workflow_steps.Workflow(_RELEASE, job="build-pypi")
 _write_stub = _workflow_steps.write_stub
 _recorder = _workflow_steps.recorder
 _argv = _workflow_steps.argv
@@ -792,7 +802,7 @@ def test_the_tag_step_pushes_an_annotated_tag_with_no_v_prefix(tmp_path: Path):
     work = _repo_with_remote(tmp_path)
     head = _git(work, "rev-parse", "HEAD").strip()
 
-    result = _run(_body(_TAG_STEP), work, env={"VERSION": "2026.10.0"})
+    result = _run(_body(_TAG_STEP), work, env={"VERSION": "2026.10.0", "GH_TOKEN": "x"})
 
     assert result.returncode == 0, result.stderr
     assert _remote_tags(work) == ["2026.10.0"]
@@ -804,7 +814,7 @@ def test_the_tag_step_writes_no_branch(tmp_path: Path):
     work = _repo_with_remote(tmp_path)
     before = _git(work, "ls-remote", "--heads", "origin")
 
-    _run(_body(_TAG_STEP), work, env={"VERSION": "2026.10.0"})
+    _run(_body(_TAG_STEP), work, env={"VERSION": "2026.10.0", "GH_TOKEN": "x"})
 
     assert _git(work, "ls-remote", "--heads", "origin") == before
 
@@ -1072,9 +1082,9 @@ def test_every_release_step_after_the_decision_is_gated_on_it():
 
 
 def test_only_the_steps_that_write_are_skipped_on_a_dry_run():
-    """A dry run still tests, packs, starts the bundle and builds the distributions."""
+    """A dry run still tests, packs and starts the bundle."""
     writers = [step.name for step in _STEPS if step.if_ == _WRITE_IF]
-    assert writers == [_PYPI_UPLOAD_STEP, _TAG_STEP, _PUBLISH_STEP]
+    assert writers == [_TAG_STEP, _PUBLISH_STEP]
 
 
 def test_everything_is_checked_before_anything_is_written():
@@ -1088,7 +1098,6 @@ def test_everything_is_checked_before_anything_is_written():
         _PACK_STEP,
         _COMPILED_STEP,
         _LAUNCH_STEP,
-        _PYPI_BUILD_STEP,
     ]
     assert [order.index(name) for name in checks] == sorted(order.index(name) for name in checks)
     assert max(order.index(name) for name in checks) < order.index(_TAG_STEP) < order.index(_PUBLISH_STEP)
@@ -1182,8 +1191,15 @@ def test_the_pack_step_invokes_the_mcpb_packer_and_lists_the_bundle(tmp_path: Pa
     result = _run(_body(_PACK_STEP), tmp_path, path_dirs=[stubs])
 
     assert result.returncode == 0, result.stderr
-    assert [record[1:] for record in _argv(log)] == [["-y", "@anthropic-ai/mcpb", "pack"]]
+    assert [record[1:] for record in _argv(log)] == [["-y", _PACKER, "pack"]]
     assert "goodreads-mcp.mcpb" in result.stdout
+
+
+def test_the_packer_is_pinned_to_the_version_ci_validates_with():
+    """`npx -y @anthropic-ai/mcpb` unpinned runs whatever npm serves that minute (#175)."""
+    assert re.fullmatch(r"@anthropic-ai/mcpb@\d+\.\d+\.\d+", _PACKER), _PACKER
+    ci = _workflow_steps.Workflow(_ROOT / ".github" / "workflows" / "ci.yml", job="test")
+    assert f"npx -y {_PACKER} validate" in ci.step("Validate MCPB manifest").run
 
 
 def test_a_failed_pack_stops_the_release(tmp_path: Path):
@@ -1437,8 +1453,15 @@ def test_the_release_installs_uv_before_it_starts_the_bundle():
 
 
 # --------------------------------------------------------------------------
-# PyPI (#153)
+# PyPI (#153, #175)
 # --------------------------------------------------------------------------
+
+
+def _job_text(job: str) -> str:
+    """One job's block of release.yml, from its key to the next job's."""
+    match = re.search(rf"^  {re.escape(job)}:\n(.*?)(?=^  [a-z-]+:\n|\Z)", _RELEASE_TEXT, re.M | re.S)
+    assert match, f"release.yml has no job named {job!r}"
+    return match.group(1)
 
 
 def test_the_pypi_build_writes_where_the_upload_reads(tmp_path: Path):
@@ -1446,17 +1469,73 @@ def test_the_pypi_build_writes_where_the_upload_reads(tmp_path: Path):
     stubs.mkdir()
     _write_stub(stubs, "uv", 'printf "%s\\n" "$@" > uv-args\n')
 
-    result = _run(_body(_PYPI_BUILD_STEP), tmp_path, path_dirs=[stubs])
+    result = _run(_BUILD_PYPI.body(_PYPI_BUILD_STEP), tmp_path, path_dirs=[stubs])
 
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "uv-args").read_text(encoding="utf-8").split() == ["build", "--out-dir", "dist"]
-    assert _step(_PYPI_UPLOAD_STEP).with_["path"] == "dist/"
+    assert _BUILD_PYPI.step(_PYPI_UPLOAD_STEP).with_["path"] == "dist/"
+    assert _BUILD_PYPI.step(_PYPI_UPLOAD_STEP).with_["name"] == "pypi-dist"
 
 
-def test_the_pypi_build_runs_after_the_bundle_is_packed():
-    """Built earlier, dist/ would be packed into the .mcpb."""
-    order = [step.name for step in _STEPS]
-    assert order.index(_PACK_STEP) < order.index(_PYPI_BUILD_STEP) < order.index(_PYPI_UPLOAD_STEP)
+def test_the_distributions_are_built_before_any_third_party_code_runs():
+    """What Trusted Publishing signs is built in a job that ran nothing else (#175).
+
+    The `release` job runs `pip install -e`, `npx ... pack` and `uv run` on
+    unpinned closures, any of which can rewrite goodreads_mcp/ in that
+    checkout. The build lives in its own job with its own checkout, and the
+    only things that run there before `uv build` are the checkout, the uv
+    setup action and hatchling.
+    """
+    assert [step.uses.split("@")[0] for step in _BUILD_PYPI.steps] == [
+        "actions/checkout",
+        "astral-sh/setup-uv",
+        "",
+        "actions/upload-artifact",
+    ]
+    assert _BUILD_PYPI.run_step_names() == {_PYPI_BUILD_STEP}
+    assert _BUILD_PYPI.steps[0].with_["persist-credentials"] == "false"
+    job = _job_text("build-pypi")
+    assert "    permissions:\n      contents: read\n" in job
+    # Same gate as `release`: the two run together, never beside `prepare`.
+    assert re.search(r"^    if: (.+)$", job, re.M).group(1) == re.search(
+        r"^    if: (.+)$", _job_text("release"), re.M
+    ).group(1)
+
+
+def test_a_failed_build_is_a_failed_release():
+    """Nothing is tagged when there are no distributions to publish under the tag."""
+    assert "    needs: build-pypi\n" in _job_text("release")
+
+
+def test_the_release_job_persists_no_credentials():
+    """Its `contents: write` token reaches the tag push and nothing else (#175).
+
+    actions/checkout writes the job token into .git/config unless told not to,
+    where every later step, including the unpinned packages the test, pack
+    and launch steps install, can read it and push a tag or edit a release.
+    """
+    assert _STEPS[0].uses.startswith("actions/checkout@")
+    assert _STEPS[0].with_["persist-credentials"] == "false"
+    assert _step(_TAG_STEP).env["GH_TOKEN"] == "${{ github.token }}"
+    # The steps that hold a token, by name: adding one is a visible change here.
+    assert {step.name for step in _STEPS if "GH_TOKEN" in step.env} == {_CHECKS_STEP, _TAG_STEP}
+    assert {step.name for step in _STEPS if "GITHUB_TOKEN" in step.env} == {_PUBLISH_STEP}
+
+
+def test_the_tag_push_carries_the_header_the_checkout_did_not_persist(tmp_path: Path):
+    """The push authenticates the way actions/checkout would have: one header, one command."""
+    log = tmp_path / "argv"
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    _write_stub(stubs, "git", _recorder(log))
+
+    result = _run(_body(_TAG_STEP), tmp_path, path_dirs=[stubs], env={"VERSION": "2026.10.0", "GH_TOKEN": "s3cret"})
+
+    assert result.returncode == 0, result.stderr
+    header = "AUTHORIZATION: basic " + base64.b64encode(b"x-access-token:s3cret").decode("ascii")
+    pushes = [record[1:] for record in _argv(log) if "push" in record]
+    assert pushes == [["-c", f"http.https://github.com/.extraheader={header}", "push", "origin", "refs/tags/2026.10.0"]]
+    assert all("s3cret" not in field for record in _argv(log) for field in record if not field.startswith("http."))
 
 
 def test_the_publish_job_runs_only_when_the_release_job_released():
@@ -1471,7 +1550,7 @@ def test_the_publish_job_runs_only_when_the_release_job_released():
     assert _PUBLISH_PYPI.step("Download the PyPI distributions").with_["name"] == "pypi-dist"
     assert "  publish-pypi:" in _RELEASE_TEXT
     job = _RELEASE_TEXT.split("  publish-pypi:\n", 1)[1]
-    assert "    needs: release\n    if: needs.release.outputs.released == 'true'\n" in job
+    assert "    needs: [build-pypi, release]\n    if: needs.release.outputs.released == 'true'\n" in job
 
 
 # --------------------------------------------------------------------------
@@ -1504,8 +1583,8 @@ def test_the_cleanup_step_succeeds_when_there_is_nothing_to_clean(tmp_path: Path
 
 @pytest.mark.parametrize(
     ("workflow", "executed"),
-    [(_WORKFLOW, _EXECUTED), (_PREPARE, _PREPARE_EXECUTED)],
-    ids=["release", "prepare"],
+    [(_WORKFLOW, _EXECUTED), (_PREPARE, _PREPARE_EXECUTED), (_BUILD_PYPI, _BUILD_EXECUTED)],
+    ids=["release", "prepare", "build-pypi"],
 )
 def test_every_run_step_in_the_release_workflow_is_executed_by_this_file(workflow, executed):
     """A new step must be run here, or listed here as deliberately not run."""

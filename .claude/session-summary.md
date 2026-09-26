@@ -24,21 +24,23 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-24 — #148, `main` had no protection behind "a human merges everything"
+## 2026-09-26 — #175, the PyPI build ran after unpinned code in the same checkout
 
-**Done:** `main` had no branch protection and no ruleset, so the hive App or
-`ai-fix.yml`'s token could push straight to it and start `release.yml`. Added
-`.github/rulesets/main.json` (default branch, no bypass, no delete or
-force-push, pull request with 0 approvals, required check `test`),
-`docs/branch-protection.md`, a Tier 2 entry for `.github/rulesets/**`, a
-"Never push to `main`" hard rule in SECURITY-AI.md, and
-`tests/test_branch_ruleset.py`. Offline count row 881 → 884.
+**Done:** `release.yml` built the wheel and sdist after `pip install -e`,
+`npx ... pack` and `uv run` had run in the same tree, so any of those closures
+could rewrite `goodreads_mcp/` before Trusted Publishing signed it. The build
+now lives in its own `build-pypi` job (`contents: read`,
+`persist-credentials: false`); `release` needs it, `publish-pypi` needs both.
+The `release` checkout persists no credentials; only "Tag the approved commit"
+holds the token, through `env:` and one `git -c http.…extraheader` push.
+`@anthropic-ai/mcpb` is pinned to `2.1.2` in `release.yml`, `ci.yml` and the
+PR template. Policy file and tests updated. Offline count row 1066 → 1072.
 
-**In flight:** the PR on `sec/protect-main`.
+**In flight:** the PR on `sec/175-build-pypi-before-third-party-code`.
 
-**Blocked on:** an admin applying the ruleset after merge (command in
-`docs/branch-protection.md`). #148 closes only when
-`gh api repos/Danathar/goodreads-mcp/branches/main --jq .protected` prints `true`.
+**Blocked on:** nothing. `.github/workflows/**` is Tier 2; a human merges it.
 
-**Watch:** renaming the `test` job in `ci.yml` or adding a path filter to its
-`pull_request` trigger fails `tests/test_branch_ruleset.py`, on purpose.
+**Watch:** `build-pypi` runs on every non-`prepare` run, including dry runs
+and skipped months; the artifact publishes nothing. Bumping the `mcpb` pin
+means all three files, or `test_the_packer_is_pinned_to_the_version_ci_validates_with`
+and `test_the_mcpb_command_is_the_one_ci_runs_verbatim` fail.

@@ -13,18 +13,20 @@ name: Release MCPB
 # number it releases is one that passed CI and review, not one a workflow run
 # invented.
 #
-# Two jobs, and a run is only ever one of them:
+# Three jobs, and a run is only ever the first or the other two:
 #
 #   * `prepare` opens the version-bump pull request and stops. Nothing is
 #     tagged or published, and the only branch it pushes is a release/* one.
+#   * `build-pypi` builds the wheel and sdist from a fresh checkout and
+#     uploads them, before any job has run third-party code in a tree.
 #   * `release` tags the version pyproject.toml carries on the checked-out
 #     commit and publishes it: monthly on a schedule, or by hand. Guarded;
 #     see "Decide whether to release" below, because most months here change
 #     only docs, tests and agent config, and a release people are prompted to
 #     install should contain something they can observe.
 #
-# `publish-pypi` follows `release` and uploads the distributions that job
-# built and tested, only when it really published.
+# `publish-pypi` follows `release` and uploads the distributions `build-pypi`
+# built, only when `release` really published.
 #
 # The version is never derived from commit messages.
 
@@ -229,10 +231,54 @@ jobs:
           echo "Opened the version-bump pull request for **$VERSION**." >> "$GITHUB_STEP_SUMMARY"
 
   # ------------------------------------------------------------------------
+  # Build the distributions PyPI gets, before any third-party code runs.
+  # ------------------------------------------------------------------------
+  build-pypi:
+    if: github.event_name != 'workflow_dispatch' || !inputs.prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Its own job, with its own checkout, so the wheel and sdist are built
+    # from the tree as merged, not from the tree after `release` has run
+    # `pip install -e`, `npx ... pack` and `uv run` on unpinned closures.
+    # Any of those could rewrite goodreads_mcp/ before a build in that job,
+    # and Trusted Publishing would sign the result. Here the only code that
+    # runs before the build is the setup action and hatchling.
+    #
+    # Runs on a dry run too, and on a month with nothing to release: an
+    # artifact publishes nothing, and `publish-pypi` uploads it only after
+    # `release` really published. The build failing fails `release`.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # This job's token can only read a public repository, but nothing
+          # here needs it, so nothing here gets it.
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Build the PyPI distributions
+        run: |
+          # `uv build` runs only the `[build-system]` backend, hatchling.
+          uv build --out-dir dist
+
+      - name: Upload the PyPI distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypi-dist
+          path: dist/
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------------
   # Tag an approved commit and publish it. Reads the version; never sets it.
   # ------------------------------------------------------------------------
   release:
     if: github.event_name != 'workflow_dispatch' || !inputs.prepare
+    # A failed build is a failed release: nothing is tagged when there is no
+    # distribution to publish under the tag.
+    needs: build-pypi
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Pushes a tag and creates a release; no step in this job writes a branch.
@@ -248,6 +294,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # This job runs `pip install`, `npx` and `uv run` on unpinned
+          # closures. With the default, the checkout leaves this job's
+          # `contents: write` token in .git/config for all of them to read.
+          # Only "Tag the approved commit" gets it, through its own `env:`.
+          persist-credentials: false
 
       # The scheduled path is opt-in. Merging this workflow must not, by
       # itself, start publishing releases; someone has to decide that and set
@@ -492,7 +543,7 @@ jobs:
           # declares. Resolving them here with `pip install --target` produced
           # a bundle that only started on this runner's platform and Python:
           # four of the packages in mcp's closure are compiled (#89).
-          npx -y @anthropic-ai/mcpb pack
+          npx -y @anthropic-ai/mcpb@2.1.2 pack
           ls -lh *.mcpb 2>/dev/null || ls -lh ./*.mcpb 2>/dev/null || find . -maxdepth 2 -name "*.mcpb" -ls
 
       - name: Check the bundle carries no compiled code
@@ -552,26 +603,14 @@ jobs:
           sys.exit(subprocess.run(argv, stdin=subprocess.DEVNULL).returncode)
           PY
 
-      - name: Build the PyPI distributions
-        if: steps.decide.outputs.go == 'true'
-        run: |
-          # Built after the bundle is packed so dist/ never ends up inside it,
-          # and uploaded so the publish job ships exactly what this job tested.
-          # Built on a dry run too: a build that fails is a release that fails.
-          uv build --out-dir dist
-
-      - name: Upload the PyPI distributions
-        if: steps.decide.outputs.go == 'true' && !inputs.dry_run
-        uses: actions/upload-artifact@v4
-        with:
-          name: pypi-dist
-          path: dist/
-          if-no-files-found: error
-
       - name: Tag the approved commit
         if: steps.decide.outputs.go == 'true' && !inputs.dry_run
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          # The checkout above persisted no credentials, so this is the only
+          # step of the job that can reach the repository with the job's
+          # `contents: write`, and it holds the token only for the push.
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git config --local user.name "github-actions[bot]"
@@ -581,7 +620,10 @@ jobs:
           # already on main, having gone through a pull request and the
           # ruleset, so a protected main needs no bypass for releases.
           git tag -a "$VERSION" -m "Release $VERSION"
-          git push origin "refs/tags/$VERSION"
+          # The same header actions/checkout would have written to .git/config,
+          # given to this one command instead of left on disk for every step.
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')" \
+            push origin "refs/tags/$VERSION"
 
       - name: Create GitHub Release and upload .mcpb
         id: publish
@@ -614,10 +656,13 @@ jobs:
 
   publish-pypi:
     # Trusted Publishing (OIDC): no stored token. Only this job can mint an
-    # id-token; the release job, which runs tests and npx, cannot. It runs
-    # only after the release job really published, so a dry run, a skipped
-    # month or a refused version never reaches PyPI.
-    needs: release
+    # id-token; the release job, which runs tests and npx, cannot. The token
+    # signs the `pypi-dist` artifact exactly as `build-pypi` uploaded it, and
+    # that job runs no third-party code in its checkout before the build, so
+    # the split protects the artifact as well as the token. It runs only
+    # after the release job really published, so a dry run, a skipped month
+    # or a refused version never reaches PyPI.
+    needs: [build-pypi, release]
     if: needs.release.outputs.released == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
