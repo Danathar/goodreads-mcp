@@ -24,21 +24,27 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-24 — #148, `main` had no protection behind "a human merges everything"
+## 2026-09-26 — #174, `release.yml` tagged whatever branch it was dispatched on
 
-**Done:** `main` had no branch protection and no ruleset, so the hive App or
-`ai-fix.yml`'s token could push straight to it and start `release.yml`. Added
-`.github/rulesets/main.json` (default branch, no bypass, no delete or
-force-push, pull request with 0 approvals, required check `test`),
-`docs/branch-protection.md`, a Tier 2 entry for `.github/rulesets/**`, a
-"Never push to `main`" hard rule in SECURITY-AI.md, and
-`tests/test_branch_ruleset.py`. Offline count row 881 → 884.
+**Done:** the `release` job never checked that its commit was on `main`, and
+its green-checks gate passed a commit with no check runs (an empty list has
+nothing red in it; the `release/*` branches `prepare` pushes with
+`github.token` are exactly such commits). Added a first step, "Refuse any
+commit that is not on main": `github.ref` must be the default branch and
+`GITHUB_SHA` must be an ancestor of origin's default branch, fetched fresh.
+"Require green checks on this commit" now also refuses when no `test` check
+run concluded `success`; `test` is read from the step's `REQUIRED_CHECK` env
+and a test joins it to `.github/rulesets/main.json`. CONTRIBUTING's refusal
+sentence, `docs/quality.md`'s gate row and `docs/branch-protection.md` say so.
+Offline count row 1066 → 1080.
 
-**In flight:** the PR on `sec/protect-main`.
+**In flight:** the PR on `sec/174-release-only-from-main`. #176
+(`sec/175-build-pypi-before-third-party-code`) also edits `release.yml`'s
+`release` job; whichever merges second rebases.
 
-**Blocked on:** an admin applying the ruleset after merge (command in
-`docs/branch-protection.md`). #148 closes only when
-`gh api repos/Danathar/goodreads-mcp/branches/main --jq .protected` prints `true`.
+**Blocked on:** #174's third item is a repository setting, owner only: the
+`pypi` environment's deployment branches are unrestricted
+(`deployment_branch_policy: null`). Set them to "Selected branches", `main`.
 
-**Watch:** renaming the `test` job in `ci.yml` or adding a path filter to its
-`pull_request` trigger fails `tests/test_branch_ruleset.py`, on purpose.
+**Watch:** `.github/workflows/**` is Tier 2; a human merges. The main ruleset
+(#148) is still not applied.

@@ -88,7 +88,9 @@ def _calver() -> re.Pattern[str]:
 # and the clause of CONTRIBUTING.md's "It is refused when ..." sentence that
 # tells a reader about it.
 _REFUSALS = {
+    r"Releases run from \$DEFAULT only": "the run is not on `main`",
     r"checks on .* are not green": "the commit's checks are not green",
+    r"no successful '\$REQUIRED_CHECK' check": "the commit has no passing `test` check",
     r"manifest\.json version .* != pyproject\.toml version": "the two files disagree",
     r"is not CalVer": "the version is not CalVer",
     r"asked for .*, but pyproject\.toml says": (
@@ -198,8 +200,10 @@ def test_the_schedule_is_the_cron():
     )
 
 
-# Lower-case backticked words in the section that are not inputs.
-_NOT_INPUTS = {"v", "true"}
+# Lower-case backticked words in the section that are not inputs: the `v`
+# prefix tags lack, the `true` the opt-in variable is set to, the branch the
+# release job insists on, and the check it requires.
+_NOT_INPUTS = {"v", "true", "main", "test"}
 
 
 def _dispatch_inputs() -> set[str]:

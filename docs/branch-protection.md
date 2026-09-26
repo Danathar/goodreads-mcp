@@ -35,11 +35,15 @@ Two tokens here can write `main`:
 - `ai-fix.yml`, which holds `contents: write`. Its agent step is not wired up
   yet. Once it is, a model that reads issue bodies holds that token.
 
-`release.yml` publishes whatever `main` carries. It no longer runs on a push
-(#165), but its monthly run, or anyone's run by hand, tags the version in
-`pyproject.toml` and publishes a `.mcpb` built from that tree. A direct push
-that bumps the version is released at the next run, and no person has read
-the change.
+`release.yml` publishes whatever `main` carries, and only that. It no longer
+runs on a push (#165), but its monthly run, or anyone's run by hand, tags the
+version in `pyproject.toml` and publishes a `.mcpb` built from that tree. A
+direct push that bumps the version is released at the next run, and no person
+has read the change. A run by hand from any other branch stops at the job's
+first step, which checks that the run is on the default branch and that the
+commit is on it at the remote (#174); the same job refuses a commit with no
+passing `test` check, which is what the head of a branch pushed with
+`github.token` looks like.
 
 ## The ruleset
 
