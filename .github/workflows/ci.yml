@@ -43,4 +43,4 @@ jobs:
 
       - name: Validate MCPB manifest
         run: |
-          npx -y @anthropic-ai/mcpb validate ./manifest.json
+          npx -y @anthropic-ai/mcpb@2.1.2 validate ./manifest.json
