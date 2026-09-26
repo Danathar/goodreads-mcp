@@ -9,7 +9,7 @@ already tagged and on PyPI:
 * the README the PyPI package carries names the server, as
   `mcp-name: <server.json name>` followed by a boundary;
 * the package the listing points at is the one `pyproject.toml` builds, and
-  `uvx <identifier>` (the command a client builds from `runtimeHint`) runs an
+  `uvx <identifier>` (what a client that follows `runtimeHint` runs) starts an
   executable the package really ships;
 * the version the `publish-registry` job writes into its copy of
   `server.json` is the one the release job tagged, in both version fields.
@@ -51,7 +51,7 @@ def test_the_readme_carries_the_ownership_token_the_registry_looks_for():
 
 def test_the_listing_is_under_the_namespace_a_repository_token_is_granted():
     """GitHub OIDC login grants `io.github.<repository owner>/*`, matched case-sensitively."""
-    assert _SERVER["name"] == "io.github.Danathar/goodreads-mcp"
+    assert _SERVER["name"] == "io.github.Danathar/goodreads-mcp-ai"
     assert _SERVER["repository"]["url"] == _PROJECT["urls"]["Repository"]
 
 
@@ -149,3 +149,73 @@ def test_the_job_runs_after_pypi_and_holds_only_what_publishing_needs():
     for step in _JOB.steps:
         if step.run:
             assert "${{" not in step.run, f"{step.name!r} interpolates into its script"
+
+
+_INSTALL_STEP = "Install mcp-publisher"
+
+
+def _install(tmp_path: Path, tarball: Path, sha256: str | None = None):
+    """Run the install step with `curl` serving `tarball` instead of GitHub."""
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    log = tmp_path / "curl-argv"
+    # `curl -fsSL -o <file> <url>`: record the call, then deliver the tarball.
+    _workflow_steps.write_stub(stubs, "curl", _workflow_steps.recorder(log) + f'cp "{tarball}" "$3"\n')
+    step = _JOB.step(_INSTALL_STEP)
+    env = dict(step.env)
+    if sha256 is not None:
+        env["MCP_PUBLISHER_SHA256"] = sha256
+    work = tmp_path / "work"
+    work.mkdir()
+    result = _workflow_steps.run(step.run, work, path_dirs=[stubs], env=env)
+    return result, _workflow_steps.argv(log), work
+
+
+def _publisher_tarball(tmp_path: Path) -> Path:
+    """A tarball holding an `mcp-publisher` that records its argv."""
+    import tarfile
+
+    source = tmp_path / "src"
+    source.mkdir()
+    _workflow_steps.write_stub(source, "mcp-publisher", _workflow_steps.recorder(tmp_path / "publisher-argv"))
+    tarball = tmp_path / "mcp-publisher_linux_amd64.tar.gz"
+    with tarfile.open(tarball, "w:gz") as archive:
+        archive.add(source / "mcp-publisher", "mcp-publisher")
+    return tarball
+
+
+def test_the_publisher_is_a_pinned_release_not_latest():
+    step = _JOB.step(_INSTALL_STEP)
+    assert re.fullmatch(r"v\d+\.\d+\.\d+", step.env["MCP_PUBLISHER_VERSION"])
+    assert re.fullmatch(r"[0-9a-f]{64}", step.env["MCP_PUBLISHER_SHA256"])
+    assert "/latest/" not in step.run
+
+
+def test_a_publisher_whose_checksum_does_not_match_never_runs(tmp_path: Path):
+    """This job can mint an OIDC token; a swapped binary must not get to use it."""
+    tarball = _publisher_tarball(tmp_path)
+
+    result, calls, work = _install(tmp_path, tarball)  # the pinned checksum, not this tarball's
+
+    assert result.returncode != 0
+    ((_, *args),) = calls
+    version = _JOB.step(_INSTALL_STEP).env["MCP_PUBLISHER_VERSION"]
+    assert args[-1] == (
+        f"https://github.com/modelcontextprotocol/registry/releases/download/{version}/mcp-publisher_linux_amd64.tar.gz"
+    )
+    assert not (work / "mcp-publisher").exists()
+    assert not (tmp_path / "publisher-argv").exists()
+
+
+def test_a_publisher_whose_checksum_matches_is_unpacked_and_validates_the_listing(tmp_path: Path):
+    import hashlib
+
+    tarball = _publisher_tarball(tmp_path)
+    digest = hashlib.sha256(tarball.read_bytes()).hexdigest()
+
+    result, _, work = _install(tmp_path, tarball, sha256=digest)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (work / "mcp-publisher").is_file()
+    ((_, *args),) = _workflow_steps.argv(tmp_path / "publisher-argv")
+    assert args == ["validate", "server.release.json"]

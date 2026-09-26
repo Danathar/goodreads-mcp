@@ -12,7 +12,7 @@ A **read-only** MCP server for Goodreads — built without the Goodreads API, be
 
 <!-- Ownership token the official MCP registry checks in the PyPI README
      before it accepts a listing; must match `name` in server.json. Keep it
-     on its own line. mcp-name: io.github.Danathar/goodreads-mcp -->
+     on its own line. mcp-name: io.github.Danathar/goodreads-mcp-ai -->
 
 ## tools
 
@@ -65,7 +65,7 @@ uv run goodreads-mcp
 
 Requires Python ≥ 3.10.
 
-Each date-numbered release is also published to PyPI as [`goodreads-mcp-ai`](https://pypi.org/project/goodreads-mcp-ai/) (the `goodreads-mcp` name there belongs to an unrelated project) and listed on the [official MCP registry](https://registry.modelcontextprotocol.io) as `io.github.Danathar/goodreads-mcp`, from [`server.json`](server.json). A client that installs from the registry runs `uvx goodreads-mcp-ai`.
+Each date-numbered release is also published to PyPI as [`goodreads-mcp-ai`](https://pypi.org/project/goodreads-mcp-ai/) (the `goodreads-mcp` name there belongs to an unrelated project) and listed on the [official MCP registry](https://registry.modelcontextprotocol.io) as `io.github.Danathar/goodreads-mcp-ai`, from [`server.json`](server.json). The listing carries a `uvx` runtime hint; a client that follows it runs `uvx goodreads-mcp-ai`, which you can also run yourself.
 
 ## config (optional)
 

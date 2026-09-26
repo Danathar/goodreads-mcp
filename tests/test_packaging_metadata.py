@@ -25,7 +25,7 @@ def test_the_import_package_and_console_script_keep_their_names():
 
 
 def test_the_distribution_name_is_also_an_executable():
-    """`uvx goodreads-mcp-ai` is what a client builds from the registry listing (#180).
+    """`uvx goodreads-mcp-ai` is what a client following the listing's `uvx` hint runs (#180).
 
     uv runs the executable named after the package and refuses when there is
     none of that name, so the distribution name is a second script for the

@@ -23,9 +23,10 @@ test = ["pytest>=8.0", "pytest-cov>=5.0"]
 [project.scripts]
 goodreads-mcp = "goodreads_mcp.server:main"
 # Same entry point under the distribution name, so `uvx goodreads-mcp-ai`
-# works. That is the command an MCP client builds from the registry listing
-# in server.json (`runtimeHint: uvx` plus the PyPI identifier), and uv
-# refuses it when the package ships no executable of that name (#180).
+# works. The registry listing in server.json carries `runtimeHint: uvx`; that
+# is a hint, not a launch command every client must use, but a client that
+# follows it runs `uvx goodreads-mcp-ai`, and uv refuses that when the
+# package ships no executable of that name (#180).
 goodreads-mcp-ai = "goodreads_mcp.server:main"
 
 [project.urls]
