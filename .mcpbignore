@@ -12,6 +12,9 @@ venv
 *.mcpb
 tests/
 .github
+# The MCP registry listing (#180); the bundle is installed from the release
+# page, not the registry, so it has no use for the file.
+server.json
 # `uv run` resolves dependencies from pyproject.toml on the user's machine;
 # nothing pre-resolved ships in the bundle (#89).
 vendor/

@@ -84,7 +84,10 @@ Never hardcode either. A 401/403 triggers one forced re-discovery and retry.
 - Partial GraphQL success is tolerated (a deleted sub-resource resolves to
   null); only a missing `data` raises `GraphQLError`.
 - `pyproject.toml` and `manifest.json` versions must match — release CI fails
-  if they drift.
+  if they drift. `server.json`, the MCP registry listing, is not a third copy:
+  it carries the placeholder `0.0.0`, and the `publish-registry` job writes
+  the released number into a copy at publish time. Its `name` must match the
+  `mcp-name:` comment in `README.md`, which the registry reads off PyPI.
 - `pyproject.toml` is the only dependency list. The released `.mcpb` ships no
   packages: `manifest.json` launches with `uv run --directory ${__dirname}`,
   and the host resolves the bundled `pyproject.toml` on the user's machine.

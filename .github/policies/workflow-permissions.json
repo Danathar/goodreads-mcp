@@ -23,7 +23,8 @@
         "prepare": {"contents": "write", "pull-requests": "write"},
         "build-pypi": {"contents": "read"},
         "release": {"contents": "write", "checks": "read"},
-        "publish-pypi": {"id-token": "write"}
+        "publish-pypi": {"id-token": "write"},
+        "publish-registry": {"id-token": "write", "contents": "read"}
       }
     }
   }

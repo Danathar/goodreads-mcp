@@ -21,7 +21,17 @@ def test_the_distribution_name_is_not_the_unrelated_pypi_project():
 
 
 def test_the_import_package_and_console_script_keep_their_names():
-    assert _PROJECT["scripts"] == {"goodreads-mcp": "goodreads_mcp.server:main"}
+    assert _PROJECT["scripts"]["goodreads-mcp"] == "goodreads_mcp.server:main"
+
+
+def test_the_distribution_name_is_also_an_executable():
+    """`uvx goodreads-mcp-ai` is what a client following the listing's `uvx` hint runs (#180).
+
+    uv runs the executable named after the package and refuses when there is
+    none of that name, so the distribution name is a second script for the
+    same entry point.
+    """
+    assert _PROJECT["scripts"]["goodreads-mcp-ai"] == _PROJECT["scripts"]["goodreads-mcp"]
 
 
 def test_the_licence_matches_the_manifest_and_ships_the_upstream_notice():

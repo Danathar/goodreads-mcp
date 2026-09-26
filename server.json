@@ -1,0 +1,32 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Danathar/goodreads-mcp-ai",
+  "title": "Goodreads MCP",
+  "description": "Read-only MCP server for Goodreads (no API required): search, books, shelves, ratings",
+  "version": "0.0.0",
+  "websiteUrl": "https://github.com/Danathar/goodreads-mcp",
+  "repository": {
+    "url": "https://github.com/Danathar/goodreads-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "goodreads-mcp-ai",
+      "version": "0.0.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "GOODREADS_USER_ID",
+          "description": "Numeric Goodreads profile ID (the number in goodreads.com/user/show/<ID>-name). Default user for the shelf tools; optional, can also be passed per tool call.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

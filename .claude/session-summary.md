@@ -24,51 +24,27 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-26 — #175, the PyPI build ran after unpinned code in the same checkout
+## 2026-09-26 — #180, list the server on the official MCP registry
 
-**Done:** `release.yml` built the wheel and sdist after `pip install -e`,
-`npx ... pack` and `uv run` had run in the same tree, so any of those closures
-could rewrite `goodreads_mcp/` before Trusted Publishing signed it. The build
-now lives in its own `build-pypi` job (`contents: read`,
-`persist-credentials: false`); `release` needs it, `publish-pypi` needs both.
-The `release` checkout persists no credentials; only "Tag the approved commit"
-holds the token, through `env:` and one `git -c http.…extraheader` push. That
-keeps it off disk, not out of reach: earlier steps in the same job can still
-get at it (`$GITHUB_ENV` → `BASH_ENV`, or a `.git/hooks` hook that runs inside
-`git tag`/`git push`). Real isolation is a separate tag-and-release job;
-tracked apart from #175.
-`@anthropic-ai/mcpb` is pinned to `2.1.2` in `release.yml`, `ci.yml` and the
-PR template. Policy file and tests updated. Offline count row 1066 → 1072.
+**Done:** `server.json` (`io.github.Danathar/goodreads-mcp-ai`, PyPI package
+`goodreads-mcp-ai`, `runtimeHint: uvx`, placeholder version `0.0.0`), the
+`mcp-name:` ownership comment in `README.md` that the registry reads off the
+PyPI description, a `goodreads-mcp-ai` console script so `uvx goodreads-mcp-ai`
+runs (uv refused it before: the only executable was `goodreads-mcp`), and a
+`publish-registry` job in `release.yml` after `publish-pypi`: waits for PyPI to
+serve the version, writes the released number into a copy of `server.json`,
+`mcp-publisher login github-oidc`, publish. Policy file, labeler, risk tiers,
+CONTRIBUTING and AGENTS.md say so; `tests/test_registry_listing.py` pins the
+three things the registry checks. Offline count row 1088 → 1102.
 
-**In flight:** the PR on `sec/175-build-pypi-before-third-party-code`.
+**In flight:** the PR on `feat/180-mcp-registry-publish`.
 
-**Blocked on:** nothing. `.github/workflows/**` is Tier 2; a human merges it.
+**Blocked on:** the first date-numbered release. `goodreads-mcp-ai` is not on
+PyPI yet (`pypi.org/pypi/goodreads-mcp-ai/json` is a 404; the last release is
+`v0.1.1`), and the registry validates a listing against the PyPI version page,
+so the listing cannot be submitted by hand before that release either.
 
-**Watch:** `build-pypi` runs on every non-`prepare` run, including dry runs
-and skipped months; the artifact publishes nothing. Bumping the `mcpb` pin
-means all three files, or `test_the_packer_is_pinned_to_the_version_ci_validates_with`
-and `test_the_mcpb_command_is_the_one_ci_runs_verbatim` fail.
-## 2026-09-26 — #174, `release.yml` tagged whatever branch it was dispatched on
-
-**Done:** the `release` job never checked that its commit was on `main`, and
-its green-checks gate passed a commit with no check runs (an empty list has
-nothing red in it; the `release/*` branches `prepare` pushes with
-`github.token` are exactly such commits). Added a first step, "Refuse any
-commit that is not on main": `github.ref` must be the default branch and
-`GITHUB_SHA` must be an ancestor of origin's default branch, fetched fresh.
-"Require green checks on this commit" now also refuses when no `test` check
-run concluded `success`; `test` is read from the step's `REQUIRED_CHECK` env
-and a test joins it to `.github/rulesets/main.json`. CONTRIBUTING's refusal
-sentence, `docs/quality.md`'s gate row and `docs/branch-protection.md` say so.
-Offline count row 1066 → 1080.
-
-**In flight:** the PR on `sec/174-release-only-from-main`. #176
-(`sec/175-build-pypi-before-third-party-code`) also edits `release.yml`'s
-`release` job; whichever merges second rebases.
-
-**Blocked on:** #174's third item is a repository setting, owner only: the
-`pypi` environment's deployment branches are unrestricted
-(`deployment_branch_policy: null`). Set them to "Selected branches", `main`.
-
-**Watch:** `.github/workflows/**` is Tier 2; a human merges. The main ruleset
-(#148) is still not applied.
+**Watch:** the registry job installs `mcp-publisher` pinned to `v1.8.1` and
+checks its sha256. If a publish fails with "invalid audience" or another auth
+error, bump both env values in the "Install mcp-publisher" step to the newest
+release and its checksums file line.

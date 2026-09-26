@@ -124,5 +124,6 @@ def test_the_new_workflow_is_covered_too():
         ("release.yml", "prepare"),
         ("release.yml", "release"),
         ("release.yml", "publish-pypi"),
+        ("release.yml", "publish-registry"),
     }
     assert expected <= seen, f"workflow jobs have gone missing: {sorted(expected - seen)}"

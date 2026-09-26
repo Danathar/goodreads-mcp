@@ -10,6 +10,10 @@
 
 A **read-only** MCP server for Goodreads — built without the Goodreads API, because there hasn't been one since December 2020. Lets an LLM find and research books, ratings, and reviews. Tools ride on RSS feeds, the JSON autocomplete endpoint, the `__NEXT_DATA__` blob embedded in book pages, and the AppSync GraphQL backend the Goodreads website itself uses. No login, no cookies, no writes — public data only.
 
+<!-- Ownership token the official MCP registry checks in the PyPI README
+     before it accepts a listing; must match `name` in server.json. Keep it
+     on its own line. mcp-name: io.github.Danathar/goodreads-mcp-ai -->
+
 ## tools
 
 | tool | source / what it returns |
@@ -60,6 +64,8 @@ uv run goodreads-mcp
 ```
 
 Requires Python ≥ 3.10.
+
+Each date-numbered release is also published to PyPI as [`goodreads-mcp-ai`](https://pypi.org/project/goodreads-mcp-ai/) (the `goodreads-mcp` name there belongs to an unrelated project) and listed on the [official MCP registry](https://registry.modelcontextprotocol.io) as `io.github.Danathar/goodreads-mcp-ai`, from [`server.json`](server.json). The listing carries a `uvx` runtime hint; a client that follows it runs `uvx goodreads-mcp-ai`, which you can also run yourself.
 
 ## config (optional)
 

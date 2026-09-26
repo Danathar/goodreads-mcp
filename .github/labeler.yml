@@ -48,4 +48,5 @@ packaging:
       - any-glob-to-any-file:
           - 'pyproject.toml'
           - 'manifest.json'
+          - 'server.json'
           - '.mcpbignore'
