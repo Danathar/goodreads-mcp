@@ -27,7 +27,8 @@ name: Release MCPB
 #     prompted to install should contain something they can observe.
 #
 # `publish-pypi` follows `release` and uploads the distributions `build-pypi`
-# built, only when `release` really published.
+# built, only when `release` really published. `publish-registry` then lists
+# that PyPI release on the official MCP registry (#180).
 #
 # The version is never derived from commit messages.
 
@@ -291,6 +292,9 @@ jobs:
       # True only when the GitHub release was really published: not on a dry
       # run, not on a skipped month, not when a gate refused.
       released: ${{ steps.publish.outcome == 'success' }}
+      # The number that was tagged, as read off pyproject.toml and checked
+      # against CALVER_PATTERN before it was written to $GITHUB_OUTPUT.
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -743,3 +747,88 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-registry:
+    # Lists the release on the official MCP registry
+    # (registry.modelcontextprotocol.io), which is where MCP clients and
+    # directories look for servers; a package on PyPI alone is not found
+    # (#180). Authenticates with a GitHub Actions OIDC token, no stored
+    # secret: the registry grants a token from this repository the
+    # `io.github.Danathar/*` namespace, which is the one server.json names.
+    #
+    # The registry checks PyPI itself before it accepts the listing: the
+    # package version must exist there and its README must carry
+    # `mcp-name: io.github.Danathar/goodreads-mcp` (the comment near the top
+    # of README.md). So this job runs after `publish-pypi`, and waits for
+    # PyPI to serve the version before it publishes.
+    #
+    # server.json in the tree carries the placeholder version 0.0.0. The one
+    # definition of a release number is pyproject.toml, which the release
+    # job read and checked; it arrives here as an output, and is written
+    # into a copy of server.json for this publish only. Nothing is committed.
+    needs: [release, publish-pypi]
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Only server.json is read from the tree; no step here needs git.
+          persist-credentials: false
+
+      - name: Wait for PyPI to serve the release
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          url="https://pypi.org/pypi/goodreads-mcp-ai/$VERSION/json"
+          for attempt in $(seq 1 30); do
+            if curl -fsS -o /dev/null "$url"; then
+              echo "PyPI serves goodreads-mcp-ai $VERSION."
+              exit 0
+            fi
+            echo "Attempt $attempt: $url not served yet; waiting 10s."
+            sleep 10
+          done
+          echo "::error::PyPI did not serve goodreads-mcp-ai $VERSION within 5 minutes." >&2
+          echo "The registry validates the listing against that page, so it cannot be published yet." >&2
+          exit 1
+
+      - name: Write the released version into a copy of server.json
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          # jq, not sed: it cannot corrupt the JSON, and it fails loudly.
+          # Both the server version and the package version: the registry
+          # refuses a version it has already seen, and the package version is
+          # the PyPI release it validates against.
+          jq --arg v "$VERSION" '.version = $v | .packages[].version = $v' server.json > server.release.json
+          if [ "$(jq -r '[.version, .packages[].version] | unique | join(",")' server.release.json)" != "$VERSION" ]; then
+            echo "::error::server.release.json does not carry $VERSION in every version field." >&2
+            exit 1
+          fi
+          jq . server.release.json
+
+      - name: Install mcp-publisher
+        run: |
+          set -euo pipefail
+          # Latest, on purpose: the registry binds OIDC tokens to an audience
+          # that older publishers do not send, and its docs say to re-install
+          # when a publish fails with "invalid audience".
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher validate server.release.json
+
+      - name: Log in to the MCP registry
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to the MCP registry
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          ./mcp-publisher publish server.release.json
+          echo "Listed io.github.Danathar/goodreads-mcp **$VERSION** on the MCP registry: https://registry.modelcontextprotocol.io/v0.1/servers?search=goodreads" >> "$GITHUB_STEP_SUMMARY"

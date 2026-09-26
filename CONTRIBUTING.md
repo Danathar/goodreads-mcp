@@ -48,7 +48,11 @@ it. Everything runs in [`release.yml`](.github/workflows/release.yml):
    the pull request. Merging that pull request approves the number.
 2. **Release.** On 09:00 UTC on the 1st of each month, or when run by hand
    without `prepare`, the workflow tags the version the merged `pyproject.toml`
-   carries, attaches the `.mcpb` to a GitHub release, and publishes to PyPI.
+   carries, attaches the `.mcpb` to a GitHub release, publishes to PyPI, and
+   lists the PyPI release on the official MCP registry as
+   `io.github.Danathar/goodreads-mcp` from `server.json`. That file keeps the
+   placeholder version `0.0.0`; the workflow writes the released number into
+   a copy at publish time, so there is no third version to bump.
    It never changes the version itself, and it only ever tags a commit that
    is on `main`: run it from `main` in "Use workflow from", or it stops before
    doing anything.

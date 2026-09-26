@@ -248,6 +248,6 @@ def test_the_release_workflow_grants_nothing_workflow_wide() -> None:
     # starts with nothing, and each of the four jobs asks for its own.
     declared = _declared((_WORKFLOWS / "release.yml").read_text(encoding="utf-8"))
     assert declared["workflow"] == "{}"
-    assert set(declared["jobs"]) == {"prepare", "build-pypi", "release", "publish-pypi"}
+    assert set(declared["jobs"]) == {"prepare", "build-pypi", "release", "publish-pypi", "publish-registry"}
     holders = {job for job, block in declared["jobs"].items() if isinstance(block, dict) and "id-token" in block}
-    assert holders == {"publish-pypi"}, "only the PyPI job may mint an id-token"
+    assert holders == {"publish-pypi", "publish-registry"}, "only the two publish jobs may mint an id-token"
