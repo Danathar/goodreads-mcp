@@ -75,6 +75,16 @@ does:
   the conflict goes away, nothing starts one (#105 merged that way, with no
   CI run at all). Merge `main` into the branch, or close and reopen the pull
   request, and `test` runs.
+- **A push to `main` never has its `test` run cancelled or queued out.**
+  `ci.yml` gives every push to `main` its own concurrency group, keyed on the
+  commit's SHA, and only cancels a pull request's own in-progress run.
+  `cancel-in-progress: false` alone would not be enough: GitHub Actions keeps
+  at most one *pending* run per group and replaces it when another is queued,
+  so a shared group could still leave an intermediate main commit's run
+  cancelled. Without the per-commit group, a later push could pre-empt an
+  earlier main commit's `test` run — and `release.yml` refuses to release a
+  commit whose `test` check is not green, so a pre-empted run would silently
+  block that commit from ever being released.
 
 Nothing in this repository pushes to `main` outside a pull request today. Every
 first-parent commit on `main` since 2026-08-01 is a pull request merge, and the
