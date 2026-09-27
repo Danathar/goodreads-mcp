@@ -16,12 +16,12 @@ exactly as the runner hands it over — in a temp directory, against fixture
 files and real throwaway git repositories, with recording stubs on `PATH` for
 the tools that would reach the network.
 
-Since #165 the workflow has jobs that each run on their own: `prepare` opens
-the CalVer version-bump pull request; `build-pypi` builds the wheel and sdist
-in a checkout nothing else has run in (#175); and `release` tags and publishes
-the version the merged `pyproject.toml` carries — monthly, or by hand. Inputs
-reach every script through `env:`, so no `run:` body holds a `${{ }}` at all,
-and the tests pass inputs the same way.
+Since #165 the workflow has jobs that each run on their own: `prepare` pushes
+the CalVer version-bump branch and links its pull request; `build-pypi` builds
+the wheel and sdist in a checkout nothing else has run in (#175); and `release`
+tags and publishes the version the merged `pyproject.toml` carries — monthly,
+or by hand. Inputs reach every script through `env:`, so no `run:` body holds
+a `${{ }}` at all, and the tests pass inputs the same way.
 
 The contracts here that are load-bearing:
 
@@ -131,7 +131,7 @@ _PACKER = _PACKER_MATCH.group(1)
 # The prepare job's `run:` steps.
 _NEXT_STEP = "Decide the next version"
 _BUMP_STEP = "Bump pyproject.toml and manifest.json"
-_PR_STEP = "Open the pull request"
+_PR_STEP = "Push the release branch and link its pull request"
 
 _PREPARE_EXECUTED = {_NEXT_STEP, _BUMP_STEP, _PR_STEP}
 
@@ -1160,59 +1160,87 @@ def test_the_bump_refuses_a_pyproject_with_no_version_line(tmp_path: Path, pytho
 
 
 # --------------------------------------------------------------------------
-# prepare: Open the pull request
+# prepare: Push the release branch and link its pull request
 # --------------------------------------------------------------------------
 
 
-def _open_pr(work: Path, version: str) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
+def _push_branch(work: Path, version: str) -> tuple[subprocess.CompletedProcess[str], list[list[str]], str]:
+    """Run the step with a recording `gh`, so any attempt to open the pull request shows."""
     log = work.parent / "gh-argv"
     stubs = work.parent / "bin"
     stubs.mkdir(exist_ok=True)
     _write_stub(stubs, "gh", _recorder(log))
+    summary = work.parent / "summary"
     result = _run(
         _PREPARE.body(_PR_STEP),
         work,
         path_dirs=[stubs],
         env={
             "VERSION": version,
-            "GH_TOKEN": "x",
+            "GITHUB_REPOSITORY": "Danathar/goodreads-mcp",
             "GITHUB_REF_NAME": "main",
-            "GITHUB_STEP_SUMMARY": str(work.parent / "summary"),
+            "GITHUB_STEP_SUMMARY": str(summary),
         },
     )
-    return result, _argv(log)
+    return result, _argv(log), summary.read_text(encoding="utf-8") if summary.exists() else ""
 
 
-def test_the_pull_request_carries_the_bump_on_a_release_branch(tmp_path: Path):
+def _bump_files(work: Path, version: str) -> None:
+    (work / "pyproject.toml").write_text(_pyproject(version), encoding="utf-8")
+    (work / "manifest.json").write_text(f'{{"version": "{version}"}}\n', encoding="utf-8")
+
+
+_COMPARE = "https://github.com/Danathar/goodreads-mcp/compare/main...release/2026.10.0?expand=1"
+
+
+def test_prepare_pushes_only_the_release_branch_and_links_its_pull_request(tmp_path: Path):
     work = _repo_with_remote(tmp_path)
-    main_before = _git(work, "ls-remote", "origin", "refs/heads/main")
-    (work / "pyproject.toml").write_text(_pyproject("2026.10.0"), encoding="utf-8")
-    (work / "manifest.json").write_text('{"version": "2026.10.0"}\n', encoding="utf-8")
+    refs_before = _git(work, "ls-remote", "origin").splitlines()
+    _bump_files(work, "2026.10.0")
 
-    result, calls = _open_pr(work, "2026.10.0")
+    result, calls, summary = _push_branch(work, "2026.10.0")
 
     assert result.returncode == 0, result.stderr
-    assert _git(work, "ls-remote", "origin", "refs/heads/main") == main_before, "main was written"
-    branch = _git(work, "ls-remote", "origin", "refs/heads/release/2026.10.0")
-    assert branch, "release/2026.10.0 was not pushed"
-    sha = branch.split()[0]
+    added = set(_git(work, "ls-remote", "origin").splitlines()) - set(refs_before)
+    assert [line.split()[1] for line in added] == ["refs/heads/release/2026.10.0"]
+    assert set(refs_before) <= set(_git(work, "ls-remote", "origin").splitlines()), "an existing ref was rewritten"
+    sha = next(iter(added)).split()[0]
     assert _git(work, "log", "-1", "--format=%s", sha).strip() == "chore(release): 2026.10.0"
     assert sorted(_git(work, "diff", "--name-only", f"{sha}~1", sha).split()) == ["manifest.json", "pyproject.toml"]
-    ((gh, *args),) = calls
-    assert args[:2] == ["pr", "create"]
-    assert args[args.index("--base") + 1] == "main"
-    assert args[args.index("--head") + 1] == "release/2026.10.0"
-    assert args[args.index("--title") + 1] == "chore(release): 2026.10.0"
+    assert calls == [], "the step called gh; GitHub refuses pull requests from github.token here"
+    assert _COMPARE in summary
+    assert "Open the version-bump pull request" in summary
 
 
-def test_no_pull_request_when_the_files_are_already_at_the_version(tmp_path: Path):
+def test_a_rerun_reuses_the_pushed_branch_instead_of_failing_or_forcing(tmp_path: Path):
+    work = _repo_with_remote(tmp_path)
+    _bump_files(work, "2026.10.0")
+    first, _, _ = _push_branch(work, "2026.10.0")
+    assert first.returncode == 0, first.stderr
+    pushed = _git(work, "ls-remote", "origin", "refs/heads/release/2026.10.0")
+
+    # A re-run starts from a fresh checkout of main and makes its own bump.
+    _git(work, "checkout", "--quiet", "main")
+    _bump_files(work, "2026.10.0")
+    (work.parent / "summary").unlink()
+    result, calls, summary = _push_branch(work, "2026.10.0")
+
+    assert result.returncode == 0, result.stderr
+    assert _git(work, "ls-remote", "origin", "refs/heads/release/2026.10.0") == pushed, "the branch was rewritten"
+    assert "already exists" in result.stdout
+    assert calls == []
+    assert _COMPARE in summary and "Reused the existing" in summary
+
+
+def test_no_branch_when_the_files_are_already_at_the_version(tmp_path: Path):
     work = _repo_with_remote(tmp_path)
 
-    result, calls = _open_pr(work, "2026.10.0")
+    result, calls, summary = _push_branch(work, "2026.10.0")
 
     assert result.returncode == 1
     assert "already at 2026.10.0" in result.stderr
     assert calls == []
+    assert summary == ""
     assert not _git(work, "ls-remote", "origin", "refs/heads/release/*")
 
 
@@ -1320,6 +1348,7 @@ def test_prepare_never_writes_main():
     assert 'branch="release/$VERSION"' in body
     pushes = [line for step in _PREPARE.steps for line in (step.run or "").splitlines() if "git push" in line]
     assert len(pushes) == 1, pushes
+    assert not any("--force" in line or "+HEAD" in line for line in pushes), pushes
 
 
 # --------------------------------------------------------------------------

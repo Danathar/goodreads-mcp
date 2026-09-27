@@ -311,7 +311,7 @@ def test_ci_is_the_workflow_that_runs_on_a_pull_request():
 
 
 def test_the_two_versions_the_checklist_pairs_agree_today():
-    """The checklist names the pair and #165's `prepare` run sets both; they agree."""
+    """The checklist names the pair and #165's `prepare` branch sets both; they agree."""
     manifest = json.loads(_text(_ROOT / "manifest.json"))["version"]
     match = re.search(r'^version = "(.+?)"', _text(_ROOT / "pyproject.toml"), re.M)
     assert match, "pyproject.toml no longer declares a version the checklist can pair"

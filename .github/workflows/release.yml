@@ -15,8 +15,9 @@ name: Release MCPB
 #
 # Three jobs, and a run is only ever the first or the other two:
 #
-#   * `prepare` opens the version-bump pull request and stops. Nothing is
-#     tagged or published, and the only branch it pushes is a release/* one.
+#   * `prepare` pushes the version-bump branch, prints the link to open its
+#     pull request, and stops. Nothing is tagged or published, and the only
+#     branch it pushes is a release/* one.
 #   * `build-pypi` builds the wheel and sdist from a fresh checkout and
 #     uploads them, before any job has run third-party code in a tree.
 #   * `release` tags the version pyproject.toml carries on the checked-out
@@ -40,7 +41,7 @@ on:
   workflow_dispatch:
     inputs:
       prepare:
-        description: "Open the version-bump pull request instead of releasing"
+        description: "Push the version-bump branch and print its pull request link instead of releasing"
         type: boolean
         default: false
       version:
@@ -88,12 +89,14 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.prepare
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Pushes a release/* branch and opens a pull request, never main. The
-    # ruleset that governs main governs this pull request too, which is the
-    # point: release automation must not become a second route around it.
+    # Pushes a release/* branch, never main, and leaves opening the pull
+    # request to a person: GitHub starts no workflow for a pull request
+    # opened with github.token, so the ruleset's required checks would never
+    # report on one. The ruleset that governs main governs this pull request
+    # too, which is the point: release automation must not become a second
+    # route around it.
     permissions:
       contents: write
-      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -197,10 +200,9 @@ jobs:
           fi
           git --no-pager diff -- pyproject.toml manifest.json
 
-      - name: Open the pull request
+      - name: Push the release branch and link its pull request
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -211,26 +213,29 @@ jobs:
             exit 1
           fi
 
-          git config --local user.name "github-actions[bot]"
-          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
           branch="release/$VERSION"
-          git checkout -b "$branch"
-          git add pyproject.toml manifest.json
-          git commit -m "chore(release): $VERSION"
-          git push origin "HEAD:refs/heads/$branch"
+          if git ls-remote --exit-code --heads origin "refs/heads/$branch" > /dev/null; then
+            # A re-run: its fresh bump commit would not fast-forward the
+            # branch, and forcing it over the first one gains nothing.
+            echo "::notice::$branch already exists on origin; reusing it and pushing nothing."
+            did="Reused the existing"
+          else
+            git config --local user.name "github-actions[bot]"
+            git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git checkout -b "$branch"
+            git add pyproject.toml manifest.json
+            git commit -m "chore(release): $VERSION"
+            git push origin "HEAD:refs/heads/$branch"
+            did="Pushed"
+          fi
 
-          gh pr create \
-            --base "$GITHUB_REF_NAME" \
-            --head "$branch" \
-            --title "chore(release): $VERSION" \
-            --body "Sets the version in \`pyproject.toml\` and \`manifest.json\` to \`$VERSION\`.
-
-          Merging this is what approves the number. The Release MCPB workflow
-          then tags the commit that lands and publishes it; it does not change
-          the version itself."
-
-          echo "Opened the version-bump pull request for **$VERSION**." >> "$GITHUB_STEP_SUMMARY"
+          link="https://github.com/${GITHUB_REPOSITORY}/compare/${GITHUB_REF_NAME}...${branch}?expand=1"
+          {
+            echo "$did \`$branch\` for **$VERSION**."
+            echo ""
+            echo "Open the version-bump pull request from this link, titled \`chore(release): $VERSION\`: $link"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Open the pull request: $link"
 
   # ------------------------------------------------------------------------
   # Build the distributions PyPI gets, before any third-party code runs.
@@ -498,7 +503,7 @@ jobs:
           # Nothing unchecked is written to it.
           if ! [[ "$version" =~ $CALVER_PATTERN ]]; then
             echo "::error::the pyproject.toml version '$version' is not CalVer YYYY.M.PATCH." >&2
-            echo "Run this workflow with 'prepare' to open the version-bump pull request." >&2
+            echo "Run this workflow with 'prepare' to push the version-bump branch and link its pull request." >&2
             exit 1
           fi
 
@@ -506,8 +511,8 @@ jobs:
           if [ -n "$given" ] && [ "$given" != "$version" ]; then
             echo "::error::asked for $given, but pyproject.toml says $version." >&2
             echo "This workflow tags what main already carries; it does not" >&2
-            echo "change the version. Run it with 'prepare' to open the" >&2
-            echo "version-bump pull request for $given, and merge that first." >&2
+            echo "change the version. Run it with 'prepare' for $given, open the" >&2
+            echo "version-bump pull request it links, and merge that first." >&2
             exit 1
           fi
 
