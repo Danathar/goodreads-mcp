@@ -321,8 +321,20 @@ class GoodreadsClient:
         return json.loads(m.group(1))
 
     @staticmethod
-    def parse_shelf_rss(xml_text: str) -> list[dict[str, Any]]:
+    def parse_shelf_rss(xml_text: str) -> tuple[str | None, list[dict[str, Any]]]:
+        """Return (served shelf, items) from a shelf RSS feed.
+
+        The served shelf is the text after the last 'bookshelf: ' in the
+        channel's own <title> ("Otis 's bookshelf: read" -> "read"), kept
+        exactly, whitespace included: for a shelf name the user does not have,
+        Goodreads serves the whole library titled "...bookshelf: read " with a
+        trailing space. None when the title is missing or not of that shape.
+        """
         root = ET.fromstring(xml_text)
+        title = root.findtext("channel/title")
+        served = None
+        if title is not None and "bookshelf: " in title:
+            served = title.rpartition("bookshelf: ")[2]
         items = []
         for item in root.iter("item"):
             def t(tag: str) -> str:
@@ -344,4 +356,4 @@ class GoodreadsClient:
                     "link": t("link"),
                 }
             )
-        return items
+        return served, items
