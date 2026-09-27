@@ -15,8 +15,9 @@ name: Release MCPB
 #
 # Three jobs, and a run is only ever the first or the other two:
 #
-#   * `prepare` opens the version-bump pull request and stops. Nothing is
-#     tagged or published, and the only branch it pushes is a release/* one.
+#   * `prepare` pushes the version-bump branch, prints the link to open its
+#     pull request, and stops. Nothing is tagged or published, and the only
+#     branch it pushes is a release/* one.
 #   * `build-pypi` builds the wheel and sdist from a fresh checkout and
 #     uploads them, before any job has run third-party code in a tree.
 #   * `release` tags the version pyproject.toml carries on the checked-out
@@ -40,7 +41,7 @@ on:
   workflow_dispatch:
     inputs:
       prepare:
-        description: "Open the version-bump pull request instead of releasing"
+        description: "Push the version-bump branch and print its pull request link instead of releasing"
         type: boolean
         default: false
       version:
@@ -88,12 +89,14 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.prepare
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Pushes a release/* branch and opens a pull request, never main. The
-    # ruleset that governs main governs this pull request too, which is the
-    # point: release automation must not become a second route around it.
+    # Pushes a release/* branch, never main, and leaves opening the pull
+    # request to a person: GitHub starts no workflow for a pull request
+    # opened with github.token, so the ruleset's required checks would never
+    # report on one. The ruleset that governs main governs this pull request
+    # too, which is the point: release automation must not become a second
+    # route around it.
     permissions:
       contents: write
-      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -197,10 +200,9 @@ jobs:
           fi
           git --no-pager diff -- pyproject.toml manifest.json
 
-      - name: Open the pull request
+      - name: Push the release branch and link its pull request
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -211,26 +213,29 @@ jobs:
             exit 1
           fi
 
-          git config --local user.name "github-actions[bot]"
-          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
           branch="release/$VERSION"
-          git checkout -b "$branch"
-          git add pyproject.toml manifest.json
-          git commit -m "chore(release): $VERSION"
-          git push origin "HEAD:refs/heads/$branch"
+          if git ls-remote --exit-code --heads origin "refs/heads/$branch" > /dev/null; then
+            # A re-run: its fresh bump commit would not fast-forward the
+            # branch, and forcing it over the first one gains nothing.
+            echo "::notice::$branch already exists on origin; reusing it and pushing nothing."
+            did="Reused the existing"
+          else
+            git config --local user.name "github-actions[bot]"
+            git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git checkout -b "$branch"
+            git add pyproject.toml manifest.json
+            git commit -m "chore(release): $VERSION"
+            git push origin "HEAD:refs/heads/$branch"
+            did="Pushed"
+          fi
 
-          gh pr create \
-            --base "$GITHUB_REF_NAME" \
-            --head "$branch" \
-            --title "chore(release): $VERSION" \
-            --body "Sets the version in \`pyproject.toml\` and \`manifest.json\` to \`$VERSION\`.
-
-          Merging this is what approves the number. The Release MCPB workflow
-          then tags the commit that lands and publishes it; it does not change
-          the version itself."
-
-          echo "Opened the version-bump pull request for **$VERSION**." >> "$GITHUB_STEP_SUMMARY"
+          link="https://github.com/${GITHUB_REPOSITORY}/compare/${GITHUB_REF_NAME}...${branch}?expand=1"
+          {
+            echo "$did \`$branch\` for **$VERSION**."
+            echo ""
+            echo "Open the version-bump pull request from this link, titled \`chore(release): $VERSION\`: $link"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Open the pull request: $link"
 
   # ------------------------------------------------------------------------
   # Build the distributions PyPI gets, before any third-party code runs.
@@ -295,6 +300,15 @@ jobs:
       # The number that was tagged, as read off pyproject.toml and checked
       # against CALVER_PATTERN before it was written to $GITHUB_OUTPUT.
       version: ${{ steps.version.outputs.version }}
+    env:
+      # Which tags have really been released: a jq program for `gh api
+      # --paginate repos/.../releases`, printing the tag of every published
+      # release that carries the bundle. "Tag the approved commit" pushes the
+      # tag before the release step creates the release, so a run that fails
+      # in between leaves a tag with no release and nothing published (#210).
+      # "Decide whether to release" and "Validate the version" both read the
+      # same list, so they cannot disagree on what counts.
+      RELEASED_TAGS: '.[] | select(.draft | not) | select(any(.assets[]; .name | endswith(".mcpb"))) | .tag_name'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -302,7 +316,9 @@ jobs:
           # This job runs `pip install`, `npx` and `uv run` on unpinned
           # closures. With the default, the checkout leaves this job's
           # `contents: write` token in .git/config for all of them to read.
-          # Only "Tag the approved commit" gets it, through its own `env:`.
+          # The steps that call the API get it through their own `env:`; the
+          # gates only read with it, and "Tag the approved commit" is the one
+          # step that writes with it.
           # That keeps the token off disk; it does not isolate it. A step
           # in this job can still reach a later step's env (`$GITHUB_ENV`
           # sets `BASH_ENV`; a hook written to .git/hooks runs inside `git
@@ -368,18 +384,36 @@ jobs:
       # request touches pyproject.toml and manifest.json, so counting those
       # would make this gate always pass. A dependency-only change in
       # pyproject.toml is the one case it misses; use `force` for that.
+      #
+      # Changes are counted since the newest stable tag that has a release
+      # with the bundle, not since the newest tag. A tag left by a run that
+      # failed before its release (see RELEASED_TAGS) shipped nothing, so
+      # measuring from it would skip the code it was meant to publish.
       - name: Decide whether to release
         id: decide
         if: steps.enabled.outputs.go == 'true'
         env:
           FORCE: ${{ inputs.force }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # Every page is read; a failed call fails the step rather than
+          # reading as "nothing released".
+          released="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" --jq "$RELEASED_TAGS")"
+
           # `|| true` is load-bearing: with no CalVer tags yet, git prints
           # nothing, grep -v exits 1 on empty input, and pipefail turns that
           # into a failed step. That case is exactly the first release. The
           # v0.1.x tags never match the pattern, so they are not counted.
-          last="$(git tag --list '[0-9][0-9][0-9][0-9].*' | grep -vE '(b|rc)[0-9]+$' | sort -V | tail -1 || true)"
+          tags="$(git tag --list '[0-9][0-9][0-9][0-9].*' | grep -vE '(b|rc)[0-9]+$' | sort -V || true)"
+          last=""
+          for tag in $tags; do
+            if grep -qxF "$tag" <<< "$released"; then
+              last="$tag"
+            else
+              echo "Tag $tag has no GitHub release with the bundle; it is not a baseline."
+            fi
+          done
 
           if [ -z "$last" ]; then
             echo "No previous CalVer release; this is the first."
@@ -403,21 +437,29 @@ jobs:
           fi
 
       # An automatic release publishes whatever is on main without a person
-      # looking first. The least it can do is refuse when main's own checks
-      # are not green. "Green" means two things, and the second is the one
-      # that bites: no check may be red or unfinished, and the check the
-      # ruleset on main requires (`test`, .github/rulesets/main.json) must
-      # have passed. A commit with no check runs at all has nothing red on it.
-      # The branches this workflow's own `prepare` job pushes are exactly such
-      # commits: a push made with github.token starts no workflow run, so
-      # ci.yml never reports on them.
+      # looking first. The least it can do is refuse a commit CI has not
+      # passed. That is one check: `test`, the job in ci.yml and the check the
+      # ruleset on main requires (.github/rulesets/main.json). No run of it on
+      # the commit may be red or unfinished, and one must have succeeded. A
+      # commit with no `test` run has nothing red on it, but it is one CI
+      # never ran on, not one that passed. The branches this workflow's own
+      # `prepare` job pushes are exactly such commits: a push made with
+      # github.token starts no workflow run, so ci.yml never reports on them.
+      #
+      # Every other check run on the commit is ignored (#209). None of them
+      # says whether the code is good, and each can go red on main's head with
+      # nothing wrong in it: `prepare` fails when main already carries an
+      # unreleased version, ai-fix.yml's `requested` runs on a comment anyone
+      # can post and attaches to main's head, and nightly-compliance's `live`
+      # fails when Goodreads changes. Judging them let any of those block
+      # every release, the scheduled one included, until a new commit landed.
       #
       # Every page is read. The API returns 30 runs a page, newest first, and
       # main's head keeps collecting runs after CI is done: nightly-compliance
       # adds one a day and ai-fix.yml adds one per issue event, each in its
       # own check suite. After a quiet week `test` is not on the first page,
       # and a gate that read only that page would refuse a commit CI passed.
-      - name: Require green checks on this commit
+      - name: Require a green test check on this commit
         if: steps.decide.outputs.go == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -429,13 +471,13 @@ jobs:
           runs="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
                     --jq '.check_runs[]' | jq -s '{check_runs: .}')"
 
-          bad="$(jq -r '[.check_runs[]
-                         | select(.name != "release")
+          bad="$(jq -r --arg name "$REQUIRED_CHECK" '[.check_runs[]
+                         | select(.name == $name)
                          | select((.conclusion // "pending") | IN("success","skipped","neutral") | not)
                          | "\(.name): \(.conclusion // .status)"] | .[]' <<< "$runs")"
 
           if [ -n "$bad" ]; then
-            echo "::error::Not releasing - checks on ${GITHUB_SHA::12} are not green:" >&2
+            echo "::error::Not releasing - the '$REQUIRED_CHECK' check on ${GITHUB_SHA::12} is not green:" >&2
             printf '%s\n' "$bad" >&2
             exit 1
           fi
@@ -445,10 +487,10 @@ jobs:
 
           if [ "$passed" -eq 0 ]; then
             echo "::error::Not releasing - no successful '$REQUIRED_CHECK' check on ${GITHUB_SHA::12}." >&2
-            echo "A commit with no checks is one CI never ran on, not one that passed." >&2
+            echo "A commit with no '$REQUIRED_CHECK' run is one CI never ran on, not one that passed." >&2
             exit 1
           fi
-          echo "All checks on ${GITHUB_SHA::12} are green, and '$REQUIRED_CHECK' passed."
+          echo "'$REQUIRED_CHECK' passed on ${GITHUB_SHA::12} and no run of it is red or unfinished; other checks are not judged."
 
       - name: Set up Python 3.11
         if: steps.decide.outputs.go == 'true'
@@ -498,7 +540,7 @@ jobs:
           # Nothing unchecked is written to it.
           if ! [[ "$version" =~ $CALVER_PATTERN ]]; then
             echo "::error::the pyproject.toml version '$version' is not CalVer YYYY.M.PATCH." >&2
-            echo "Run this workflow with 'prepare' to open the version-bump pull request." >&2
+            echo "Run this workflow with 'prepare' to push the version-bump branch and link its pull request." >&2
             exit 1
           fi
 
@@ -506,8 +548,8 @@ jobs:
           if [ -n "$given" ] && [ "$given" != "$version" ]; then
             echo "::error::asked for $given, but pyproject.toml says $version." >&2
             echo "This workflow tags what main already carries; it does not" >&2
-            echo "change the version. Run it with 'prepare' to open the" >&2
-            echo "version-bump pull request for $given, and merge that first." >&2
+            echo "change the version. Run it with 'prepare' for $given, open the" >&2
+            echo "version-bump pull request it links, and merge that first." >&2
             exit 1
           fi
 
@@ -528,10 +570,12 @@ jobs:
       # Deleting a tag does not un-download a bundle or un-publish a PyPI
       # version.
       - name: Validate the version
+        id: validate
         if: steps.decide.outputs.go == 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
           PRERELEASE: ${{ inputs.prerelease }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -567,21 +611,51 @@ jobs:
           # too, in case another run tagged it after this checkout.
           # Assigned on its own line so a remote that cannot be reached fails
           # the step instead of reading as "no such tag".
-          remote="$(git ls-remote --tags origin "refs/tags/$VERSION")"
+          #
+          # One taken tag is let through: the one an earlier attempt of this
+          # job pushed before its release failed (#210). It is on this very
+          # commit and no release carries the bundle under it (RELEASED_TAGS),
+          # so nothing was published. The run resumes: "Tag the approved
+          # commit" leaves the tag alone and the release step creates, or
+          # completes, the release for it. Runs of this workflow are
+          # serialised (`concurrency`), so it is never another run's release
+          # still in progress.
+          remote="$(git ls-remote --tags origin "refs/tags/$VERSION" "refs/tags/$VERSION^{}")"
+          resume=false
           if git rev-parse --quiet --verify "refs/tags/$VERSION" >/dev/null || [ -n "$remote" ]; then
-            echo "::error::Tag $VERSION already exists, so pyproject.toml and" >&2
-            echo "manifest.json have not been bumped since that release. Run this" >&2
-            echo "workflow with 'prepare' to open the version-bump pull request," >&2
-            echo "merge it, then release the commit that lands." >&2
-            exit 1
+            # An annotated tag is listed twice; the `^{}` line is the commit under it.
+            tagged="$(awk -v tag="refs/tags/$VERSION" '$2 == tag { direct = $1 } $2 == tag "^{}" { peeled = $1 }
+                        END { print (peeled != "" ? peeled : direct) }' <<< "$remote")"
+            if [ "$tagged" != "$GITHUB_SHA" ]; then
+              where="on ${tagged::12}"
+              [ -n "$tagged" ] || where="only in this checkout"
+              echo "::error::Tag $VERSION already exists ($where), not on ${GITHUB_SHA::12}," >&2
+              echo "so pyproject.toml and manifest.json have not been bumped since that version" >&2
+              echo "was tagged. Run this workflow with 'prepare' for the next version, merge the" >&2
+              echo "version-bump pull request, then release the commit that lands." >&2
+              exit 1
+            fi
+            released="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" --jq "$RELEASED_TAGS")"
+            if grep -qxF "$VERSION" <<< "$released"; then
+              echo "::error::Tag $VERSION already exists, and its GitHub release already carries" >&2
+              echo "the bundle: ${GITHUB_SHA::12} is released. To release newer changes, run this" >&2
+              echo "workflow with 'prepare' for the next version, merge the version-bump pull" >&2
+              echo "request, then release the commit that lands." >&2
+              exit 1
+            fi
+            echo "Tag $VERSION is on ${GITHUB_SHA::12} with no release carrying the bundle;"
+            echo "an earlier attempt failed after tagging. Resuming: the tag is not pushed again."
+            resume=true
           fi
 
           # A release older than the one people already have is worse than no
           # release. Stable tags only: a beta must never become the number a
           # later stable is measured against. A pre-release is measured by the
           # version it leads up to, so 2026.10.0b1 is refused once 2026.10.0
-          # is out, although `sort -V` alone would put the beta after it.
-          newest="$(git tag --list '[0-9][0-9][0-9][0-9].*' | grep -vE '(b|rc)[0-9]+$' | sort -V | tail -1 || true)"
+          # is out, although `sort -V` alone would put the beta after it. The
+          # version's own tag is left out: it exists only on a resume, and a
+          # version is not older than itself.
+          newest="$(git tag --list '[0-9][0-9][0-9][0-9].*' | grep -vE '(b|rc)[0-9]+$' | grep -vxF "$VERSION" | sort -V | tail -1 || true)"
           base="$(printf '%s' "$VERSION" | sed -E 's/(b|rc)[0-9]+$//')"
           echo "newest stable tag: ${newest:-none} | releasing: $VERSION"
 
@@ -592,6 +666,8 @@ jobs:
               exit 1
             fi
           fi
+
+          echo "resume=$resume" >> "$GITHUB_OUTPUT"
 
       - name: Install test deps and run tests
         if: steps.decide.outputs.go == 'true'
@@ -672,13 +748,20 @@ jobs:
         if: steps.decide.outputs.go == 'true' && !inputs.dry_run
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          RESUME: ${{ steps.validate.outputs.resume }}
           # The checkout above persisted no credentials, so the token is not
-          # on disk for the steps before this one to read; it reaches only
-          # this step's env and one push. Same job, though: see the note on
-          # the checkout for what that does not prevent.
+          # on disk for the steps before this one to read; it reaches the env
+          # of the steps that name it, and here one push. Same job, though:
+          # see the note on the checkout for what that does not prevent.
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # A re-run after a failed release: "Validate the version" found the
+          # tag already on this commit with nothing released under it.
+          if [ "$RESUME" = "true" ]; then
+            echo "Tag $VERSION is already on ${GITHUB_SHA::12}; not tagging again."
+            exit 0
+          fi
           git config --local user.name "github-actions[bot]"
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -692,6 +775,10 @@ jobs:
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')" \
             push origin "refs/tags/$VERSION"
 
+      # On a resume the tag is already there and a release for it may be too:
+      # the action looks the release up by `tag_name` (drafts included),
+      # updates the one it finds instead of creating a second, uploads the
+      # bundle, and publishes it if it was left a draft.
       - name: Create GitHub Release and upload .mcpb
         id: publish
         if: steps.decide.outputs.go == 'true' && !inputs.dry_run

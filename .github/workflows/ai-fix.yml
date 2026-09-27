@@ -8,8 +8,15 @@ name: AI fix requested
 # dashboard app (`danathar-atomic-hive[bot]`) applies `ai-fix-requested` to
 # every ACMM issue it opens. The collaborator API answers `none` for that
 # app, so the maintainer check below refused each of those runs and left a
-# red run nobody could act on. Skipping gives a grey run instead. The
-# maintainer check is still the real control for everyone else.
+# red run nobody could act on. Skipping gives a grey run instead.
+#
+# A `/ai-fix` comment from anyone but the owner, an organisation member or a
+# collaborator is skipped the same way (#209). Anyone can comment on this
+# public repository, an issue_comment run attaches its check run to main's
+# head, and a re-run keeps the commenter as the actor. So a refusal there
+# was a red run on main that nobody could clear. The label path needs no such
+# test: only someone with triage access can apply a label. The maintainer
+# check is still the real control for everyone who gets past the `if:`.
 #
 # Why not automatic: review findings need verifying before they're applied.
 # In this repo's own history, 1 of 13 automated findings was factually wrong
@@ -39,7 +46,8 @@ permissions:
 
 jobs:
   requested:
-    # Only maintainers, and only on an explicit request. A bot sender is
+    # Only maintainers, and only on an explicit request. A bot sender, and a
+    # comment whose author is not the owner, a member or a collaborator, are
     # skipped here rather than refused by the check below; see the header.
     if: >-
       github.event.sender.type != 'Bot' && (
@@ -48,7 +56,11 @@ jobs:
           github.event.label.name == 'ai-fix-requested'
         ) || (
           github.event_name == 'issue_comment' &&
-          startsWith(github.event.comment.body, '/ai-fix')
+          startsWith(github.event.comment.body, '/ai-fix') && (
+            github.event.comment.author_association == 'OWNER' ||
+            github.event.comment.author_association == 'MEMBER' ||
+            github.event.comment.author_association == 'COLLABORATOR'
+          )
         )
       )
     runs-on: ubuntu-latest

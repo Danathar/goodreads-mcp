@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import importlib.metadata
 import importlib.util
 import json
 import os
@@ -390,8 +391,30 @@ def test_the_launched_server_completes_a_protocol_handshake(launch_argv: list[st
     assert result["serverInfo"]["name"] == "goodreads", (
         f"launched server identifies as {result['serverInfo']['name']!r}"
     )
+    # The installed distribution, not pyproject.toml: an editable install keeps
+    # the version it was installed at until it is reinstalled.
+    version = importlib.metadata.version("goodreads-mcp-ai")
+    assert result["serverInfo"]["version"] == version, (
+        f"launched server reports version {result['serverInfo']['version']!r}, "
+        f"the installed goodreads-mcp-ai is {version!r}"
+    )
     assert result["protocolVersion"], "the launched server named no protocol version"
     assert result["capabilities"]["tools"] is not None, "the launched server advertises no tools capability"
+
+
+def test_a_server_run_from_an_uninstalled_checkout_still_starts(monkeypatch: pytest.MonkeyPatch):
+    """Without installed package metadata the server keeps the SDK's default version."""
+
+    def not_installed(name: str) -> str:
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", not_installed)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # the module is already imported
+        server = runpy.run_module("goodreads_mcp.server")["mcp"]._mcp_server
+    assert server.version is None
+    monkeypatch.undo()
+    assert server.create_initialization_options().server_version == importlib.metadata.version("mcp")
 
 
 # ------------------------------------------------------- the tool surface

@@ -9,9 +9,10 @@ it and nothing else, so every route in step 3 was unread.
 
 One route was wrong, in the prompt and in the check-live-endpoints skill's
 symptom table alike: both sent `GraphQLError` to "key/endpoint rotation". The
-client raises `GraphQLError` only when AppSync answers without `data`, which is
-what a query naming a renamed field gets ("Validation error of type
-FieldUndefined", seen live on 2026-09-25); a rotated key is an HTTP 401 that
+client raises `GraphQLError` when AppSync fails the query itself: an answer
+without `data` is what a query naming a renamed field gets ("Validation error
+of type FieldUndefined", seen live on 2026-09-25), and a failed root field
+names its `errorType` (#202); a rotated key is an HTTP 401 that
 `graphql` re-discovers past on its own, and surfaces only as an
 `httpx.HTTPStatusError` when re-discovery does not help. And the failure the
 prompt pointed at -- "the discovery regexes in `client.py` need updating" --
@@ -228,6 +229,27 @@ _SCENARIOS = {
         GraphQLError,
         None,
         r"\brenamed\b",
+    ),
+    "root field failed": (
+        _graphql_site(
+            post=lambda r: httpx.Response(
+                200,
+                json={
+                    "data": {"getBookByLegacyId": None},
+                    "errors": [
+                        {
+                            "path": ["getBookByLegacyId"],
+                            "errorType": "Throttling",
+                            "message": "Rate exceeded",
+                        }
+                    ],
+                },
+            )
+        ),
+        lambda: server.similar_books("1"),
+        GraphQLError,
+        None,
+        r"`errorType`",
     ),
     "key rotated and re-discovery did not help": (
         _graphql_site(post=lambda r: httpx.Response(401, json={})),
