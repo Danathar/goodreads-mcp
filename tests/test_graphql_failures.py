@@ -388,6 +388,25 @@ def test_a_page_of_nulls_alone_does_not_end_the_walk(appsync, tool):
     assert result["returned"] == len(expected)
 
 
+def test_pages_of_nulls_alone_cannot_walk_forever(appsync):
+    """Null pages with a fresh cursor each time stop at the page cap, reported as more to read."""
+
+    def answer(root, variables):
+        if root == "getBookByLegacyId":
+            return {"data": {root: _BOOK}}
+        after = variables["pagination"].get("after") or "0"
+        token = str(int(after) + 1)
+        page = {"edges": [_NULL_NODE] * 3, "pageInfo": {"hasNextPage": True, "nextPageToken": token}}
+        return {"data": {root: page}}
+
+    posted = appsync(answer)
+
+    result = server.similar_books("1", limit=10)
+
+    assert (result["returned"], result["has_more"]) == (0, True)
+    pages = [root for root, _ in posted if root == "getSimilarBooks"]
+    assert len(pages) == server._MAX_DISCOVERY_PAGES
+
 
 def test_a_null_series_membership_is_skipped(appsync):
     series = {"userPosition": "2", "series": {"id": "kca://series/1", "title": "The Series"}}

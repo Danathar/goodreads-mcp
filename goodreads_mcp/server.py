@@ -304,6 +304,9 @@ query($name: String!, $period: String!, $location: String!,
 # Discovery connections are paginated in small requests and capped in total.
 _MAX_DISCOVERY = 100
 _DISCOVERY_PAGE_SIZE = 20
+# A page of nulls alone does not end a walk, so the cap on results no longer
+# bounds the requests; this does, at twice the pages a full walk needs.
+_MAX_DISCOVERY_PAGES = 2 * -(-_MAX_DISCOVERY // _DISCOVERY_PAGE_SIZE)
 # popular_books paginates; cap total and page size.
 _MAX_POPULAR = 50
 _POPULAR_PAGE_SIZE = 30
@@ -342,8 +345,9 @@ def _paginated_graphql_edges(
     # Edges read so far, the skipped null ones included: they are not unread
     # results, so they must not make `totalCount` report more.
     read = 0
+    pages = 0
 
-    while len(collected) < want:
+    while len(collected) < want and pages < _MAX_DISCOVERY_PAGES:
         # Goodreads' cursor is a page number and the server derives the
         # offset from the limit sent with each request, so the page size
         # must stay constant across the walk. Overshoot is trimmed below.
@@ -352,6 +356,7 @@ def _paginated_graphql_edges(
             pagination["after"] = token
         page_variables = {**variables, "pagination": pagination}
         connection = gr.graphql(query, page_variables).get(connection_name) or {}
+        pages += 1
         if total_count is None:
             total_count = connection.get("totalCount")
 
