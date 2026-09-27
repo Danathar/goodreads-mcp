@@ -37,7 +37,7 @@ import functools
 import html as html_mod
 import inspect
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from urllib.parse import unquote
 
@@ -152,12 +152,18 @@ def _clean_text(s: str | None) -> str:
 
 
 def _ms_to_iso(ms: Any) -> str | None:
-    """Epoch-milliseconds -> YYYY-MM-DD (UTC), or None."""
+    """Epoch-milliseconds -> YYYY-MM-DD (UTC), or None.
+
+    Adds the offset to the epoch instead of calling ``fromtimestamp``: the
+    Windows C runtime rejects negative timestamps, and Goodreads uses them
+    for books published before 1970.
+    """
     if not ms:
         return None
     try:
-        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).date().isoformat()
-    except (TypeError, ValueError, OSError):
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        return (epoch + timedelta(milliseconds=ms)).date().isoformat()
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
