@@ -95,6 +95,8 @@ def faked_goodreads(monkeypatch):
     def get(url: str, **kw: Any) -> _Response:
         if url.startswith("/review/list_rss/"):
             return _Response(text=_RSS)
+        if url.startswith("/user/show/"):
+            return _Response(text='<a href="/review/list/42?shelf=read">read</a>')
         return _Response([{"bookId": "8", "title": "A Book", "bookUrl": "/book/show/8"}])
 
     monkeypatch.setattr(server.gr, "get", get)
@@ -153,6 +155,44 @@ _PRODUCERS = [
     ("compare_books", {"book_ids": ["1"]}),
     ("get_shelf", {"shelf": "read", "user_id": "42"}),
 ]
+
+
+# Tools that emit no ``book_id`` at all, with the arguments that prove it.
+_NON_PRODUCERS = [
+    ("list_shelves", {"user_id": "42"}),
+]
+
+
+def test_every_registered_tool_is_a_producer_or_a_named_non_producer():
+    """The producer list is typed by hand, so a new tool that returns a
+    ``book_id`` would be left out of the round trip and could emit an integer
+    unseen -- exactly #193 again. Join both lists to the registry a host reads,
+    in both directions, so a new tool must be placed on one side."""
+    registered = {tool.name for tool in anyio.run(server.mcp.list_tools)}
+    producers = [name for name, _ in _PRODUCERS]
+    non_producers = [name for name, _ in _NON_PRODUCERS]
+    assert len(set(producers)) == len(producers), "a producer is listed twice"
+    assert not set(producers) & set(non_producers), "a tool is listed as both"
+    listed = set(producers) | set(non_producers)
+    assert listed == registered, (
+        f"registered but in neither list: {sorted(registered - listed)}; "
+        f"listed but not registered: {sorted(listed - registered)}. Add a tool "
+        "that returns a book_id to _PRODUCERS, one that returns none to _NON_PRODUCERS."
+    )
+
+
+@pytest.mark.parametrize("tool, arguments", _NON_PRODUCERS, ids=[t for t, _ in _NON_PRODUCERS])
+def test_a_named_non_producer_emits_no_book_id(faked_goodreads, tool, arguments):
+    """Placing a producer in ``_NON_PRODUCERS`` would dodge the round trip."""
+
+    async def main() -> None:
+        result = await _call(tool, arguments)
+        # A non-dict return comes back wrapped as {"result": ...}.
+        payload = result.get("result", result)
+        assert payload, f"{tool} returned nothing; the fixture no longer exercises it"
+        assert _book_ids(result) == []
+
+    anyio.run(main)
 
 
 @pytest.mark.parametrize("producer, arguments", _PRODUCERS, ids=[p for p, _ in _PRODUCERS])

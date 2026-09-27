@@ -19,11 +19,16 @@ Requirements:
   the model to cite from those fields. A null url should be explicit, not
   invented.
 - Reuse `_book_summary` / `_work_summary` / `_node_summary` for result shaping
-  so tools stay chainable (one tool's `book_id` feeds the next).
+  so tools stay chainable (one tool's `book_id` feeds the next). A `book_id`
+  you build yourself goes through `_book_id`: GraphQL's `legacyId` is an Int,
+  and every tool's `book_id` parameter refuses one.
 - Never hardcode the GraphQL key or endpoint.
 
 Tests: add offline tests with fixtures to `tests/`, and a live test to
-`tests/e2e/test_smoke_live.py`. CI enforces 55% coverage. New tests change the
+`tests/e2e/test_smoke_live.py`. Add the tool to the producer or non-producer
+list in `tests/test_book_id_chaining.py`, which feeds every emitted `book_id`
+back into every tool that takes one; a tool that takes a `book_id` also moves
+that file's pinned consumer list. CI enforces 55% coverage. New tests change the
 collected count, so update the offline-tests row in `docs/quality.md` to match.
 
 Finally, update every copy of the tool registry: add the tool to the table in
