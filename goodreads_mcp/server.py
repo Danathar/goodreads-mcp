@@ -643,7 +643,9 @@ def get_reviews(
             raise ValueError(f"{name} must be between 1 and 5.")
     if min_rating is not None and max_rating is not None and min_rating > max_rating:
         raise ValueError("min_rating must not be greater than max_rating.")
-    want = max(0, min(limit, _MAX_REVIEWS))
+    if limit < 0:
+        raise ValueError("limit must be zero or greater.")
+    want = min(limit, _MAX_REVIEWS)
     book = _book_by_legacy_id(_Q_BOOK_BY_LEGACY, book_id)
     work_id = (book.get("work") or {}).get("id")
     if not work_id:
@@ -926,14 +928,18 @@ def popular_books(
     Each entry has rank, count (members who added it), and the usual
     book_id/title/author/rating/url so you can chain into get_book/get_reviews.
     """
+    if not 1000 <= year <= 9999:
+        raise ValueError("year must be a 4-digit release year.")
     if month is not None and not 1 <= month <= 12:
         raise ValueError("month must be between 1 and 12.")
+    if limit < 0:
+        raise ValueError("limit must be zero or greater.")
     name = (
         f"books-by-release-date-{year}-{month}"
         if month is not None
         else f"works-by-release-date-{year}"
     )
-    want = max(0, min(limit, _MAX_POPULAR))
+    want = min(limit, _MAX_POPULAR)
 
     entries: list[dict[str, Any]] = []
     token: str | None = None
