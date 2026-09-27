@@ -116,6 +116,8 @@ It denies `pytest` with a path outside `tests/`, an option that loads code, or
 a word that starts with `@` — pytest reads `@file` as a file of more
 arguments, an option's value included, so `pytest -k @.env tests` printed the
 first line of `.env`, and a file naming a test module outside `tests/` ran it;
+a word that starts with a glob, on `pytest` anywhere and on `git` before `--`,
+because the shell can expand it to a file named `@.env` or `--output=x`;
 `--no-index`, `--output`, `--output-file`, `--orderfile` and its short form
 `-O` on `git diff` and `git log`; a `git diff` operand naming a path outside
 the checkout, which diffs two files with no option written at all; a shell

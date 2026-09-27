@@ -458,6 +458,19 @@ _DENIED = [
     ("pytest --deselect @/tmp/args tests", "argument file"),
     ("pytest @goodreads_mcp/../tests/args.txt", "argument file"),
     ("python -m pytest -q -- @/tmp/args", "argument file"),
+    # a glob at the start of a word expands to whatever name is on disk: with
+    # a file named `@.env` in the checkout, `-k [@].env` printed `.env`'s
+    # first line (pytest 9.1.1, #197)
+    ("pytest -q -k [@].env tests", "starts with a glob"),
+    ("pytest -q -k ?.env tests", "starts with a glob"),
+    ("pytest --deselect [@]x tests", "starts with a glob"),
+    ("python -m pytest -q -- *", "starts with a glob"),
+    # and in git, before `--`, to a file named like an option: with a file
+    # named `--output=pwned` in the checkout, `git diff *` wrote `pwned`
+    # (git 2.47.3, #197)
+    ("git diff HEAD *", "starts with a glob"),
+    ("git log --oneline [-]*", "starts with a glob"),
+    ("git log --grep ? HEAD", "starts with a glob"),
 ]
 
 # Ordinary invocations the guard must not touch. The first line is the exact
@@ -904,6 +917,18 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         'if token.startswith("@"):',
         "if False:",
         "pytest -q -k @.env tests",
+    ),
+    (
+        "a glob at the start of a pytest word",
+        "if token.startswith(_GLOB_START):",
+        "if False:",
+        "pytest -q -k [@].env tests",
+    ),
+    (
+        "a glob at the start of a git word before `--`",
+        "if not after_dashdash and token.startswith(_GLOB_START):",
+        "if False:",
+        "git diff HEAD *",
     ),
     (
         "a path-spelled `noglob` as a wrapper",

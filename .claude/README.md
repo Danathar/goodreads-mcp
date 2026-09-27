@@ -104,7 +104,12 @@ the whole command string and **denies** the spellings above —
 - `$`, backticks, a brace expansion, a glob standing where an option goes, or
   a string the shell tokeniser rejects, in a guarded command — the guard can't
   see what the shell would substitute or expand, so it refuses rather than
-  guesses.
+  guesses;
+- a glob at the start of any `pytest` word, or of any `git` word before `--`:
+  with nothing literal in front of it, it can expand to a file named `@.env`
+  (an argument file to pytest) or `--output=x` (an option to git). A glob
+  later in a path (`tests/test_*.py`), or after `--` on git (`git diff --
+  '*.py'`), is left alone.
 
 ### The guard only holds if it reads what the shell runs
 

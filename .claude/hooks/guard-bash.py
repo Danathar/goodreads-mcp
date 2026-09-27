@@ -507,6 +507,14 @@ def _backslash_wrapper(command: str) -> str | None:
 # filesystem happens to hold, including a file named after a denied flag.
 _GLOB = ("*", "?", "[", "]")
 
+# A glob at the very start of a word is the other way in. Nothing literal
+# comes before it, so it can expand to any name in the directory, and a name
+# that starts with `-` or `@` is then read as an option or as a pytest argument
+# file. With a file named `@.env` in the checkout, `pytest -k [@].env tests`
+# printed `.env`'s first line; with one named `--output=pwned`, `git diff *`
+# wrote `pwned` (#197).
+_GLOB_START = ("*", "?", "[")
+
 
 class Denied(Exception):
     """Raised with the reason a command is refused."""
@@ -598,6 +606,17 @@ def _check_pytest(args: list[str], cwd: Path) -> None:
             raise Denied(
                 f"`{token}` is a pytest argument file: pytest reads the named "
                 "file as more arguments, which the guard cannot check"
+            )
+        # A word the shell expands can become one: `[@].env` is `@.env` once
+        # a file of that name exists. No test path or `-k`/`-m` expression
+        # here starts with a glob, and a path that does resolves outside
+        # tests/ anyway.
+        if token.startswith(_GLOB_START):
+            raise Denied(
+                f"pytest with a word that starts with a glob (`{token}`): the "
+                "shell can expand it to a name starting with `@` or `-`, which "
+                "pytest reads as an argument file or an option the guard "
+                "never saw"
             )
     positional: list[str] = []
     i = 0
@@ -729,6 +748,16 @@ def _check_git(verb: str, args: list[str], cwd: Path) -> None:
                 f"`{verb} {token}` reaches outside the repository: `-O` is "
                 "`--orderfile` spelled short, and git reads the path attached "
                 "to it"
+            )
+        # Before `--`, a word the shell expands can become an option:
+        # `git diff *` with a file named `--output=pwned` in the checkout
+        # wrote `pwned` (git 2.47.3). After `--` every word is a path, so
+        # `git diff -- '*.py'` is left alone.
+        if not after_dashdash and token.startswith(_GLOB_START):
+            raise Denied(
+                f"`{verb} {token}`: a word that starts with a glob can expand "
+                "to a file named like an option (`--output=...`), which git "
+                "would obey. Put the pattern after `--`"
             )
         if value_next:
             # `--grep /x`: the option's value, which git never reads as a path.
