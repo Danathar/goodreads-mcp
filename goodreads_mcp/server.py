@@ -38,7 +38,7 @@ import html as html_mod
 import importlib.metadata
 import inspect
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from urllib.parse import unquote
 
@@ -46,7 +46,7 @@ import anyio  # mcp's own async layer (it requires anyio>=4.5), not a new depend
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-from .client import BASE, GoodreadsClient, LoginRequired
+from .client import BASE, GoodreadsClient, GraphQLError, LoginRequired, ToolCall
 from .config import load_user_id
 
 _READ_ONLY = ToolAnnotations(
@@ -63,15 +63,22 @@ def _in_worker_thread(fn: Callable[..., Any]) -> Callable[..., Any]:
     `functools.wraps` carries the name, docstring and signature across, so
     FastMCP builds the same tool schema it would from `fn` itself. A cancelled
     request (the client sent notifications/cancelled, or went away) returns
-    at once; the thread finishes its Goodreads request on its own and the
-    result is dropped.
+    at once and sets the call's cancel flag (`client.ToolCall`), so the thread
+    sends no further Goodreads request. A request already on the wire is not
+    interrupted: it runs until Goodreads answers or the client's 30 s timeout
+    fires, and its result is dropped.
     """
 
     @functools.wraps(fn)
     async def run_off_loop(*args: Any, **kwargs: Any) -> Any:
-        return await anyio.to_thread.run_sync(
-            functools.partial(fn, *args, **kwargs), abandon_on_cancel=True
-        )
+        call = ToolCall()
+        try:
+            return await anyio.to_thread.run_sync(
+                functools.partial(call.run, fn, *args, **kwargs), abandon_on_cancel=True
+            )
+        except anyio.get_cancelled_exc_class():
+            call.cancel()
+            raise
 
     return run_off_loop
 
@@ -84,7 +91,9 @@ class OffLoopFastMCP(FastMCP):
     server could not answer a ping, act on a cancellation, or start another
     tool call (#92). Registering an async wrapper keeps the loop free. The
     functions themselves stay sync, so `compare_books` can call `get_book`
-    and the offline tests call the bodies without an event loop.
+    and the offline tests call the bodies without an event loop. Cancelling
+    a call stops its thread before its next Goodreads request (#206), so an
+    abandoned call does not keep taking `client.MAX_IN_FLIGHT` slots.
     """
 
     def add_tool(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
@@ -124,13 +133,23 @@ DEFAULT_USER_ID = load_user_id()
 
 
 def _user_id(user_id: str | None) -> str:
-    uid = user_id or DEFAULT_USER_ID
+    """The Goodreads user id to use: the argument, else the configured
+    default. Either must be the number, optionally followed by '-' and the
+    name slug, as in goodreads.com/user/show/<ID>-name (#205)."""
+    uid = str(user_id or "").strip() or str(DEFAULT_USER_ID or "").strip()
     if not uid:
         raise ValueError(
             "No user_id given and GOODREADS_USER_ID is not configured. "
             "It's the number in goodreads.com/user/show/<ID>-name."
         )
-    return str(uid)
+    if not _USER_ID_RE.fullmatch(uid):
+        raise ValueError(
+            "user_id must be a Goodreads user id: the number, optionally "
+            "followed by '-' and the name slug, e.g. '1' or '1-otis-chandler'. "
+            "It's the number in goodreads.com/user/show/<ID>-name; pass just "
+            f"that, not the URL. Got {uid!r}."
+        )
+    return uid
 
 
 def _clean_text(s: str | None) -> str:
@@ -140,12 +159,18 @@ def _clean_text(s: str | None) -> str:
 
 
 def _ms_to_iso(ms: Any) -> str | None:
-    """Epoch-milliseconds -> YYYY-MM-DD (UTC), or None."""
+    """Epoch-milliseconds -> YYYY-MM-DD (UTC), or None.
+
+    Adds the offset to the epoch instead of calling ``fromtimestamp``: the
+    Windows C runtime rejects negative timestamps, and Goodreads uses them
+    for books published before 1970.
+    """
     if not ms:
         return None
     try:
-        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).date().isoformat()
-    except (TypeError, ValueError, OSError):
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        return (epoch + timedelta(milliseconds=ms)).date().isoformat()
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -156,7 +181,7 @@ def _fetch_book_apollo(book_id: str) -> dict[str, Any]:
     challenge (HTTP 202). The .xml-suffixed path serves the identical
     Next.js page with __NEXT_DATA__ intact and is not challenged.
     """
-    bid = str(book_id)
+    bid = _match_book_id(book_id).group(0)
     if not bid.endswith(".xml"):
         bid += ".xml"
     page = gr.get(f"/book/show/{bid}")
@@ -182,14 +207,63 @@ def _find_book(apollo: dict[str, Any], book_id: str) -> dict[str, Any]:
     return book
 
 
-def _legacy_id(book_id: str) -> int:
-    """Extract the numeric legacy id from '54493401' or '54493401-slug'."""
-    m = re.match(r"\d+", str(book_id))
-    if not m:
+# A Goodreads id is a number without a leading zero, optionally followed by
+# the title (or user name) slug: '54493401', '11870085-the-fault-in-our-stars',
+# or the older dot form '2767052.The_Hunger_Games'. Checking the whole string,
+# not just its leading digits, keeps an ISBN, a URL or a query string from
+# being read as whatever number it starts with, and from reaching the URL
+# path (#205). The slug never holds / ? # & = % or whitespace.
+_SLUG = r"[\w.-]+"
+_BOOK_ID_RE = re.compile(rf"([1-9][0-9]*)(?:[-.]{_SLUG})?")
+_USER_ID_RE = re.compile(rf"([1-9][0-9]*)(?:-{_SLUG})?")
+_GRAPHQL_INT_MAX = 2**31 - 1
+
+
+def _is_isbn(value: str) -> bool:
+    """True for a checksum-valid ISBN-13 (978/979) or ISBN-10.
+
+    Hyphens and spaces are ignored in an ISBN-13. An ISBN-10 counts only as
+    one run of ten characters or split into its four groups: a book id with a
+    short all-digit slug ('100000000-1') is ten characters too, and stays a
+    book id.
+    """
+    s = re.sub(r"[-\s]", "", value).upper()
+    if re.fullmatch(r"97[89][0-9]{10}", s):
+        return sum(int(c) * (3 if i % 2 else 1) for i, c in enumerate(s)) % 10 == 0
+    groups = len(re.split(r"[-\s]+", value))
+    if re.fullmatch(r"[0-9]{9}[0-9X]", s) and groups in (1, 4):
+        total = sum((10 - i) * (10 if c == "X" else int(c)) for i, c in enumerate(s))
+        return total % 11 == 0
+    return False
+
+
+def _match_book_id(book_id: Any) -> re.Match[str]:
+    """Validate a book_id (surrounding whitespace ignored). Group 0 is the
+    id to put in a URL path, group 1 its number."""
+    bid = str(book_id).strip()
+    if _is_isbn(bid):
         raise ValueError(
-            f"book_id must start with the numeric Goodreads id, got {book_id!r}."
+            f"book_id {bid!r} is an ISBN, not a Goodreads book id. "
+            "search_books finds a book by ISBN; pass the book_id it returns."
         )
-    return int(m.group(0))
+    m = _BOOK_ID_RE.fullmatch(bid)
+    # The backend takes the number as a GraphQL Int (32-bit); a longer one is
+    # a typo'd ISBN or another number, never a book (#205).
+    if m and int(m.group(1)) <= _GRAPHQL_INT_MAX:
+        return m
+    raise ValueError(
+        "book_id must be a Goodreads book id: the number, optionally followed "
+        "by '-' or '.' and the title slug, e.g. '54493401', "
+        "'11870085-the-fault-in-our-stars' or '2767052.The_Hunger_Games'. "
+        "For a goodreads.com/book/show/<ID>... URL pass just the number. "
+        f"Got {bid!r}."
+    )
+
+
+def _legacy_id(book_id: str) -> int:
+    """The numeric legacy id of a validated book_id: 54493401 for
+    '54493401', '54493401-slug' or '54493401.Slug'."""
+    return int(_match_book_id(book_id).group(1))
 
 
 def _book_id(legacy_id: Any) -> str | None:
@@ -311,6 +385,9 @@ query($name: String!, $period: String!, $location: String!,
 # Discovery connections are paginated in small requests and capped in total.
 _MAX_DISCOVERY = 100
 _DISCOVERY_PAGE_SIZE = 20
+# A page of nulls alone does not end a walk, so the cap on results no longer
+# bounds the requests; this does, at twice the pages a full walk needs.
+_MAX_DISCOVERY_PAGES = 2 * -(-_MAX_DISCOVERY // _DISCOVERY_PAGE_SIZE)
 # popular_books paginates; cap total and page size.
 _MAX_POPULAR = 50
 _POPULAR_PAGE_SIZE = 30
@@ -332,8 +409,10 @@ def _paginated_graphql_edges(
 ) -> tuple[list[dict[str, Any]], bool, int | None]:
     """Collect a bounded number of edges from a GraphQL connection.
 
-    Returns ``(edges, has_more, total_count)``. Every supported discovery
-    connection uses Goodreads' standard PaginationInput and PageInfo shapes.
+    Returns ``(edges, has_more, total_count)``; every returned edge has a
+    ``node``. Null edges and edges whose node is null are skipped and not
+    counted. Every supported discovery connection uses Goodreads' standard
+    PaginationInput and PageInfo shapes.
     """
     want = _validate_discovery_limit(limit)
     if want == 0:
@@ -344,8 +423,12 @@ def _paginated_graphql_edges(
     total_count: int | None = None
     has_more = False
     seen_tokens: set[str] = set()
+    # Edges read so far, the skipped null ones included: they are not unread
+    # results, so they must not make `totalCount` report more.
+    read = 0
+    pages = 0
 
-    while len(collected) < want:
+    while len(collected) < want and pages < _MAX_DISCOVERY_PAGES:
         # Goodreads' cursor is a page number and the server derives the
         # offset from the limit sent with each request, so the page size
         # must stay constant across the walk. Overshoot is trimmed below.
@@ -354,10 +437,13 @@ def _paginated_graphql_edges(
             pagination["after"] = token
         page_variables = {**variables, "pagination": pagination}
         connection = gr.graphql(query, page_variables).get(connection_name) or {}
+        pages += 1
         if total_count is None:
             total_count = connection.get("totalCount")
 
-        page_edges = [e for e in (connection.get("edges") or []) if e]
+        raw_edges = connection.get("edges") or []
+        page_edges = [e for e in raw_edges if e and e.get("node")]
+        read += len(raw_edges)
         remaining = want - len(collected)
         collected.extend(page_edges[:remaining])
 
@@ -366,29 +452,45 @@ def _paginated_graphql_edges(
         has_more = bool(info.get("hasNextPage") and next_token)
         if len(page_edges) > remaining:
             has_more = True
-        if len(collected) >= want or not page_edges or not has_more:
+        # An empty page ends the walk; a page of nulls alone does not.
+        if len(collected) >= want or not raw_edges or not has_more:
             break
         if next_token in seen_tokens:
             break
         seen_tokens.add(next_token)
         token = next_token
 
-    if total_count is not None and len(collected) < total_count:
+    if total_count is not None and read < total_count:
         has_more = True
     return collected, has_more, total_count
+
+
+def _book_by_legacy_id(query: str, book_id: str) -> dict[str, Any]:
+    """Run a `getBookByLegacyId` query for `book_id` and return the book.
+
+    AppSync fails the root field with RESOURCE_NOT_FOUND for an id it does
+    not know; that becomes the same ValueError as a null book.
+    """
+    try:
+        book = gr.graphql(query, {"id": _legacy_id(book_id)}).get("getBookByLegacyId")
+    except GraphQLError as e:
+        if not e.not_found:
+            raise
+        book = None
+    if not book:
+        raise ValueError(f"No book found for id {book_id!r}.")
+    return book
 
 
 def _resolve_book_ids(book_id: str) -> dict[str, Any]:
     """Resolve a book_id to its book/work/contributor/series identifiers,
     legacyId, title, and every series membership in one GraphQL call."""
-    book = gr.graphql(_Q_BOOK_IDS, {"id": _legacy_id(book_id)}).get(
-        "getBookByLegacyId"
-    )
-    if not book:
-        raise ValueError(f"No book found for id {book_id!r}.")
+    book = _book_by_legacy_id(_Q_BOOK_IDS, book_id)
     contributor = (book.get("primaryContributorEdge") or {}).get("node") or {}
     series_memberships = []
     for membership in book.get("bookSeries") or []:
+        if not membership:
+            continue
         series = membership.get("series") or {}
         series_memberships.append(
             {
@@ -507,7 +609,8 @@ def search_books(query: str, max_results: int = 10) -> list[dict[str, Any]]:
 @mcp.tool(annotations=_READ_ONLY)
 def get_book(book_id: str, review_language_limit: int = 5) -> dict[str, Any]:
     """Get full details for a book by its Goodreads id (numeric, or numeric-slug
-    like '11870085-the-fault-in-our-stars').
+    like '11870085-the-fault-in-our-stars' or '2767052.The_Hunger_Games'). An
+    ISBN is not a book id: find the book with search_books first.
 
     Parses the page's embedded __NEXT_DATA__ JSON (Apollo state) rather than
     scraping the DOM, which survives markup changes. Includes the full
@@ -544,6 +647,8 @@ def get_book(book_id: str, review_language_limit: int = 5) -> dict[str, Any]:
     series_memberships = []
     book_series = book.get("bookSeries") or []
     for membership in book_series:
+        if not membership:
+            continue
         series_node = deref(membership.get("series"))
         series_memberships.append(
             {
@@ -620,12 +725,10 @@ def get_reviews(
             raise ValueError(f"{name} must be between 1 and 5.")
     if min_rating is not None and max_rating is not None and min_rating > max_rating:
         raise ValueError("min_rating must not be greater than max_rating.")
-    want = max(0, min(limit, _MAX_REVIEWS))
-    book = gr.graphql(_Q_BOOK_BY_LEGACY, {"id": _legacy_id(book_id)}).get(
-        "getBookByLegacyId"
-    )
-    if not book:
-        raise ValueError(f"No book found for id {book_id!r}.")
+    if limit < 0:
+        raise ValueError("limit must be zero or greater.")
+    want = min(limit, _MAX_REVIEWS)
+    book = _book_by_legacy_id(_Q_BOOK_BY_LEGACY, book_id)
     work_id = (book.get("work") or {}).get("id")
     if not work_id:
         raise ValueError(f"Could not resolve work id for book {book_id!r}.")
@@ -652,10 +755,14 @@ def get_reviews(
         pages += 1
         if total is None:
             total = conn.get("totalCount")
-        edges = conn.get("edges") or []
+        # Null edges and null reviews are skipped: they are not reviews, so
+        # they count neither toward limit nor as unread. Whether the page was
+        # empty is judged on what Goodreads sent, nulls included.
+        raw_edges = conn.get("edges") or []
+        edges = [e for e in raw_edges if e and e.get("node")]
         unread = 0
         for index, edge in enumerate(edges):
-            rev = edge.get("node") or {}
+            rev = edge["node"]
             spoiler = bool(rev.get("spoilerStatus"))
             if exclude_spoilers and spoiler:
                 continue
@@ -679,7 +786,7 @@ def get_reviews(
         token = (conn.get("pageInfo") or {}).get("nextPageToken")
         # A remaining cursor means unread reviews, even on an empty page.
         has_more = bool(unread or token)
-        if not token or not edges:
+        if not token or not raw_edges:
             break
         # A server that hands back the same cursor must not loop forever.
         if token in seen_tokens:
@@ -710,7 +817,7 @@ def similar_books(book_id: str, limit: int = 10) -> dict[str, Any]:
     edges, has_more, _ = _paginated_graphql_edges(
         _Q_SIMILAR, "getSimilarBooks", {"id": ids["book_kca"]}, limit
     )
-    books = [_book_summary(e.get("node") or {}) for e in edges]
+    books = [_book_summary(e["node"]) for e in edges]
     return {
         "book_id": ids["legacy_id"],
         "title": ids["title"],
@@ -740,7 +847,7 @@ def author_books(book_id: str, limit: int = 20) -> dict[str, Any]:
         },
         limit,
     )
-    works = [_work_summary(e.get("node") or {}) for e in edges]
+    works = [_work_summary(e["node"]) for e in edges]
     return {
         "author": ids["contributor_name"],
         "author_url": ids["contributor_url"],
@@ -795,7 +902,7 @@ def series_books(
     )
     books = []
     for e in edges:
-        summary = _work_summary(e.get("node") or {})
+        summary = _work_summary(e["node"])
         summary["placement"] = e.get("seriesPlacement")
         summary["is_primary"] = e.get("isPrimary")
         books.append(summary)
@@ -824,7 +931,7 @@ def get_editions(book_id: str, limit: int = 20) -> dict[str, Any]:
     )
     editions = []
     for e in edges:
-        node = e.get("node") or {}
+        node = e["node"]
         details = node.get("details") or {}
         editions.append(
             {
@@ -866,7 +973,7 @@ def book_lists(book_id: str, limit: int = 10) -> dict[str, Any]:
     )
     lists = [
         {
-            "list_id": (n := e.get("node") or {}).get("legacyId"),
+            "list_id": (n := e["node"]).get("legacyId"),
             "title": n.get("title"),
             "votes": n.get("userListVotesCount"),
             "books_count": n.get("listBooksCount"),
@@ -893,7 +1000,8 @@ def popular_books(
 
     Ranks the books/works released in a given year (or a specific month of a
     year) by how many Goodreads members have added them. Mirrors the
-    goodreads.com/book/popular_by_date/<year>[/<month>] page.
+    goodreads.com/book/popular_by_date/<year>[/<month>] page. A year or month
+    Goodreads has no chart for raises an error rather than returning no books.
 
     year: 4-digit release year.
     month: optional 1-12 for a single month; omit for the whole year.
@@ -902,30 +1010,45 @@ def popular_books(
     Each entry has rank, count (members who added it), and the usual
     book_id/title/author/rating/url so you can chain into get_book/get_reviews.
     """
+    if not 1000 <= year <= 9999:
+        raise ValueError("year must be a 4-digit release year.")
     if month is not None and not 1 <= month <= 12:
         raise ValueError("month must be between 1 and 12.")
+    if limit < 0:
+        raise ValueError("limit must be zero or greater.")
     name = (
         f"books-by-release-date-{year}-{month}"
         if month is not None
         else f"works-by-release-date-{year}"
     )
-    want = max(0, min(limit, _MAX_POPULAR))
+    want = min(limit, _MAX_POPULAR)
 
     entries: list[dict[str, Any]] = []
     token: str | None = None
     has_more = False
     seen_tokens: set[str] = set()
     while len(entries) < want:
-        page = gr.graphql(
-            _Q_TOP_LIST,
-            {
-                "name": name,
-                "period": "A",
-                "location": "ALL",
-                "after": token,
-                "limit": _POPULAR_PAGE_SIZE,
-            },
-        ).get("getTopList") or {}
+        try:
+            page = gr.graphql(
+                _Q_TOP_LIST,
+                {
+                    "name": name,
+                    "period": "A",
+                    "location": "ALL",
+                    "after": token,
+                    "limit": _POPULAR_PAGE_SIZE,
+                },
+            ).get("getTopList") or {}
+        except GraphQLError as e:
+            # Goodreads answers a chart it does not have (a future year, say)
+            # with RESOURCE_NOT_FOUND on the first page. Later in the walk
+            # the chart exists, so the same answer is a failure to surface.
+            if token is not None or not e.not_found:
+                raise
+            period = str(year) if month is None else f"{year}-{month:02d}"
+            raise ValueError(
+                f"Goodreads has no popular-by-date chart for {period}."
+            ) from e
         edges = [e for e in (page.get("edges") or []) if e and e.get("node")]
         remaining = want - len(entries)
         for edge in edges[:remaining]:
@@ -1020,8 +1143,10 @@ def get_shelf(
     """List books on a shelf via its RSS feed (public shelves; no auth).
 
     Common shelves: 'read', 'currently-reading', 'to-read', plus any custom
-    shelf name. RSS pages hold ~100 items; pass page=2,3,... for more
-    (pages start at 1). Defaults to the configured GOODREADS_USER_ID.
+    shelf name. Names are case-sensitive and must match a shelf the user has
+    (list_shelves gives them); any other name raises ValueError. An empty
+    name lists every shelf. RSS pages hold ~100 items; pass page=2,3,... for
+    more (pages start at 1). Defaults to the configured GOODREADS_USER_ID.
 
     When you cite a book from a shelf, link it to its 'link' field.
     """
@@ -1029,7 +1154,16 @@ def get_shelf(
         raise ValueError("page must be 1 or greater.")
     uid = _user_id(user_id)
     resp = gr.get(f"/review/list_rss/{uid}", params={"shelf": shelf, "page": page})
-    return gr.parse_shelf_rss(resp.text)
+    served, items = gr.parse_shelf_rss(resp.text)
+    # For a name the user has no shelf by, Goodreads answers 200 with the
+    # whole library (#204); only the channel title says which shelf it served.
+    # An empty name asks for every shelf, which the feed titles "all".
+    if served is not None and served != (shelf or "all"):
+        raise ValueError(
+            f"User {uid} has no shelf named {shelf!r}. Shelf names are "
+            "case-sensitive; call list_shelves for this user's valid names."
+        )
+    return items
 
 
 # A private profile is served as a normal 200 page with this box in place of

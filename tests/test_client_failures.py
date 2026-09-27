@@ -330,13 +330,18 @@ def test_graphql_raises_when_data_is_absent():
     assert "Validation failed" in str(excinfo.value)
 
 
-def test_graphql_tolerates_field_level_errors_alongside_data():
+def test_graphql_tolerates_errors_below_a_root_field():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={
-                "data": {"review": None, "book": {"title": "x"}},
-                "errors": [{"message": "review was deleted"}],
+                "data": {"getReviews": {"edges": [{"node": {"shelving": None}}]}},
+                "errors": [
+                    {
+                        "path": ["getReviews", "edges", 0, "node", "shelving"],
+                        "message": "review was deleted",
+                    }
+                ],
             },
         )
 
@@ -345,4 +350,6 @@ def test_graphql_tolerates_field_level_errors_alongside_data():
     # rest of the query still stands. This is the other half of the line the
     # docstring draws, and it is what keeps a deleted review from failing a
     # whole page of results.
-    assert client.graphql("query { ping }") == {"review": None, "book": {"title": "x"}}
+    assert client.graphql("query { ping }") == {
+        "getReviews": {"edges": [{"node": {"shelving": None}}]}
+    }
