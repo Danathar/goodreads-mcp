@@ -67,8 +67,9 @@ The scheduled run does nothing until the repository variable
 `AUTO_RELEASE_ENABLED` is `true`; a run by hand always proceeds. A release is
 skipped when nothing under `goodreads_mcp/` changed since the last release;
 tick `force` to release anyway (for a dependency-only change, say). It is
-refused when the run is not on `main`, when the commit's checks are not green,
-when the commit has no passing `test` check, when the two files disagree,
+refused when the run is not on `main`, when the commit's `test` check is not
+green (no other check counts), when the commit has no passing `test` check,
+when the two files disagree,
 when a `version` given by hand is not the one `pyproject.toml` carries, when
 the version is not CalVer, is already tagged or is not newer than the last
 release, or when a `b1`/`rc1` suffix and the `prerelease` box disagree.

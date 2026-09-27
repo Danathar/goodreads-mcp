@@ -89,7 +89,9 @@ def _calver() -> re.Pattern[str]:
 # tells a reader about it.
 _REFUSALS = {
     r"Releases run from \$DEFAULT only": "the run is not on `main`",
-    r"checks on .* are not green": "the commit's checks are not green",
+    r"'\$REQUIRED_CHECK' check on .* is not green": (
+        "the commit's `test` check is not green (no other check counts)"
+    ),
     r"no successful '\$REQUIRED_CHECK' check": "the commit has no passing `test` check",
     r"manifest\.json version .* != pyproject\.toml version": "the two files disagree",
     r"is not CalVer": "the version is not CalVer",

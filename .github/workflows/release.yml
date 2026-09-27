@@ -408,21 +408,29 @@ jobs:
           fi
 
       # An automatic release publishes whatever is on main without a person
-      # looking first. The least it can do is refuse when main's own checks
-      # are not green. "Green" means two things, and the second is the one
-      # that bites: no check may be red or unfinished, and the check the
-      # ruleset on main requires (`test`, .github/rulesets/main.json) must
-      # have passed. A commit with no check runs at all has nothing red on it.
-      # The branches this workflow's own `prepare` job pushes are exactly such
-      # commits: a push made with github.token starts no workflow run, so
-      # ci.yml never reports on them.
+      # looking first. The least it can do is refuse a commit CI has not
+      # passed. That is one check: `test`, the job in ci.yml and the check the
+      # ruleset on main requires (.github/rulesets/main.json). No run of it on
+      # the commit may be red or unfinished, and one must have succeeded. A
+      # commit with no `test` run has nothing red on it, but it is one CI
+      # never ran on, not one that passed. The branches this workflow's own
+      # `prepare` job pushes are exactly such commits: a push made with
+      # github.token starts no workflow run, so ci.yml never reports on them.
+      #
+      # Every other check run on the commit is ignored (#209). None of them
+      # says whether the code is good, and each can go red on main's head with
+      # nothing wrong in it: `prepare` fails when main already carries an
+      # unreleased version, ai-fix.yml's `requested` runs on a comment anyone
+      # can post and attaches to main's head, and nightly-compliance's `live`
+      # fails when Goodreads changes. Judging them let any of those block
+      # every release, the scheduled one included, until a new commit landed.
       #
       # Every page is read. The API returns 30 runs a page, newest first, and
       # main's head keeps collecting runs after CI is done: nightly-compliance
       # adds one a day and ai-fix.yml adds one per issue event, each in its
       # own check suite. After a quiet week `test` is not on the first page,
       # and a gate that read only that page would refuse a commit CI passed.
-      - name: Require green checks on this commit
+      - name: Require a green test check on this commit
         if: steps.decide.outputs.go == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -434,13 +442,13 @@ jobs:
           runs="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
                     --jq '.check_runs[]' | jq -s '{check_runs: .}')"
 
-          bad="$(jq -r '[.check_runs[]
-                         | select(.name != "release")
+          bad="$(jq -r --arg name "$REQUIRED_CHECK" '[.check_runs[]
+                         | select(.name == $name)
                          | select((.conclusion // "pending") | IN("success","skipped","neutral") | not)
                          | "\(.name): \(.conclusion // .status)"] | .[]' <<< "$runs")"
 
           if [ -n "$bad" ]; then
-            echo "::error::Not releasing - checks on ${GITHUB_SHA::12} are not green:" >&2
+            echo "::error::Not releasing - the '$REQUIRED_CHECK' check on ${GITHUB_SHA::12} is not green:" >&2
             printf '%s\n' "$bad" >&2
             exit 1
           fi
@@ -450,10 +458,10 @@ jobs:
 
           if [ "$passed" -eq 0 ]; then
             echo "::error::Not releasing - no successful '$REQUIRED_CHECK' check on ${GITHUB_SHA::12}." >&2
-            echo "A commit with no checks is one CI never ran on, not one that passed." >&2
+            echo "A commit with no '$REQUIRED_CHECK' run is one CI never ran on, not one that passed." >&2
             exit 1
           fi
-          echo "All checks on ${GITHUB_SHA::12} are green, and '$REQUIRED_CHECK' passed."
+          echo "'$REQUIRED_CHECK' passed on ${GITHUB_SHA::12} and no run of it is red or unfinished; other checks are not judged."
 
       - name: Set up Python 3.11
         if: steps.decide.outputs.go == 'true'

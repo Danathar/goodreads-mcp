@@ -34,9 +34,10 @@ The contracts here that are load-bearing:
   default branch and any commit that origin's default branch does not carry
   (#174: `workflow_dispatch` runs on whatever branch is picked). A scheduled
   run is opt-in; a month with no change under `goodreads_mcp/` is skipped; a
-  red check refuses, and so does the absence of a passing `test` check, the
-  one `.github/rulesets/main.json` requires (a commit with no check runs has
-  nothing red on it); a version that is not CalVer, is already tagged, is not
+  red or unfinished `test` check refuses, and so does the absence of a passing
+  one (`test` is the check `.github/rulesets/main.json` requires, and a commit
+  with no `test` run has nothing red on it), while every other check run is
+  ignored (#209); a version that is not CalVer, is already tagged, is not
   newer than the last stable release, or whose `b1`/`rc1` suffix disagrees
   with the `prerelease` box is refused before anything is written. Every
   `steps.<id>.outputs.<name>` reference in the file is joined back to the
@@ -86,7 +87,7 @@ _RUBRIC = _ROOT / "docs" / "review-rubric.md"
 _BRANCH_STEP = "Refuse any commit that is not on main"
 _ENABLED_STEP = "Check the schedule is enabled"
 _DECIDE_STEP = "Decide whether to release"
-_CHECKS_STEP = "Require green checks on this commit"
+_CHECKS_STEP = "Require a green test check on this commit"
 _PIP_STEP = "Upgrade pip"
 _VERSION_STEP = "Read the version from pyproject.toml"
 _SYNC_STEP = "Check manifest.json matches pyproject.toml"
@@ -733,7 +734,7 @@ def test_the_baseline_is_sorted_as_versions_not_as_text(tmp_path: Path):
 
 
 # --------------------------------------------------------------------------
-# Require green checks on this commit
+# Require a green test check on this commit
 # --------------------------------------------------------------------------
 
 
@@ -775,7 +776,7 @@ def _check_runs(tmp_path: Path, *pages: list[dict]) -> subprocess.CompletedProce
     )
 
 
-def test_green_checks_let_the_release_through(tmp_path: Path):
+def test_a_passed_test_check_lets_the_release_through(tmp_path: Path):
     result = _check_runs(
         tmp_path,
         [
@@ -789,6 +790,34 @@ def test_green_checks_let_the_release_through(tmp_path: Path):
     calls = (tmp_path / "gh-args").read_text(encoding="utf-8").splitlines()
     assert len(calls) == 1, "the check runs are read once, so both questions see one snapshot"
     assert f"repos/o/r/commits/{'a' * 40}/check-runs" in calls[0]
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        # prepare fails when main already carries an unreleased version, and
+        # its run sits on the commit the release then runs on (3546dcf).
+        {"name": "prepare", "status": "completed", "conclusion": "failure"},
+        # ai-fix.yml, started by a comment anyone can post, attaches to
+        # main's head (a4f25b4 carries three of these).
+        {"name": "requested", "status": "completed", "conclusion": "failure"},
+        # The nightly live run fails when Goodreads changes, not the code.
+        {"name": "live", "status": "completed", "conclusion": "failure"},
+        {"name": "live", "status": "in_progress", "conclusion": None},
+        {"name": "label", "status": "completed", "conclusion": "cancelled"},
+    ],
+    ids=["prepare-failed", "requested-failed", "live-failed", "live-running", "label-cancelled"],
+)
+def test_a_red_check_other_than_test_does_not_stop_the_release(tmp_path: Path, other: dict):
+    """Only `test` says whether the code is good. Any other red check run on
+    main's head used to make it unreleasable until a new commit landed (#209)."""
+    result = _check_runs(
+        tmp_path,
+        [other, {"name": "test", "status": "completed", "conclusion": "success"}],
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert other["name"] not in result.stderr
 
 
 # The check-runs endpoint's default page size, which the step does not
@@ -812,31 +841,47 @@ def test_the_required_check_is_found_when_it_has_fallen_off_the_first_page(tmp_p
     assert "--paginate" in (tmp_path / "gh-args").read_text(encoding="utf-8")
 
 
-def test_a_red_check_on_a_later_page_still_stops_the_release(tmp_path: Path):
+def test_a_red_test_check_on_a_later_page_still_stops_the_release(tmp_path: Path):
+    noise = [{"name": "requested", "status": "completed", "conclusion": "skipped"}] * _CHECK_RUNS_PAGE
     result = _check_runs(
         tmp_path,
-        [{"name": "test", "status": "completed", "conclusion": "success"}] * _CHECK_RUNS_PAGE,
-        [{"name": "live", "status": "completed", "conclusion": "failure"}],
+        [{"name": "test", "status": "completed", "conclusion": "success"}] + noise[1:],
+        [{"name": "test", "status": "completed", "conclusion": "failure"}],
     )
 
     assert result.returncode == 1
-    assert "live: failure" in result.stderr
+    assert f"the 'test' check on {'a' * 12} is not green" in result.stderr
+    assert "test: failure" in result.stderr
 
 
-def test_a_red_or_unfinished_check_stops_the_release(tmp_path: Path):
+@pytest.mark.parametrize(
+    "status,conclusion,shown",
+    [
+        ("completed", "failure", "test: failure"),
+        ("completed", "cancelled", "test: cancelled"),
+        ("completed", "timed_out", "test: timed_out"),
+        ("completed", "action_required", "test: action_required"),
+        ("in_progress", None, "test: in_progress"),
+        ("queued", None, "test: queued"),
+    ],
+)
+def test_a_red_or_unfinished_test_check_stops_the_release(
+    tmp_path: Path, status: str, conclusion: str | None, shown: str
+):
+    """Even beside a successful `test` run: a red one on the same commit
+    means CI did not pass it cleanly."""
     result = _check_runs(
         tmp_path,
         [
-            {"name": "test", "status": "completed", "conclusion": "failure"},
-            {"name": "live", "status": "queued", "conclusion": None},
-            {"name": "ok", "status": "completed", "conclusion": "success"},
+            {"name": "test", "status": status, "conclusion": conclusion},
+            {"name": "test", "status": "completed", "conclusion": "success"},
+            {"name": "prepare", "status": "completed", "conclusion": "failure"},
         ],
     )
 
     assert result.returncode == 1
-    assert "test: failure" in result.stderr
-    assert "live: queued" in result.stderr
-    assert "ok:" not in result.stderr
+    assert shown in result.stderr.splitlines()
+    assert "prepare" not in result.stderr, "other checks are neither judged nor listed"
 
 
 def test_a_commit_with_no_checks_at_all_is_refused(tmp_path: Path):
@@ -849,18 +894,20 @@ def test_a_commit_with_no_checks_at_all_is_refused(tmp_path: Path):
     assert f"no successful 'test' check on {'a' * 12}" in result.stderr
 
 
-def test_green_checks_without_the_required_one_are_refused(tmp_path: Path):
-    """Only the `release` job's own run and a skipped labeler: nothing failed, and `test` never ran."""
+def test_red_checks_without_the_required_one_are_refused(tmp_path: Path):
+    """Other checks are ignored either way: whether they are green or red,
+    a commit with no `test` run is one CI never ran on."""
     result = _check_runs(
         tmp_path,
         [
             {"name": "label", "status": "completed", "conclusion": "skipped"},
+            {"name": "prepare", "status": "completed", "conclusion": "failure"},
             {"name": "release", "status": "in_progress", "conclusion": None},
         ],
     )
 
     assert result.returncode == 1
-    assert "are not green" not in result.stderr
+    assert "is not green" not in result.stderr
     assert "no successful 'test' check" in result.stderr
 
 
