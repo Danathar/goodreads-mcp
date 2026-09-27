@@ -24,28 +24,28 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-26 — #193, book_id is a string on both sides
+## 2026-09-27 — bug sweep: #202–#214 filed, fixed and merged (#215–#227)
 
-**Done:** every tool now emits `book_id` as a string. The GraphQL tools
-copied `legacyId` (a GraphQL `Int`) straight through, while every `book_id`
-parameter is `str`, so `mcp.call_tool("get_book", {"book_id": 54493401})`
-failed validation — the chaining the README promises broke at the MCP layer,
-and the offline suite calls the bodies directly so it never saw it.
-`server._book_id` renders `legacyId` (None stays None) in `_resolve_book_ids`,
-the three summary helpers, `get_book`, `get_reviews` and `get_editions`.
-`tests/test_book_id_chaining.py` drives every tool through
-`server.mcp.call_tool`, collects every emitted `book_id` and feeds each into
-every tool whose schema has one (the consumer list is read off
-`list_tools`). Offline count row 1185 → 1198. Live suite 24/24 after the
-change; `test_smoke_live.py` now pins `book["book_id"] == "11870085"`.
+**Done:** a bug sweep of `main` at b6f0e75 filed #202–#214. Their fixes,
+#215–#227 in the same order, are all merged. Each was updated from `main`,
+re-pinned and green in CI before it merged. On the result, 3ea19aa, the
+offline suite passes (1383, `goodreads_mcp` at 100%) and so does the live
+suite (25/25). For users of the tools: a GraphQL failure raises instead of
+reading as an empty answer (#215); `popular_books` checks `year` and
+`limit` (#216); `get_shelf` refuses a shelf name the user does not have
+(#217); `book_id` and `user_id` are validated and an ISBN is refused
+(#218); a cancelled call sends no further request (#219); the handshake
+reports this package's version (#227).
 
-**In flight:** the PR on `fix/193-book-id-string`. It edits the
-`docs/quality.md` count row; whichever open PR merges second must re-pin it
-(`pytest -q tests/test_coverage_thresholds.py` prints the right row).
+**In flight:** nothing from this sweep.
 
-**Blocked on:** nothing. `list_id` in `book_lists` is still an int; no tool
-takes one, so it was left alone.
+**Blocked on:** nothing. Owner only: `delete_branch_on_merge` is false, so
+the `release/2026.9.*` branches and the sweep's fix branches stay on origin.
 
-**Watch:** `goodreads-mcp-ai` on PyPI and the registry listing still wait for
-the first date-numbered release (#180); the `publish-registry` job pins
-`mcp-publisher` `v1.8.1` by sha256 — bump both env values on an auth error.
+**Watch:** to ship these fixes, run Release MCPB with `prepare`. Since #221 it
+pushes `release/<version>` and links the pull request in the run summary;
+open it from there. Until a bump merges, the scheduled run on 2026-10-01
+refuses, because `main` still carries 2026.9.2. mcp 1.14–1.29 with
+pydantic-settings 2.15 prints an `IncompleteFieldDefinitionWarning` at
+import; harmless, noted in #220. The sweep did not review the Bash guard
+(`.claude/hooks/guard-bash.py`).
