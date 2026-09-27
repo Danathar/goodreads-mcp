@@ -458,6 +458,7 @@ _DENIED = [
     ("pytest --deselect @/tmp/args tests", "argument file"),
     ("pytest @goodreads_mcp/../tests/args.txt", "argument file"),
     ("python -m pytest -q -- @/tmp/args", "argument file"),
+    ("pytest -q -k [@].env tests", "word-start glob"),
 ]
 
 # Ordinary invocations the guard must not touch. The first line is the exact
@@ -904,6 +905,12 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         'if token.startswith("@"):',
         "if False:",
         "pytest -q -k @.env tests",
+    ),
+    (
+        "a pytest word-start glob that can expand to an argument file",
+        'if token.startswith(("*", "?", "[")):',
+        "if False:",
+        "pytest -q -k [@].env tests",
     ),
     (
         "a path-spelled `noglob` as a wrapper",

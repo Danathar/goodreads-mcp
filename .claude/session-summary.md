@@ -24,28 +24,21 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-26 — #193, book_id is a string on both sides
+## 2026-09-27 — #197, refuse pytest word-start globs
 
-**Done:** every tool now emits `book_id` as a string. The GraphQL tools
-copied `legacyId` (a GraphQL `Int`) straight through, while every `book_id`
-parameter is `str`, so `mcp.call_tool("get_book", {"book_id": 54493401})`
-failed validation — the chaining the README promises broke at the MCP layer,
-and the offline suite calls the bodies directly so it never saw it.
-`server._book_id` renders `legacyId` (None stays None) in `_resolve_book_ids`,
-the three summary helpers, `get_book`, `get_reviews` and `get_editions`.
-`tests/test_book_id_chaining.py` drives every tool through
-`server.mcp.call_tool`, collects every emitted `book_id` and feeds each into
-every tool whose schema has one (the consumer list is read off
-`list_tools`). Offline count row 1185 → 1198. Live suite 24/24 after the
-change; `test_smoke_live.py` now pins `book["book_id"] == "11870085"`.
+**Done:** the Bash guard now refuses any pytest word beginning with `*`, `?`,
+or `[`, closing the path where bash expands `[@].env` into the `@.env`
+argument file only after the guard approves the command. A direct denial test,
+a mutation test, and matching security documentation cover the boundary. The
+focused permission and documentation suites pass (340 tests), as do all 19
+quality-threshold tests; the offline count row is now 1215.
 
-**In flight:** the PR on `fix/193-book-id-string`. It edits the
-`docs/quality.md` count row; whichever open PR merges second must re-pin it
-(`pytest -q tests/test_coverage_thresholds.py` prints the right row).
+**In flight:** `fix/197-pytest-glob-argument-files`, intended as a draft PR for
+issue #197.
 
-**Blocked on:** nothing. `list_id` in `book_lists` is still an int; no tool
-takes one, so it was left alone.
+**Blocked on:** nothing in the focused scope. The complete Windows run has
+platform-baseline failures because many shell tests require a `bash`
+executable; 1031 tests passed and 39 skipped before those unrelated failures.
 
-**Watch:** `goodreads-mcp-ai` on PyPI and the registry listing still wait for
-the first date-numbered release (#180); the `publish-registry` job pins
-`mcp-publisher` `v1.8.1` by sha256 — bump both env values on an auth error.
+**Watch:** another open PR that adds tests may need to re-pin the single
+`docs/quality.md` count row after merging.

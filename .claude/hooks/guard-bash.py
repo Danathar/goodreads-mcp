@@ -27,15 +27,16 @@ How it reads a command: it is tokenised the way a shell would (quotes respected;
 `;`, `&&`, `||`, `|`, `&`, `(`, `)` and newlines split it into simple
 commands), and each simple command whose verb is guarded is checked on its own.
 Anything the guard cannot see through -- `$var`, `$(...)`, a backtick, a brace
-expansion, a glob standing where an option goes, a string that does not
-tokenise -- is denied rather than guessed at, but only in a guarded command;
+expansion, a glob standing where an option goes, a glob at the start of any
+pytest word, a string that does not tokenise -- is denied rather than guessed
+at, but only in a guarded command;
 `echo $HOME` is not this hook's business. The exception is a command
 substitution, which is checked against the whole string rather than one
 command, because it is the construct that moves words between them: see
 `_SUBSTITUTION_RE`.
 
 The guard only holds while the string it reads is the string the shell runs.
-Six ways that used to come apart, all of them a bypass:
+Seven ways that used to come apart, all of them a bypass:
 
 * `#` starts a comment in `shlex` wherever it appears, but in a shell only at
   the start of a word. `pytest --ignore=z#z /tmp/evil.py` reached the guard as
@@ -47,6 +48,10 @@ Six ways that used to come apart, all of them a bypass:
   `git diff --no-index --no-index a b` by the time git sees it. Braces are
   refused rather than expanded here, because an expander that disagreed with
   the shell in the other direction would be this same bug again.
+* A glob at the start of a pytest word expands after the guard has checked the
+  literal token. `pytest -q -k [@].env tests` therefore became `-k @.env`, and
+  pytest read that file as more arguments. Word-start globs are refused before
+  pytest option values or positional paths are interpreted (#197).
 * A `VAR=value` assignment in front of the verb was popped off before any of
   the above ran, so neither half of it was read: not the value, which is shell
   text like any other word (`FOO=$(...) pytest -q` substituted unseen), and not
@@ -598,6 +603,11 @@ def _check_pytest(args: list[str], cwd: Path) -> None:
             raise Denied(
                 f"`{token}` is a pytest argument file: pytest reads the named "
                 "file as more arguments, which the guard cannot check"
+            )
+        if token.startswith(("*", "?", "[")):
+            raise Denied(
+                f"`{token}` is a pytest word-start glob: the shell can expand it "
+                "to an `@file` argument that the guard cannot check"
             )
     positional: list[str] = []
     i = 0

@@ -113,9 +113,11 @@ command string.
 
 That hook is [`.claude/hooks/guard-bash.py`](../.claude/hooks/guard-bash.py).
 It denies `pytest` with a path outside `tests/`, an option that loads code, or
-a word that starts with `@` — pytest reads `@file` as a file of more
-arguments, an option's value included, so `pytest -k @.env tests` printed the
-first line of `.env`, and a file naming a test module outside `tests/` ran it;
+a word that starts with `@` or a glob metacharacter — pytest reads `@file` as a
+file of more arguments, an option's value included, and the shell can turn a
+word-start glob into one after the guard has run. `pytest -k @.env tests`
+printed the first line of `.env`, and a file naming a test module outside
+`tests/` ran it;
 `--no-index`, `--output`, `--output-file`, `--orderfile` and its short form
 `-O` on `git diff` and `git log`; a `git diff` operand naming a path outside
 the checkout, which diffs two files with no option written at all; a shell
@@ -132,7 +134,7 @@ registered — a guard that is not registered guards nothing. See
 
 A guard that reads the command string carries a second failure mode, separate
 from being unregistered: it holds only while the string it reads is the string
-the shell runs. Six constructs broke that, each one a bypass, and each is now
+the shell runs. Seven constructs broke that, each one a bypass, and each is now
 refused or read the way the shell reads it:
 
 1. A `#`, which ends a token for `shlex` wherever it appears but starts a
@@ -141,17 +143,20 @@ refused or read the way the shell reads it:
    `pytest --ignore=z`.
 2. A brace expansion, which assembles a denied flag out of a token that does
    not contain one: `git diff --no-inde{x,x} a b`.
-3. A `VAR=value` assignment in front of the verb, which the guard removed
+3. A glob at the start of a pytest word, which bash expands after the guard has
+   approved the literal: `pytest -q -k [@].env tests` becomes `-k @.env` and
+   makes pytest read the file as more arguments.
+4. A `VAR=value` assignment in front of the verb, which the guard removed
    before it read anything: `GIT_EXTERNAL_DIFF=prog git diff HEAD~1 HEAD` runs
    `prog` once per changed path, and a command substitution in any value ran
    unseen ([#115](https://github.com/Danathar/goodreads-mcp/issues/115)).
-4. zsh's `noglob`, which Claude Code's permission matcher steps over and the
+5. zsh's `noglob`, which Claude Code's permission matcher steps over and the
    guard did not: `noglob pytest -p evil` matched `Bash(pytest *)` unchecked.
    The command after a bare `noglob` is now checked in its place.
-5. An operand outside the checkout, which is `--no-index` with no option
+6. An operand outside the checkout, which is `--no-index` with no option
    written: `git diff .env /etc/hostname` printed the `.env` that
    `Read(./.env)` exists to withhold.
-6. A redirection in front of the command name, which bash reads the same as
+7. A redirection in front of the command name, which bash reads the same as
    one after it: `>out git diff HEAD` was read as a command named `>out`.
 
 Any new construct the guard resolves differently from the shell is the same

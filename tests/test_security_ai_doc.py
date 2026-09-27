@@ -53,6 +53,7 @@ _NUMBER_WORDS = {"two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 
 _DIVERGENCES = [
     "pytest --ignore=z#z /tmp/evil.py",  # `#` is not a comment mid-word
     "git diff --no-inde{x,x} a b",  # brace expansion
+    "pytest -q -k [@].env tests",  # a glob can become an argument file
     "GIT_EXTERNAL_DIFF=prog git diff HEAD~1 HEAD",  # an assignment before the verb (#115)
     "noglob pytest -p evil",  # a wrapper the matcher steps over
     "git diff .env /etc/hostname",  # an operand outside the checkout

@@ -78,9 +78,10 @@ because they share a prefix. So the enforcement is a hook.
 the whole command string and **denies** the spellings above —
 
 - `pytest` (or `python -m pytest`) with a path that does not resolve inside
-  `tests/`, or with any option outside its safe list, or with any word that
-  starts with `@` — pytest reads `@file` as a file of more arguments, even as
-  an option's value, and the guard cannot check what that file says;
+  `tests/`, with any option outside its safe list, or with any word that starts
+  with `@` or a glob metacharacter — pytest reads `@file` as a file of more
+  arguments, even as an option's value, and a word-start glob can expand to
+  one after the guard has run;
 - any `VAR=value` in front of a guarded verb whose name is not on the guard's
   safe list of variables (`GOODREADS_LIVE`, `GOODREADS_USER_ID`, and colour and
   locale settings). An assignment is part of the command: the shell applies it
@@ -101,14 +102,14 @@ the whole command string and **denies** the spellings above —
   with no option on the line for the list above to match;
 - a shell redirection on any of the three verbs (`2>&1` is fine — it names a
   file descriptor, not a file);
-- `$`, backticks, a brace expansion, a glob standing where an option goes, or
-  a string the shell tokeniser rejects, in a guarded command — the guard can't
-  see what the shell would substitute or expand, so it refuses rather than
-  guesses.
+- `$`, backticks, a brace expansion, a glob standing where an option goes, a
+  glob at the start of any pytest word, or a string the shell tokeniser rejects,
+  in a guarded command — the guard can't see what the shell would substitute or
+  expand, so it refuses rather than guesses.
 
 ### The guard only holds if it reads what the shell runs
 
-Six ways that came apart, each of them a bypass, all six closed:
+Seven ways that came apart, each of them a bypass, all seven closed:
 
 - **`#` is not a comment mid-word.** `shlex` ends a token at `#` wherever it
   appears; a shell starts a comment only at the start of a word. So
@@ -123,6 +124,10 @@ Six ways that came apart, each of them a bypass, all six closed:
   time git sees it, and `--outpu{t,t}=<path>` writes any file the same way.
   Braces are refused rather than expanded, because an expander that disagreed
   with the shell in the other direction would be this same bug again.
+- **A word-start glob can become a pytest argument file.** The guard approved
+  `pytest -q -k [@].env tests`, then bash expanded `[@].env` to `@.env` and
+  pytest read the file as more arguments. A pytest word starting with `*`, `?`
+  or `[` is now refused before options and paths are interpreted ([#197][197]).
 - **An assignment in front of the verb was read by nothing.** The guard popped
   `VAR=value` off the front before it looked at anything, so neither half was
   checked. Not the name, unless the verb was `pytest`:
@@ -152,6 +157,7 @@ Six ways that came apart, each of them a bypass, all six closed:
   charged the write to nothing.
 
 [115]: https://github.com/Danathar/goodreads-mcp/issues/115
+[197]: https://github.com/Danathar/goodreads-mcp/issues/197
 
 The general shape: any construct the guard resolves differently from the shell
 is a bypass, not a cosmetic difference. Adding one that makes the guard see
