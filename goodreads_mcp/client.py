@@ -261,6 +261,15 @@ _current_call: contextvars.ContextVar[ToolCall | None] = contextvars.ContextVar(
 )
 
 
+def _stop_a_cancelled_hop(request: httpx.Request) -> None:
+    """httpx request hook, run before every request it sends. A redirect is
+    followed inside one `client.request`, so without this a call cancelled
+    while the first response was on the wire would still send the next hop."""
+    call = _current_call.get()
+    if call is not None:
+        call._stop_if_cancelled()
+
+
 @dataclass
 class GoodreadsClient:
     """One shared client per process. Safe to call from several threads at
@@ -287,6 +296,7 @@ class GoodreadsClient:
                     headers=HEADERS,
                     follow_redirects=True,
                     timeout=30.0,
+                    event_hooks={"request": [_stop_a_cancelled_hop]},
                 )
             return self._client
 

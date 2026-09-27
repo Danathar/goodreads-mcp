@@ -412,6 +412,66 @@ def test_a_cancel_during_backoff_ends_the_call_without_retrying(monkeypatch):
     assert attempts == ["/x"] and outcome == [None]
 
 
+def test_a_call_cancelled_mid_request_does_not_follow_the_redirect(monkeypatch):
+    """httpx follows a redirect inside one request; the next hop is a request too.
+
+    The real session is built (so its request hook is the one under test),
+    with a fake Goodreads behind it: the first response, a 301 like
+    /user/show/1 -> /user/show/1-name, is held until the call is cancelled.
+    """
+    first_sent = threading.Event()
+    release = threading.Event()
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path == "/user/show/1":
+            first_sent.set()
+            release.wait(_WAIT)
+            return httpx.Response(301, headers={"Location": "/user/show/1-name"})
+        return httpx.Response(200, text="profile")
+
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        httpx, "Client", lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw)
+    )
+    client = GoodreadsClient()
+    call = ToolCall()
+    outcome: list[Any] = []
+    [worker] = _run_threads(1, lambda: outcome.append(call.run(client.get, "/user/show/1")))
+    try:
+        assert first_sent.wait(_WAIT)
+        call.cancel()
+    finally:
+        release.set()
+    worker.join(_WAIT)
+
+    assert not worker.is_alive()
+    assert paths == ["/user/show/1"], "the redirect was followed after the cancel"
+    assert outcome == [None]
+
+
+def test_an_uncancelled_call_follows_redirects(monkeypatch):
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kw: real_client(
+            transport=httpx.MockTransport(
+                lambda r: httpx.Response(301, headers={"Location": "/b"})
+                if r.url.path == "/a"
+                else httpx.Response(200, text="b")
+            ),
+            **kw,
+        ),
+    )
+    client = GoodreadsClient()
+
+    resp = ToolCall().run(client.get, "/a")
+
+    assert (resp.url.path, resp.text) == ("/b", "b")
+
+
 def test_an_uncancelled_tool_call_behaves_like_a_plain_one(monkeypatch):
     """The cancel flag changes nothing until it is set: result and retries as before."""
     monkeypatch.setattr("goodreads_mcp.client.random.uniform", lambda a, b: -0.9)  # 0.1 s backoff
