@@ -1189,7 +1189,7 @@ def test_get_shelf_requests_the_rss_feed_and_returns_its_parse(monkeypatch):
     parsed = [{"title": "A Book", "link": "https://www.goodreads.com/book/show/1"}]
     get = _Get(_Response(text="<rss/>"))
     monkeypatch.setattr(server.gr, "get", get)
-    monkeypatch.setattr(server.gr, "parse_shelf_rss", lambda text: parsed)
+    monkeypatch.setattr(server.gr, "parse_shelf_rss", lambda text: ("to-read", parsed))
     monkeypatch.setattr(server, "DEFAULT_USER_ID", "111")
 
     result = server.get_shelf()
@@ -1201,7 +1201,7 @@ def test_get_shelf_requests_the_rss_feed_and_returns_its_parse(monkeypatch):
 def test_get_shelf_passes_the_requested_shelf_user_and_page(monkeypatch):
     get = _Get(_Response(text="<rss/>"))
     monkeypatch.setattr(server.gr, "get", get)
-    monkeypatch.setattr(server.gr, "parse_shelf_rss", lambda text: [])
+    monkeypatch.setattr(server.gr, "parse_shelf_rss", lambda text: ("read", []))
 
     server.get_shelf(shelf="read", user_id="222", page=3)
 
@@ -1213,7 +1213,7 @@ def test_get_shelf_rejects_a_page_below_one(page, monkeypatch):
     """page=0 or a negative page went straight into the RSS URL."""
     get = _Get(_Response(text="<rss/>"))
     monkeypatch.setattr(server.gr, "get", get)
-    monkeypatch.setattr(server.gr, "parse_shelf_rss", lambda text: [])
+    monkeypatch.setattr(server.gr, "parse_shelf_rss", lambda text: ("to-read", []))
 
     with pytest.raises(ValueError, match="page must be 1 or greater"):
         server.get_shelf(user_id="222", page=page)
@@ -1226,7 +1226,7 @@ def test_get_shelf_parses_the_body_of_the_response_it_fetched(monkeypatch):
     seen: list[str] = []
     monkeypatch.setattr(server.gr, "get", _Get(_Response(text="<rss>feed</rss>")))
     monkeypatch.setattr(
-        server.gr, "parse_shelf_rss", lambda text: seen.append(text) or []
+        server.gr, "parse_shelf_rss", lambda text: seen.append(text) or ("to-read", [])
     )
 
     server.get_shelf(user_id="222")

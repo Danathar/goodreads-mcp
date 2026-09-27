@@ -220,6 +220,13 @@ def test_get_shelf_rss_live():
     assert items[0]["book_id"]
 
 
+def test_get_shelf_refuses_an_unknown_shelf_live():
+    """#204: the feed answers an unknown name with the whole library; only
+    the channel title tells, and get_shelf must read it."""
+    with pytest.raises(ValueError, match="no shelf named"):
+        server.get_shelf("definitely-not-a-shelf-xyz", user_id="1")
+
+
 def test_a_ping_is_answered_while_a_tool_call_is_in_flight_live():
     """The server over stdio answers a ping while get_reviews pages Goodreads.
 
