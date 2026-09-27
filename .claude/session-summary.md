@@ -24,27 +24,28 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-27 — bug sweep: #202–#214 filed, one PR each (#215–#227)
+## 2026-09-27 — bug sweep: #202–#214 filed, fixed and merged (#215–#227)
 
-**Done:** a bug sweep of `main` at b6f0e75 filed #202–#214, and each has a
-fix PR: #215–#227, in the same order. None is merged. Every branch passed the
-offline suite with `goodreads_mcp` at 100% coverage. The Tier 1 ones (#215,
-#217, #218, #219, #224) also passed the live suite. The workflow branches
-(#221–#223) were also run with jq 1.7.1, the version on CI's runner. CI's
-`test` check passed on every one of the 13 PRs.
+**Done:** a bug sweep of `main` at b6f0e75 filed #202–#214. Their fixes,
+#215–#227 in the same order, are all merged. Each was updated from `main`,
+re-pinned and green in CI before it merged. On the result, 3ea19aa, the
+offline suite passes (1383, `goodreads_mcp` at 100%) and so does the live
+suite (25/25). For users of the tools: a GraphQL failure raises instead of
+reading as an empty answer (#215); `popular_books` checks `year` and
+`limit` (#216); `get_shelf` refuses a shelf name the user does not have
+(#217); `book_id` and `user_id` are validated and an ISBN is refused
+(#218); a cancelled call sends no further request (#219); the handshake
+reports this package's version (#227).
 
-**In flight:** #215–#227. Most edit the `docs/quality.md` count row, so merge
-one at a time and update the next branch from `main` before merging it;
-`pytest -q tests/test_coverage_thresholds.py` prints the right row. #221 and
-#227 both set 1222, so the second of them would merge without a conflict
-and leave `main` red. Two code conflicts are expected: #215 × #216 in
-`get_reviews` (keep #216's `limit` check and #215's `_book_by_legacy_id`
-line) and #215 × #219 on `server.py`'s `from .client import` line (import
-`GraphQLError` and `ToolCall`).
+**In flight:** nothing from this sweep.
 
-**Blocked on:** nothing. Owner only, from #221: `delete_branch_on_merge` is
-false, so `release/2026.9.0`–`2026.9.2` are still on origin.
+**Blocked on:** nothing. Owner only: `delete_branch_on_merge` is false, so
+the `release/2026.9.*` branches and the sweep's fix branches stay on origin.
 
-**Watch:** mcp 1.14–1.29 with pydantic-settings 2.15 prints an
-`IncompleteFieldDefinitionWarning` at import; harmless, noted in #220. The
-sweep did not review the Bash guard (`.claude/hooks/guard-bash.py`).
+**Watch:** to ship these fixes, run Release MCPB with `prepare`. Since #221 it
+pushes `release/<version>` and links the pull request in the run summary;
+open it from there. Until a bump merges, the scheduled run on 2026-10-01
+refuses, because `main` still carries 2026.9.2. mcp 1.14–1.29 with
+pydantic-settings 2.15 prints an `IncompleteFieldDefinitionWarning` at
+import; harmless, noted in #220. The sweep did not review the Bash guard
+(`.claude/hooks/guard-bash.py`).
