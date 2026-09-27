@@ -27,7 +27,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 
 from goodreads_mcp import server
-from goodreads_mcp.client import MAX_IN_FLIGHT, GoodreadsClient
+from goodreads_mcp.client import BASE, MAX_IN_FLIGHT, GoodreadsClient, ToolCall
 
 _WAIT = 5.0  # an upper bound on any blocking wait, so a regression fails, not hangs
 
@@ -205,6 +205,57 @@ def test_a_cancelled_call_returns_without_waiting_for_the_thread(monkeypatch):
     assert elapsed < _WAIT - 2, f"cancellation waited {elapsed:.1f}s for the thread"
 
 
+def test_a_cancelled_compare_books_starts_no_request_after_the_cancel(monkeypatch):
+    """The abandoned thread stops at its next request instead of fetching the rest.
+
+    The first book page blocks until after the cancel, then answers 404, which
+    `compare_books` records as a per-book error before moving to the next id.
+    That next request must not be sent, and the body must stop there rather
+    than record the refusal as one more failed book and carry on. The spy
+    tells the test when the thread has finished and what the body returned.
+    """
+    first_sent = threading.Event()
+    release = threading.Event()
+    body_ended = threading.Event()
+    paths: list[str] = []
+    returned: list[Any] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if len(paths) == 1:
+            first_sent.set()
+            release.wait(_WAIT)
+        return httpx.Response(404, request=request)
+
+    class SpyCall(ToolCall):
+        def run(self, fn, /, *args: Any, **kwargs: Any) -> Any:
+            try:
+                returned.append(super().run(fn, *args, **kwargs))
+            finally:
+                body_ended.set()
+            return returned[-1]
+
+    client = GoodreadsClient()
+    client._client = httpx.Client(base_url=BASE, transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(server, "ToolCall", SpyCall)
+    monkeypatch.setattr(server, "gr", client)
+    ids = [str(i) for i in range(1, 11)]
+
+    async def main() -> None:
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(server.mcp.call_tool, "compare_books", {"book_ids": ids})
+            await anyio.to_thread.run_sync(first_sent.wait, _WAIT)
+            tg.cancel_scope.cancel()
+
+    try:
+        anyio.run(main)
+    finally:
+        release.set()
+    assert body_ended.wait(_WAIT), "the cancelled call's thread never finished"
+    assert paths == ["/book/show/1.xml"]
+    assert returned == [None], "the body ran on past the cancel"
+
+
 # -------------------------------------------------------------- the client
 
 
@@ -255,6 +306,188 @@ def test_no_more_than_max_in_flight_requests_reach_the_wire_at_once():
     for t in threads:
         t.join(_WAIT)
     assert done == [200] * callers
+
+
+class _WatchedSlots(threading.BoundedSemaphore):
+    """In-flight slots that record when a caller finds none free and has to wait."""
+
+    def __init__(self) -> None:
+        super().__init__(MAX_IN_FLIGHT)
+        self.someone_waits = threading.Event()
+
+    def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:
+        if super().acquire(blocking=False):
+            return True
+        self.someone_waits.set()
+        return super().acquire(blocking, timeout)
+
+
+def test_a_cancelled_call_waiting_for_a_slot_never_sends_its_request():
+    """A call queued behind a full cap leaves the queue when it is cancelled.
+
+    The slots stay taken for longer than the test waits for the queued call,
+    so it can only have ended by noticing its cancel flag while it waited.
+    """
+    entered = threading.Semaphore(0)
+    release = threading.Event()
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        entered.release()
+        release.wait(3 * _WAIT)
+        return httpx.Response(200)
+
+    client = GoodreadsClient()
+    client._client = httpx.Client(base_url=BASE, transport=httpx.MockTransport(handler))
+    client._in_flight = slots = _WatchedSlots()
+    blockers = _run_threads(MAX_IN_FLIGHT, lambda: client.get("/busy"))
+    call = ToolCall()
+    outcome: list[Any] = []
+    try:
+        for _ in range(MAX_IN_FLIGHT):
+            assert entered.acquire(timeout=_WAIT), "a slot went unused"
+        [queued] = _run_threads(1, lambda: outcome.append(call.run(client.get, "/queued")))
+        assert slots.someone_waits.wait(_WAIT)
+        call.cancel()
+        queued.join(_WAIT)
+        assert not queued.is_alive(), "the cancelled call kept waiting for a slot"
+    finally:
+        release.set()
+    for t in blockers:
+        t.join(_WAIT)
+    assert outcome == [None]
+    assert paths == ["/busy"] * MAX_IN_FLIGHT, "the cancelled call reached the wire"
+
+
+def test_a_call_cancelled_as_its_slot_frees_hands_the_slot_back():
+    """The cancel can land between getting a slot and sending: send nothing, leak nothing."""
+    sent: list[str] = []
+    client = GoodreadsClient()
+    client._client = httpx.Client(
+        base_url=BASE,
+        transport=httpx.MockTransport(lambda r: sent.append(r.url.path) or httpx.Response(200)),
+    )
+    call = ToolCall()
+
+    class CancelOnAcquire(threading.BoundedSemaphore):
+        def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:
+            got = super().acquire(blocking, timeout)
+            call.cancel()
+            return got
+
+    client._in_flight = slots = CancelOnAcquire(MAX_IN_FLIGHT)
+
+    assert call.run(client.get, "/x") is None
+    assert sent == []
+    free = [threading.BoundedSemaphore.acquire(slots, blocking=False) for _ in range(MAX_IN_FLIGHT)]
+    assert free == [True] * MAX_IN_FLIGHT, "the slot was not given back"
+
+
+def test_a_cancel_during_backoff_ends_the_call_without_retrying(monkeypatch):
+    """A 429 backoff is cut short by the cancel, and no retry is sent.
+
+    The jitter is forced to 60 s, so a backoff that ignored the flag would
+    outlast the join below by far.
+    """
+    monkeypatch.setattr("goodreads_mcp.client.random.uniform", lambda a, b: 60.0)
+    answered = threading.Event()
+    attempts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(request.url.path)
+        answered.set()
+        return httpx.Response(429, text="slow down")
+
+    client = GoodreadsClient()
+    client._client = httpx.Client(base_url=BASE, transport=httpx.MockTransport(handler))
+    call = ToolCall()
+    outcome: list[Any] = []
+    [worker] = _run_threads(1, lambda: outcome.append(call.run(client.get, "/x")))
+    assert answered.wait(_WAIT)
+    call.cancel()
+    worker.join(_WAIT)
+
+    assert not worker.is_alive(), "the backoff ignored the cancel"
+    assert attempts == ["/x"] and outcome == [None]
+
+
+def test_a_call_cancelled_mid_request_does_not_follow_the_redirect(monkeypatch):
+    """httpx follows a redirect inside one request; the next hop is a request too.
+
+    The real session is built (so its request hook is the one under test),
+    with a fake Goodreads behind it: the first response, a 301 like
+    /user/show/1 -> /user/show/1-name, is held until the call is cancelled.
+    """
+    first_sent = threading.Event()
+    release = threading.Event()
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path == "/user/show/1":
+            first_sent.set()
+            release.wait(_WAIT)
+            return httpx.Response(301, headers={"Location": "/user/show/1-name"})
+        return httpx.Response(200, text="profile")
+
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        httpx, "Client", lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw)
+    )
+    client = GoodreadsClient()
+    call = ToolCall()
+    outcome: list[Any] = []
+    [worker] = _run_threads(1, lambda: outcome.append(call.run(client.get, "/user/show/1")))
+    try:
+        assert first_sent.wait(_WAIT)
+        call.cancel()
+    finally:
+        release.set()
+    worker.join(_WAIT)
+
+    assert not worker.is_alive()
+    assert paths == ["/user/show/1"], "the redirect was followed after the cancel"
+    assert outcome == [None]
+
+
+def test_an_uncancelled_call_follows_redirects(monkeypatch):
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kw: real_client(
+            transport=httpx.MockTransport(
+                lambda r: httpx.Response(301, headers={"Location": "/b"})
+                if r.url.path == "/a"
+                else httpx.Response(200, text="b")
+            ),
+            **kw,
+        ),
+    )
+    client = GoodreadsClient()
+
+    resp = ToolCall().run(client.get, "/a")
+
+    assert (resp.url.path, resp.text) == ("/b", "b")
+
+
+def test_an_uncancelled_tool_call_behaves_like_a_plain_one(monkeypatch):
+    """The cancel flag changes nothing until it is set: result and retries as before."""
+    monkeypatch.setattr("goodreads_mcp.client.random.uniform", lambda a, b: -0.9)  # 0.1 s backoff
+    statuses = iter((503, 200))
+    attempts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(request.url.path)
+        return httpx.Response(next(statuses), text="ok")
+
+    client = GoodreadsClient()
+    client._client = httpx.Client(base_url=BASE, transport=httpx.MockTransport(handler))
+
+    resp = ToolCall().run(client.get, "/x")
+
+    assert resp.status_code == 200 and attempts == ["/x", "/x"]
 
 
 def test_the_cap_is_a_semaphore_not_a_lock():
