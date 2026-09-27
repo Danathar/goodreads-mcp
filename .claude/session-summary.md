@@ -24,28 +24,27 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-26 — #193, book_id is a string on both sides
+## 2026-09-27 — bug sweep: #202–#214 filed, one PR each (#215–#227)
 
-**Done:** every tool now emits `book_id` as a string. The GraphQL tools
-copied `legacyId` (a GraphQL `Int`) straight through, while every `book_id`
-parameter is `str`, so `mcp.call_tool("get_book", {"book_id": 54493401})`
-failed validation — the chaining the README promises broke at the MCP layer,
-and the offline suite calls the bodies directly so it never saw it.
-`server._book_id` renders `legacyId` (None stays None) in `_resolve_book_ids`,
-the three summary helpers, `get_book`, `get_reviews` and `get_editions`.
-`tests/test_book_id_chaining.py` drives every tool through
-`server.mcp.call_tool`, collects every emitted `book_id` and feeds each into
-every tool whose schema has one (the consumer list is read off
-`list_tools`). Offline count row 1185 → 1198. Live suite 24/24 after the
-change; `test_smoke_live.py` now pins `book["book_id"] == "11870085"`.
+**Done:** a bug sweep of `main` at b6f0e75 filed #202–#214, and each has a
+fix PR: #215–#227, in the same order. None is merged. Every branch passed the
+offline suite with `goodreads_mcp` at 100% coverage. The Tier 1 ones (#215,
+#217, #218, #219, #224) also passed the live suite. The workflow branches
+(#221–#223) were also run with jq 1.7.1, the version on CI's runner. CI's
+`test` check passed on every one of the 13 PRs.
 
-**In flight:** the PR on `fix/193-book-id-string`. It edits the
-`docs/quality.md` count row; whichever open PR merges second must re-pin it
-(`pytest -q tests/test_coverage_thresholds.py` prints the right row).
+**In flight:** #215–#227. Most edit the `docs/quality.md` count row, so merge
+one at a time and update the next branch from `main` before merging it;
+`pytest -q tests/test_coverage_thresholds.py` prints the right row. #221 and
+#227 both set 1222, so the second of them would merge without a conflict
+and leave `main` red. Two code conflicts are expected: #215 × #216 in
+`get_reviews` (keep #216's `limit` check and #215's `_book_by_legacy_id`
+line) and #215 × #219 on `server.py`'s `from .client import` line (import
+`GraphQLError` and `ToolCall`).
 
-**Blocked on:** nothing. `list_id` in `book_lists` is still an int; no tool
-takes one, so it was left alone.
+**Blocked on:** nothing. Owner only, from #221: `delete_branch_on_merge` is
+false, so `release/2026.9.0`–`2026.9.2` are still on origin.
 
-**Watch:** `goodreads-mcp-ai` on PyPI and the registry listing still wait for
-the first date-numbered release (#180); the `publish-registry` job pins
-`mcp-publisher` `v1.8.1` by sha256 — bump both env values on an auth error.
+**Watch:** mcp 1.14–1.29 with pydantic-settings 2.15 prints an
+`IncompleteFieldDefinitionWarning` at import; harmless, noted in #220. The
+sweep did not review the Bash guard (`.claude/hooks/guard-bash.py`).
