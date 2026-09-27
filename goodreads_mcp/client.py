@@ -23,6 +23,8 @@ House rules (these endpoints are unofficial; be a polite guest):
   * at most MAX_IN_FLIGHT requests on the wire at once: tool calls run in
     worker threads so the server stays responsive (#92), and this cap is
     what keeps that from turning into a burst of parallel requests
+  * no request for a cancelled tool call: once the call is cancelled
+    (ToolCall), its thread sends nothing more
   * browser-faithful headers
   * detect AWS WAF JS challenges and fail loudly instead of feeding the
     challenge page to a parser
@@ -32,6 +34,7 @@ House rules (these endpoints are unofficial; be a polite guest):
 
 from __future__ import annotations
 
+import contextvars
 import json
 import random
 import re
@@ -39,7 +42,7 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -51,6 +54,10 @@ BASE = "https://www.goodreads.com"
 # a single browser tab does, keeps a pair of parallel calls from serializing,
 # and is small enough that a burst of calls queues here instead of at Goodreads.
 MAX_IN_FLIGHT = 2
+
+# How often a cancellable call waiting for an in-flight slot looks at its
+# cancel flag, in seconds. The wait itself still ends as soon as a slot frees.
+_CANCEL_POLL = 0.1
 
 HEADERS = {
     "User-Agent": (
@@ -128,8 +135,34 @@ def _is_sign_in_page(resp: httpx.Response) -> bool:
     return resp.url.path == SIGN_IN_PATH
 
 
+def _describe_graphql_error(error: dict[str, Any]) -> str:
+    """`getTopList: RESOURCE_NOT_FOUND: <message>`, skipping absent parts."""
+    path = ".".join(map(str, error.get("path") or ()))
+    parts = (path, error.get("errorType"), error.get("message"))
+    return ": ".join(str(part) for part in parts if part)
+
+
 class GraphQLError(Exception):
-    """Raised when the GraphQL endpoint returns an `errors` array."""
+    """Raised when AppSync fails the query itself rather than part of it:
+    the body has no `data`, or a root field failed (an error whose `path` is
+    that field alone, or a null root field alongside `errors`).
+
+    `errors` keeps the parsed errors that failed the query, so a caller can
+    classify the failure; the message names each one's path, `errorType`
+    and `message`.
+    """
+
+    def __init__(self, errors: list[dict[str, Any]]):
+        self.errors = errors
+        super().__init__(
+            "; ".join(map(_describe_graphql_error, errors))
+            or "GraphQL response carried no data and no errors."
+        )
+
+    @property
+    def not_found(self) -> bool:
+        """True when AppSync said the requested resource does not exist."""
+        return any(e.get("errorType") == "RESOURCE_NOT_FOUND" for e in self.errors)
 
 
 def parse_appsync_config(bundle_js: str) -> tuple[str, str]:
@@ -187,6 +220,82 @@ def parse_page_api_key(html: str) -> str | None:
     return key if isinstance(key, str) and APPSYNC_KEY_RE.fullmatch(key) else None
 
 
+class CallCancelled(BaseException):
+    """Raised in a cancelled tool call's thread instead of sending a request.
+
+    A BaseException, like asyncio's own CancelledError, so that a tool body's
+    broad `except Exception` cannot swallow it and move on to its next
+    request: `compare_books` records a failed book and carries on with the
+    rest. `ToolCall.run` catches it, so it never leaves the worker thread.
+    """
+
+
+class ToolCall:
+    """The cancel flag of one tool call.
+
+    The event loop sets it with `cancel()` when the MCP client cancels the call
+    or goes away. The worker thread runs the tool body through `run()`, and
+    every `GoodreadsClient` request made inside it checks the flag: before it
+    waits for an in-flight slot, while it waits, once it holds one, and during
+    the 429/503 backoff. A set flag raises `CallCancelled` instead of sending.
+    A request already on the wire is not interrupted; it finishes or hits the
+    client's 30 s timeout, and its result is dropped.
+    """
+
+    def __init__(self) -> None:
+        self._cancelled = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+
+    def run(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+        """Call `fn` in this thread with this call's requests cancellable.
+
+        Returns None if the call was cancelled: nobody is waiting for the
+        result by then.
+        """
+        token = _current_call.set(self)
+        try:
+            return fn(*args, **kwargs)
+        except CallCancelled:
+            return None
+        finally:
+            _current_call.reset(token)
+
+    def _stop_if_cancelled(self) -> None:
+        if self._cancelled.is_set():
+            raise CallCancelled
+
+    def _take_slot(self, slots: threading.Semaphore) -> None:
+        self._stop_if_cancelled()
+        while not slots.acquire(timeout=_CANCEL_POLL):
+            self._stop_if_cancelled()
+        if self._cancelled.is_set():  # cancelled just as the slot came free
+            slots.release()
+            raise CallCancelled
+
+    def _back_off(self, seconds: float) -> None:
+        if self._cancelled.wait(seconds):
+            raise CallCancelled
+
+
+# The tool call the current thread is running, set by `ToolCall.run`. Unset
+# (None) outside a tool call, e.g. when a test calls a tool body directly;
+# requests are then not cancellable.
+_current_call: contextvars.ContextVar[ToolCall | None] = contextvars.ContextVar(
+    "goodreads_mcp_tool_call", default=None
+)
+
+
+def _stop_a_cancelled_hop(request: httpx.Request) -> None:
+    """httpx request hook, run before every request it sends. A redirect is
+    followed inside one `client.request`, so without this a call cancelled
+    while the first response was on the wire would still send the next hop."""
+    call = _current_call.get()
+    if call is not None:
+        call._stop_if_cancelled()
+
+
 @dataclass
 class GoodreadsClient:
     """One shared client per process. Safe to call from several threads at
@@ -213,15 +322,23 @@ class GoodreadsClient:
                     headers=HEADERS,
                     follow_redirects=True,
                     timeout=30.0,
+                    event_hooks={"request": [_stop_a_cancelled_hop]},
                 )
             return self._client
 
     def _request(self, method: str, url: str, **kw) -> httpx.Response:
-        """GET with backoff on 429/503."""
+        """GET with backoff on 429/503; nothing is sent for a cancelled call."""
+        call = _current_call.get()
         delay = 1.0
         for attempt in range(self.max_retries + 1):
-            with self._in_flight:
+            if call is None:
+                self._in_flight.acquire()
+            else:
+                call._take_slot(self._in_flight)
+            try:
                 resp = self.client.request(method, url, **kw)
+            finally:
+                self._in_flight.release()
             if resp.status_code not in (429, 503) or attempt == self.max_retries:
                 resp.raise_for_status()
                 if _is_waf_challenge(resp):
@@ -238,7 +355,11 @@ class GoodreadsClient:
                         "server does not do; try an alternate public endpoint."
                     )
                 return resp
-            time.sleep(delay + random.uniform(0, 0.5))
+            pause = delay + random.uniform(0, 0.5)
+            if call is None:
+                time.sleep(pause)
+            else:
+                call._back_off(pause)
             delay *= 2
         raise RuntimeError("unreachable")
 
@@ -290,9 +411,11 @@ class GoodreadsClient:
     def graphql(self, query: str, variables: dict[str, Any] | None = None) -> dict:
         """POST a GraphQL query to AppSync and return its `data`.
 
-        Tolerates field-level errors (GraphQL partial success — e.g. a
-        deleted review's sub-resource resolves to null). Only raises
-        GraphQLError when `data` is absent, i.e. the query truly failed.
+        Tolerates errors below a root field (GraphQL partial success — e.g. a
+        deleted review's sub-resource resolves to null). Raises GraphQLError
+        when the query itself failed: `data` is absent, or a root field
+        failed. AppSync answers the latter with HTTP 200, the root field
+        null and an error whose `path` is that field alone.
 
         If the key/endpoint has rotated (401/403), re-discovers it once and
         retries before giving up.
@@ -307,8 +430,14 @@ class GoodreadsClient:
             resp = self._graphql_post(endpoint, key, query, variables)
         body = resp.json()
         data = body.get("data")
+        errors = body.get("errors") or []
         if data is None:
-            raise GraphQLError(str(body.get("errors")))
+            raise GraphQLError(errors)
+        failed = [e for e in errors if len(e.get("path") or ()) == 1]
+        if not failed and None in data.values():
+            failed = errors
+        if failed:
+            raise GraphQLError(failed)
         return data
 
     # ------------------------------------------------------------- parsers
@@ -321,8 +450,20 @@ class GoodreadsClient:
         return json.loads(m.group(1))
 
     @staticmethod
-    def parse_shelf_rss(xml_text: str) -> list[dict[str, Any]]:
+    def parse_shelf_rss(xml_text: str) -> tuple[str | None, list[dict[str, Any]]]:
+        """Return (served shelf, items) from a shelf RSS feed.
+
+        The served shelf is the text after the last 'bookshelf: ' in the
+        channel's own <title> ("Otis 's bookshelf: read" -> "read"), kept
+        exactly, whitespace included: for a shelf name the user does not have,
+        Goodreads serves the whole library titled "...bookshelf: read " with a
+        trailing space. None when the title is missing or not of that shape.
+        """
         root = ET.fromstring(xml_text)
+        title = root.findtext("channel/title")
+        served = None
+        if title is not None and "bookshelf: " in title:
+            served = title.rpartition("bookshelf: ")[2]
         items = []
         for item in root.iter("item"):
             def t(tag: str) -> str:
@@ -344,4 +485,4 @@ class GoodreadsClient:
                     "link": t("link"),
                 }
             )
-        return items
+        return served, items
