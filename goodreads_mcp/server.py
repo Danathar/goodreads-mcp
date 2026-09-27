@@ -45,7 +45,7 @@ import anyio  # mcp's own async layer (it requires anyio>=4.5), not a new depend
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-from .client import BASE, GoodreadsClient, LoginRequired
+from .client import BASE, GoodreadsClient, GraphQLError, LoginRequired
 from .config import load_user_id
 
 _READ_ONLY = ToolAnnotations(
@@ -325,8 +325,10 @@ def _paginated_graphql_edges(
 ) -> tuple[list[dict[str, Any]], bool, int | None]:
     """Collect a bounded number of edges from a GraphQL connection.
 
-    Returns ``(edges, has_more, total_count)``. Every supported discovery
-    connection uses Goodreads' standard PaginationInput and PageInfo shapes.
+    Returns ``(edges, has_more, total_count)``; every returned edge has a
+    ``node``. Null edges and edges whose node is null are skipped and not
+    counted. Every supported discovery connection uses Goodreads' standard
+    PaginationInput and PageInfo shapes.
     """
     want = _validate_discovery_limit(limit)
     if want == 0:
@@ -337,6 +339,9 @@ def _paginated_graphql_edges(
     total_count: int | None = None
     has_more = False
     seen_tokens: set[str] = set()
+    # Edges read so far, the skipped null ones included: they are not unread
+    # results, so they must not make `totalCount` report more.
+    read = 0
 
     while len(collected) < want:
         # Goodreads' cursor is a page number and the server derives the
@@ -350,7 +355,9 @@ def _paginated_graphql_edges(
         if total_count is None:
             total_count = connection.get("totalCount")
 
-        page_edges = [e for e in (connection.get("edges") or []) if e]
+        raw_edges = connection.get("edges") or []
+        page_edges = [e for e in raw_edges if e and e.get("node")]
+        read += len(raw_edges)
         remaining = want - len(collected)
         collected.extend(page_edges[:remaining])
 
@@ -359,29 +366,45 @@ def _paginated_graphql_edges(
         has_more = bool(info.get("hasNextPage") and next_token)
         if len(page_edges) > remaining:
             has_more = True
-        if len(collected) >= want or not page_edges or not has_more:
+        # An empty page ends the walk; a page of nulls alone does not.
+        if len(collected) >= want or not raw_edges or not has_more:
             break
         if next_token in seen_tokens:
             break
         seen_tokens.add(next_token)
         token = next_token
 
-    if total_count is not None and len(collected) < total_count:
+    if total_count is not None and read < total_count:
         has_more = True
     return collected, has_more, total_count
+
+
+def _book_by_legacy_id(query: str, book_id: str) -> dict[str, Any]:
+    """Run a `getBookByLegacyId` query for `book_id` and return the book.
+
+    AppSync fails the root field with RESOURCE_NOT_FOUND for an id it does
+    not know; that becomes the same ValueError as a null book.
+    """
+    try:
+        book = gr.graphql(query, {"id": _legacy_id(book_id)}).get("getBookByLegacyId")
+    except GraphQLError as e:
+        if not e.not_found:
+            raise
+        book = None
+    if not book:
+        raise ValueError(f"No book found for id {book_id!r}.")
+    return book
 
 
 def _resolve_book_ids(book_id: str) -> dict[str, Any]:
     """Resolve a book_id to its book/work/contributor/series identifiers,
     legacyId, title, and every series membership in one GraphQL call."""
-    book = gr.graphql(_Q_BOOK_IDS, {"id": _legacy_id(book_id)}).get(
-        "getBookByLegacyId"
-    )
-    if not book:
-        raise ValueError(f"No book found for id {book_id!r}.")
+    book = _book_by_legacy_id(_Q_BOOK_IDS, book_id)
     contributor = (book.get("primaryContributorEdge") or {}).get("node") or {}
     series_memberships = []
     for membership in book.get("bookSeries") or []:
+        if not membership:
+            continue
         series = membership.get("series") or {}
         series_memberships.append(
             {
@@ -537,6 +560,8 @@ def get_book(book_id: str, review_language_limit: int = 5) -> dict[str, Any]:
     series_memberships = []
     book_series = book.get("bookSeries") or []
     for membership in book_series:
+        if not membership:
+            continue
         series_node = deref(membership.get("series"))
         series_memberships.append(
             {
@@ -614,11 +639,7 @@ def get_reviews(
     if min_rating is not None and max_rating is not None and min_rating > max_rating:
         raise ValueError("min_rating must not be greater than max_rating.")
     want = max(0, min(limit, _MAX_REVIEWS))
-    book = gr.graphql(_Q_BOOK_BY_LEGACY, {"id": _legacy_id(book_id)}).get(
-        "getBookByLegacyId"
-    )
-    if not book:
-        raise ValueError(f"No book found for id {book_id!r}.")
+    book = _book_by_legacy_id(_Q_BOOK_BY_LEGACY, book_id)
     work_id = (book.get("work") or {}).get("id")
     if not work_id:
         raise ValueError(f"Could not resolve work id for book {book_id!r}.")
@@ -645,10 +666,14 @@ def get_reviews(
         pages += 1
         if total is None:
             total = conn.get("totalCount")
-        edges = conn.get("edges") or []
+        # Null edges and null reviews are skipped: they are not reviews, so
+        # they count neither toward limit nor as unread. Whether the page was
+        # empty is judged on what Goodreads sent, nulls included.
+        raw_edges = conn.get("edges") or []
+        edges = [e for e in raw_edges if e and e.get("node")]
         unread = 0
         for index, edge in enumerate(edges):
-            rev = edge.get("node") or {}
+            rev = edge["node"]
             spoiler = bool(rev.get("spoilerStatus"))
             if exclude_spoilers and spoiler:
                 continue
@@ -672,7 +697,7 @@ def get_reviews(
         token = (conn.get("pageInfo") or {}).get("nextPageToken")
         # A remaining cursor means unread reviews, even on an empty page.
         has_more = bool(unread or token)
-        if not token or not edges:
+        if not token or not raw_edges:
             break
         # A server that hands back the same cursor must not loop forever.
         if token in seen_tokens:
@@ -703,7 +728,7 @@ def similar_books(book_id: str, limit: int = 10) -> dict[str, Any]:
     edges, has_more, _ = _paginated_graphql_edges(
         _Q_SIMILAR, "getSimilarBooks", {"id": ids["book_kca"]}, limit
     )
-    books = [_book_summary(e.get("node") or {}) for e in edges]
+    books = [_book_summary(e["node"]) for e in edges]
     return {
         "book_id": ids["legacy_id"],
         "title": ids["title"],
@@ -733,7 +758,7 @@ def author_books(book_id: str, limit: int = 20) -> dict[str, Any]:
         },
         limit,
     )
-    works = [_work_summary(e.get("node") or {}) for e in edges]
+    works = [_work_summary(e["node"]) for e in edges]
     return {
         "author": ids["contributor_name"],
         "author_url": ids["contributor_url"],
@@ -788,7 +813,7 @@ def series_books(
     )
     books = []
     for e in edges:
-        summary = _work_summary(e.get("node") or {})
+        summary = _work_summary(e["node"])
         summary["placement"] = e.get("seriesPlacement")
         summary["is_primary"] = e.get("isPrimary")
         books.append(summary)
@@ -817,7 +842,7 @@ def get_editions(book_id: str, limit: int = 20) -> dict[str, Any]:
     )
     editions = []
     for e in edges:
-        node = e.get("node") or {}
+        node = e["node"]
         details = node.get("details") or {}
         editions.append(
             {
@@ -859,7 +884,7 @@ def book_lists(book_id: str, limit: int = 10) -> dict[str, Any]:
     )
     lists = [
         {
-            "list_id": (n := e.get("node") or {}).get("legacyId"),
+            "list_id": (n := e["node"]).get("legacyId"),
             "title": n.get("title"),
             "votes": n.get("userListVotesCount"),
             "books_count": n.get("listBooksCount"),
@@ -886,7 +911,8 @@ def popular_books(
 
     Ranks the books/works released in a given year (or a specific month of a
     year) by how many Goodreads members have added them. Mirrors the
-    goodreads.com/book/popular_by_date/<year>[/<month>] page.
+    goodreads.com/book/popular_by_date/<year>[/<month>] page. A year or month
+    Goodreads has no chart for raises an error rather than returning no books.
 
     year: 4-digit release year.
     month: optional 1-12 for a single month; omit for the whole year.
@@ -909,16 +935,27 @@ def popular_books(
     has_more = False
     seen_tokens: set[str] = set()
     while len(entries) < want:
-        page = gr.graphql(
-            _Q_TOP_LIST,
-            {
-                "name": name,
-                "period": "A",
-                "location": "ALL",
-                "after": token,
-                "limit": _POPULAR_PAGE_SIZE,
-            },
-        ).get("getTopList") or {}
+        try:
+            page = gr.graphql(
+                _Q_TOP_LIST,
+                {
+                    "name": name,
+                    "period": "A",
+                    "location": "ALL",
+                    "after": token,
+                    "limit": _POPULAR_PAGE_SIZE,
+                },
+            ).get("getTopList") or {}
+        except GraphQLError as e:
+            # Goodreads answers a chart it does not have (a future year, say)
+            # with RESOURCE_NOT_FOUND on the first page. Later in the walk
+            # the chart exists, so the same answer is a failure to surface.
+            if token is not None or not e.not_found:
+                raise
+            period = str(year) if month is None else f"{year}-{month:02d}"
+            raise ValueError(
+                f"Goodreads has no popular-by-date chart for {period}."
+            ) from e
         edges = [e for e in (page.get("edges") or []) if e and e.get("node")]
         remaining = want - len(entries)
         for edge in edges[:remaining]:

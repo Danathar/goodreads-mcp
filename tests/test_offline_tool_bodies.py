@@ -807,7 +807,7 @@ def test_book_lists_summarizes_listopia_entries(monkeypatch):
     ]
 
 
-def test_book_lists_tolerates_an_edge_with_no_node(monkeypatch):
+def test_book_lists_skips_an_edge_with_no_node(monkeypatch):
     graphql = _Graphql(
         {
             server._Q_BOOK_IDS: [_BOOK_IDS_RESPONSE],
@@ -816,15 +816,11 @@ def test_book_lists_tolerates_an_edge_with_no_node(monkeypatch):
     )
     monkeypatch.setattr(server.gr, "graphql", graphql)
 
-    (entry,) = server.book_lists("1", limit=1)["lists"]
+    result = server.book_lists("1", limit=1)
 
-    assert entry == {
-        "list_id": None,
-        "title": None,
-        "votes": None,
-        "books_count": None,
-        "url": None,
-    }
+    # An all-null entry would count toward limit and cite nothing.
+    assert result["lists"] == []
+    assert result["returned"] == 0
 
 
 # ------------------------------------------------------------ popular_books
