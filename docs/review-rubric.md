@@ -70,8 +70,8 @@ This is where this project actually breaks, so it gets the most weight.
 
 - [ ] `pyproject.toml` and `manifest.json` versions in sync — release CI fails
       if they drift.
-- [ ] The version changes only in a release pull request, opened by the
-      `prepare` run of the release workflow. Versions are CalVer
+- [ ] The version changes only in a release pull request, opened from the
+      branch the `prepare` run of the release workflow pushes. Versions are CalVer
       (`YYYY.M.PATCH`, no "v" prefix). Release CI refuses a version that is
       not CalVer, is already tagged, or is not newer than the last release.
 - [ ] New tool added to the `README.md` table and the `server.py` docstring list,
