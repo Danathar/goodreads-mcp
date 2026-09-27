@@ -78,7 +78,9 @@ because they share a prefix. So the enforcement is a hook.
 the whole command string and **denies** the spellings above —
 
 - `pytest` (or `python -m pytest`) with a path that does not resolve inside
-  `tests/`, or with any option outside its safe list;
+  `tests/`, or with any option outside its safe list, or with any word that
+  starts with `@` — pytest reads `@file` as a file of more arguments, even as
+  an option's value, and the guard cannot check what that file says;
 - any `VAR=value` in front of a guarded verb whose name is not on the guard's
   safe list of variables (`GOODREADS_LIVE`, `GOODREADS_USER_ID`, and colour and
   locale settings). An assignment is part of the command: the shell applies it

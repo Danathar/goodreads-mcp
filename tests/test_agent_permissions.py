@@ -451,6 +451,13 @@ _DENIED = [
     ("pytest --pythonwarnings ignore::this.W", "warning category"),
     ("pytest -qW ignore::this.W", "warning category"),
     ("pytest -Wignore::goodreads_mcp.server.W", "warning category"),
+    # a word starting with `@` is a file of more arguments to pytest, option
+    # values included: `-k @.env` printed `.env`'s first line, and a file
+    # naming an outside test module ran it (pytest 9.1.1)
+    ("pytest -q -k @.env tests", "argument file"),
+    ("pytest --deselect @/tmp/args tests", "argument file"),
+    ("pytest @goodreads_mcp/../tests/args.txt", "argument file"),
+    ("python -m pytest -q -- @/tmp/args", "argument file"),
 ]
 
 # Ordinary invocations the guard must not touch. The first line is the exact
@@ -891,6 +898,12 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         'if "." in category:',
         "if False:",
         "pytest -W ignore::this.W",
+    ),
+    (
+        "a pytest argument file",
+        'if token.startswith("@"):',
+        "if False:",
+        "pytest -q -k @.env tests",
     ),
     (
         "a path-spelled `noglob` as a wrapper",
