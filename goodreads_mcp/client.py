@@ -135,8 +135,34 @@ def _is_sign_in_page(resp: httpx.Response) -> bool:
     return resp.url.path == SIGN_IN_PATH
 
 
+def _describe_graphql_error(error: dict[str, Any]) -> str:
+    """`getTopList: RESOURCE_NOT_FOUND: <message>`, skipping absent parts."""
+    path = ".".join(map(str, error.get("path") or ()))
+    parts = (path, error.get("errorType"), error.get("message"))
+    return ": ".join(str(part) for part in parts if part)
+
+
 class GraphQLError(Exception):
-    """Raised when the GraphQL endpoint returns an `errors` array."""
+    """Raised when AppSync fails the query itself rather than part of it:
+    the body has no `data`, or a root field failed (an error whose `path` is
+    that field alone, or a null root field alongside `errors`).
+
+    `errors` keeps the parsed errors that failed the query, so a caller can
+    classify the failure; the message names each one's path, `errorType`
+    and `message`.
+    """
+
+    def __init__(self, errors: list[dict[str, Any]]):
+        self.errors = errors
+        super().__init__(
+            "; ".join(map(_describe_graphql_error, errors))
+            or "GraphQL response carried no data and no errors."
+        )
+
+    @property
+    def not_found(self) -> bool:
+        """True when AppSync said the requested resource does not exist."""
+        return any(e.get("errorType") == "RESOURCE_NOT_FOUND" for e in self.errors)
 
 
 def parse_appsync_config(bundle_js: str) -> tuple[str, str]:
@@ -385,9 +411,11 @@ class GoodreadsClient:
     def graphql(self, query: str, variables: dict[str, Any] | None = None) -> dict:
         """POST a GraphQL query to AppSync and return its `data`.
 
-        Tolerates field-level errors (GraphQL partial success — e.g. a
-        deleted review's sub-resource resolves to null). Only raises
-        GraphQLError when `data` is absent, i.e. the query truly failed.
+        Tolerates errors below a root field (GraphQL partial success — e.g. a
+        deleted review's sub-resource resolves to null). Raises GraphQLError
+        when the query itself failed: `data` is absent, or a root field
+        failed. AppSync answers the latter with HTTP 200, the root field
+        null and an error whose `path` is that field alone.
 
         If the key/endpoint has rotated (401/403), re-discovers it once and
         retries before giving up.
@@ -402,8 +430,14 @@ class GoodreadsClient:
             resp = self._graphql_post(endpoint, key, query, variables)
         body = resp.json()
         data = body.get("data")
+        errors = body.get("errors") or []
         if data is None:
-            raise GraphQLError(str(body.get("errors")))
+            raise GraphQLError(errors)
+        failed = [e for e in errors if len(e.get("path") or ()) == 1]
+        if not failed and None in data.values():
+            failed = errors
+        if failed:
+            raise GraphQLError(failed)
         return data
 
     # ------------------------------------------------------------- parsers
@@ -416,8 +450,20 @@ class GoodreadsClient:
         return json.loads(m.group(1))
 
     @staticmethod
-    def parse_shelf_rss(xml_text: str) -> list[dict[str, Any]]:
+    def parse_shelf_rss(xml_text: str) -> tuple[str | None, list[dict[str, Any]]]:
+        """Return (served shelf, items) from a shelf RSS feed.
+
+        The served shelf is the text after the last 'bookshelf: ' in the
+        channel's own <title> ("Otis 's bookshelf: read" -> "read"), kept
+        exactly, whitespace included: for a shelf name the user does not have,
+        Goodreads serves the whole library titled "...bookshelf: read " with a
+        trailing space. None when the title is missing or not of that shape.
+        """
         root = ET.fromstring(xml_text)
+        title = root.findtext("channel/title")
+        served = None
+        if title is not None and "bookshelf: " in title:
+            served = title.rpartition("bookshelf: ")[2]
         items = []
         for item in root.iter("item"):
             def t(tag: str) -> str:
@@ -439,4 +485,4 @@ class GoodreadsClient:
                     "link": t("link"),
                 }
             )
-        return items
+        return served, items

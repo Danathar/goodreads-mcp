@@ -575,7 +575,7 @@ def test_the_next_data_row_quotes_the_error_the_parser_raises():
 def test_the_rss_row_is_true_of_a_feed_with_no_items():
     assert "RSS returns no items" in _symptom("RSS")
     empty = "<rss><channel><title>shelf</title></channel></rss>"
-    assert GoodreadsClient.parse_shelf_rss(empty) == []
+    assert GoodreadsClient.parse_shelf_rss(empty) == (None, [])
 
 
 def test_the_list_shelves_row_is_true_of_a_page_with_no_shelf_links(monkeypatch):

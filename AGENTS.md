@@ -81,8 +81,12 @@ Never hardcode either. A 401/403 triggers one forced re-discovery and retry.
   the top of `server.py` before assuming.
 - Every result carries a source `url` so the model can cite it — see
   `SERVER_INSTRUCTIONS` in `server.py`. New tools should return `url` fields too.
-- Partial GraphQL success is tolerated (a deleted sub-resource resolves to
-  null); only a missing `data` raises `GraphQLError`.
+- Partial GraphQL success is tolerated below a root field (a deleted
+  sub-resource resolves to null). A failed root field is not partial success:
+  AppSync answers it with HTTP 200, the root field null and an error on its
+  path, and `graphql()` raises `GraphQLError` for it as for a missing `data`.
+  Null list items (an edge, a node, a series membership) are skipped, not
+  counted.
 - `pyproject.toml` and `manifest.json` versions must match — release CI fails
   if they drift. `server.json`, the MCP registry listing, is not a third copy:
   it carries the placeholder `0.0.0`, and the `publish-registry` job writes

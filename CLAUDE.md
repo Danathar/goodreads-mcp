@@ -21,6 +21,6 @@ than the markup on Next.js book pages, fetch book pages via the `.xml` path
 ## Running the server locally
 
 ```bash
-python3.10 -m venv .venv && .venv/bin/pip install -e ".[test]"
+python3.11 -m venv .venv && .venv/bin/pip install -e ".[test]"
 .venv/bin/goodreads-mcp
 ```

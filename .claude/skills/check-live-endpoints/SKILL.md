@@ -32,7 +32,7 @@ moved, rule out:
 |---|---|---|
 | `WAFChallenge` raised | HTML pages | AWS WAF now gates that path (HTTP 202) |
 | `LoginRequired` raised | HTML pages | the path redirected to `/user/sign_in` (the review-list page did in Sep 2026, #91), or the profile is private |
-| `GraphQLError` raised | AppSync GraphQL | the query was rejected with no `data`: a schema field or argument was renamed |
+| `GraphQLError` raised | AppSync GraphQL | with no `data`, the query was rejected: a schema field or argument was renamed. A message that starts with a root field and its `errorType` (such as `Throttling`) is Goodreads failing that field, not a rename |
 | `httpx.HTTPStatusError` 401/403 | AppSync GraphQL | key or endpoint rotated, and the one forced re-discovery did not fix it |
 | `ValueError` from `graphql_config` | AppSync GraphQL | the discovery page or its `_app` bundle changed shape |
 | `ValueError: No __NEXT_DATA__ blob` | page JSON | page is no longer Next.js, or is WAF-gated |
