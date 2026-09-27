@@ -50,6 +50,18 @@ def test_numeric_user_id_is_coerced_to_str(config_path):
     assert isinstance(uid, str)
 
 
+@pytest.mark.parametrize(
+    "encoding",
+    ["utf-8-sig", "utf-16", "utf-32"],
+    ids=["utf8-bom", "utf16", "utf32"],
+)
+def test_file_saved_with_a_bom_or_wide_encoding_is_read(config_path, capsys, encoding):
+    """Windows editors save UTF-8 with a BOM or UTF-16 (#212)."""
+    config_path.write_bytes('{"user_id": "12345678"}'.encode(encoding))
+    assert config.load_user_id() == "12345678"
+    assert capsys.readouterr().err == ""
+
+
 def test_env_var_wins_without_reading_the_file(config_path, monkeypatch):
     config_path.write_text('"not even an object"')
     monkeypatch.setenv("GOODREADS_USER_ID", "999")
@@ -88,6 +100,17 @@ def test_invalid_json_is_ignored_with_a_warning(config_path, capsys):
     err = capsys.readouterr().err
     assert str(config_path) in err
     assert "Expecting" in err  # the JSONDecodeError message, so the user can find the typo
+
+
+def test_undecodable_bytes_are_ignored_with_a_warning(config_path, capsys):
+    config_path.write_bytes(b"\x81\x82{")
+
+    assert config.load_user_id() is None
+
+    err = capsys.readouterr().err
+    assert str(config_path) in err
+    assert "not valid JSON" in err
+    assert "can't decode byte 0x81" in err
 
 
 @pytest.mark.skipif(
