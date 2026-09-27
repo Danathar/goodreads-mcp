@@ -36,7 +36,9 @@ def my_tool(book_id: str, limit: int = 10) -> dict[str, Any]:
   does with `_MAX_COMPARE`.
 - Return `returned` and `has_more`.
 - Shape results with `_book_summary` / `_work_summary` / `_node_summary` so
-  tools stay chainable — one tool's `book_id` should feed the next.
+  tools stay chainable — one tool's `book_id` should feed the next. A
+  `book_id` you build yourself goes through `_book_id`: GraphQL's `legacyId`
+  is an Int, and every tool's `book_id` parameter refuses one.
 - Every item needs a source `url`; `SERVER_INSTRUCTIONS` tells the model to
   cite from it. Null must be explicit, never fabricated.
 - Resolve ids with `_resolve_book_ids` / `_legacy_id` rather than assuming a
@@ -45,7 +47,10 @@ def my_tool(book_id: str, limit: int = 10) -> dict[str, Any]:
 ## Test
 
 Offline fixture tests in `tests/`, a live test in
-`tests/e2e/test_smoke_live.py`. CI runs `pytest -q --cov-fail-under=55`.
+`tests/e2e/test_smoke_live.py`. Add the tool to the producer or non-producer
+list in `tests/test_book_id_chaining.py`, which feeds every emitted `book_id`
+back into every tool that takes one; a tool that takes a `book_id` also moves
+that file's pinned consumer list. CI runs `pytest -q --cov-fail-under=55`.
 New tests change the collected count, so update the offline-tests row in
 `docs/quality.md` to match.
 

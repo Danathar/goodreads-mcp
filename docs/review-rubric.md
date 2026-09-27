@@ -55,7 +55,9 @@ This is where this project actually breaks, so it gets the most weight.
 - [ ] `returned` / `has_more` present on results paged through
       `_paginated_graphql_edges` and on the hand-paginated `popular_books` and
       `get_reviews`.
-- [ ] Results shaped so tools chain — one tool's `book_id` feeds the next.
+- [ ] Results shaped so tools chain — one tool's `book_id` feeds the next, as a
+      string (`_book_id`), and the tool is listed in
+      `tests/test_book_id_chaining.py`.
 
 ## 5. Tests
 

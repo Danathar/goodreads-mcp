@@ -269,6 +269,58 @@ def test_the_test_step_names_the_count_row_new_tests_move(recipe):
     assert "| offline tests |" in _text(_COUNT_ROW_FILE), f"{_COUNT_ROW_FILE} lost its count row"
 
 
+_CHAINING_TEST = "tests/test_book_id_chaining.py"
+
+
+def _chain_item(rel: str) -> str:
+    """The sentence (or rubric checklist item) that says tools must chain."""
+    if rel == _RUBRIC:
+        item = re.search(r"^- \[ \] Results shaped so tools chain.*?(?=^- \[ \]|^## |\Z)", _text(rel), re.M | re.S)
+        assert item, f"{rel} §4 no longer has the chaining checklist item"
+        return item.group(0)
+    bullet = re.search(r"^- (?:Reuse|Shape results).*?(?=^- |^\S|\Z)", _prose(rel), re.M | re.S)
+    assert bullet, f"{rel} no longer has the result-shaping bullet"
+    return bullet.group(0)
+
+
+@pytest.mark.parametrize("recipe", (*_RECIPES, _RUBRIC))
+def test_the_chaining_step_names_the_string_renderer_and_the_round_trip(recipe):
+    """#193: the GraphQL tools emitted `legacyId`, an Int, which the next tool's
+    `book_id: str` refuses. The fix (`_book_id`) and the test that catches the
+    next one (`tests/test_book_id_chaining.py`, whose producer list is joined
+    to the registry) were named in no recipe, so a tool added by following one
+    could build its own `book_id` from `legacyId` and never be listed."""
+    item = _squash(_chain_item(recipe))
+    assert "`_book_id`" in item, f"{recipe}'s chaining step does not name `_book_id`"
+    step = item if recipe == _RUBRIC else _squash(_test_step(recipe))
+    assert f"`{_CHAINING_TEST}`" in step, f"{recipe} does not name {_CHAINING_TEST}"
+
+
+def test_the_chaining_test_has_the_lists_the_recipes_tell_you_to_edit():
+    tree = ast.parse(_text(_CHAINING_TEST))
+    assigned = {
+        t.id for n in tree.body if isinstance(n, (ast.Assign, ast.AnnAssign))
+        for t in (n.targets if isinstance(n, ast.Assign) else [n.target]) if isinstance(t, ast.Name)
+    }
+    assert {"_PRODUCERS", "_NON_PRODUCERS", "_CONSUMERS"} <= assigned, sorted(assigned)
+
+
+@pytest.mark.parametrize("shaper", ["_book_summary", "_work_summary", "_node_summary"])
+def test_every_result_shaper_renders_book_id_through_the_named_helper(shaper):
+    """The recipes send you to the shapers *and* to `_book_id`; hold the shapers
+    to the helper, and the helper to rendering a string."""
+    values = [
+        v for d in ast.walk(_TOP_LEVEL[shaper]) if isinstance(d, ast.Dict)
+        for k, v in zip(d.keys, d.values)
+        if isinstance(k, ast.Constant) and k.value == "book_id"
+    ]
+    assert values and all(
+        isinstance(v, ast.Call) and isinstance(v.func, ast.Name) and v.func.id == "_book_id"
+        for v in values
+    ), f"{shaper} builds `book_id` without `_book_id`"
+    assert server._book_id(54493401) == "54493401"
+
+
 @pytest.mark.parametrize("recipe", _RECIPES)
 def test_the_registry_step_says_what_each_copy_needs(recipe):
     """Naming the file is not enough when two of them are counts, not lists."""
