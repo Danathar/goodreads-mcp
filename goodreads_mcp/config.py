@@ -37,7 +37,7 @@ def _load_config_file() -> dict:
     so per call) rather than kill the process before the MCP handshake.
     """
     try:
-        data = json.loads(CONFIG_PATH.read_text())
+        data = json.loads(CONFIG_PATH.read_bytes())  # bytes: json detects BOM/UTF-16/UTF-32
     except FileNotFoundError:
         return {}
     except OSError as e:  # unreadable: permissions, a directory in its place, ...
