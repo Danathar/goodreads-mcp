@@ -45,7 +45,7 @@ import anyio  # mcp's own async layer (it requires anyio>=4.5), not a new depend
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-from .client import BASE, GoodreadsClient, GraphQLError, LoginRequired
+from .client import BASE, GoodreadsClient, GraphQLError, LoginRequired, ToolCall
 from .config import load_user_id
 
 _READ_ONLY = ToolAnnotations(
@@ -62,15 +62,22 @@ def _in_worker_thread(fn: Callable[..., Any]) -> Callable[..., Any]:
     `functools.wraps` carries the name, docstring and signature across, so
     FastMCP builds the same tool schema it would from `fn` itself. A cancelled
     request (the client sent notifications/cancelled, or went away) returns
-    at once; the thread finishes its Goodreads request on its own and the
-    result is dropped.
+    at once and sets the call's cancel flag (`client.ToolCall`), so the thread
+    sends no further Goodreads request. A request already on the wire is not
+    interrupted: it runs until Goodreads answers or the client's 30 s timeout
+    fires, and its result is dropped.
     """
 
     @functools.wraps(fn)
     async def run_off_loop(*args: Any, **kwargs: Any) -> Any:
-        return await anyio.to_thread.run_sync(
-            functools.partial(fn, *args, **kwargs), abandon_on_cancel=True
-        )
+        call = ToolCall()
+        try:
+            return await anyio.to_thread.run_sync(
+                functools.partial(call.run, fn, *args, **kwargs), abandon_on_cancel=True
+            )
+        except anyio.get_cancelled_exc_class():
+            call.cancel()
+            raise
 
     return run_off_loop
 
@@ -83,7 +90,9 @@ class OffLoopFastMCP(FastMCP):
     server could not answer a ping, act on a cancellation, or start another
     tool call (#92). Registering an async wrapper keeps the loop free. The
     functions themselves stay sync, so `compare_books` can call `get_book`
-    and the offline tests call the bodies without an event loop.
+    and the offline tests call the bodies without an event loop. Cancelling
+    a call stops its thread before its next Goodreads request (#206), so an
+    abandoned call does not keep taking `client.MAX_IN_FLIGHT` slots.
     """
 
     def add_tool(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
