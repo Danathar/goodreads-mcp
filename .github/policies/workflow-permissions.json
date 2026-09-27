@@ -20,7 +20,7 @@
     "release.yml": {
       "workflow": "{}",
       "jobs": {
-        "prepare": {"contents": "write", "pull-requests": "write"},
+        "prepare": {"contents": "write"},
         "build-pypi": {"contents": "read"},
         "release": {"contents": "write", "checks": "read"},
         "publish-pypi": {"id-token": "write"},

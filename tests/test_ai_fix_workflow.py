@@ -34,7 +34,9 @@ Four things were asserted by nothing and are asserted here:
   cannot be widened without widening the gate too. An event a bot sends must
   not fire either: the dashboard app labels every ACMM issue it opens with
   `ai-fix-requested`, and before #143 each of those runs failed the
-  collaborator check and left a red run behind.
+  collaborator check and left a red run behind. Nor may a `/ai-fix` comment
+  from someone who is not the owner, a member or a collaborator: its run
+  attached a red check run to main's head that blocked every release (#209).
 - **The collaborator check.** Run for each value GitHub's
   `collaborators/*/permission` API returns, plus the shapes that are not a
   value at all: a failed call, and an empty answer. Only `admin` and `write`
@@ -314,9 +316,12 @@ def _labeled(label: str, sender: str = "User") -> dict:
     return _event("issues", label={"name": label}, issue={"number": 7}, sender={"type": sender})
 
 
-def _commented(body: str, sender: str = "User") -> dict:
+def _commented(body: str, sender: str = "User", association: str = "OWNER") -> dict:
     return _event(
-        "issue_comment", comment={"body": body}, issue={"number": 7}, sender={"type": sender}
+        "issue_comment",
+        comment={"body": body, "author_association": association},
+        issue={"number": 7},
+        sender={"type": sender},
     )
 
 
@@ -337,6 +342,19 @@ def _commented(body: str, sender: str = "User") -> dict:
         (_labeled("ai-fix-requested", sender="Bot"), False,
          "the dashboard app applying the label is not a request"),
         (_commented("/ai-fix", sender="Bot"), False, "nor a bot writing the command"),
+        # A comment is a request only from someone GitHub already associates
+        # with the repository as a maintainer. Anyone else's is skipped, so it
+        # leaves a grey run on main's head rather than a red one (#209).
+        (_commented("/ai-fix", association="MEMBER"), True, "an organisation member"),
+        (_commented("/ai-fix", association="COLLABORATOR"), True, "a collaborator"),
+        (_commented("/ai-fix", association="CONTRIBUTOR"), False,
+         "a past contributor is not a maintainer"),
+        (_commented("/ai-fix", association="FIRST_TIME_CONTRIBUTOR"), False,
+         "nor a first-time contributor"),
+        (_commented("/ai-fix", association="FIRST_TIMER"), False, "nor a first-timer on GitHub"),
+        (_commented("/ai-fix", association="MANNEQUIN"), False, "nor a mannequin"),
+        (_commented("/ai-fix", association="NONE"), False, "nor anyone else on GitHub"),
+        (_commented("/ai-fix", association=""), False, "a missing association is no one"),
         # The event guards: neither branch may fire on the other's payload.
         (_event("issues", comment={"body": "/ai-fix"}, issue={"number": 7}), False,
          "a comment body on an issues event is not a request"),

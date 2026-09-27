@@ -15,7 +15,7 @@ on:
 # keeps at most one *pending* run per group and replaces that pending run when
 # another is queued, so a shared group would still leave an intermediate main
 # commit with a cancelled run. release.yml refuses to release a commit whose
-# check-runs are not green, and a cancelled CI run is not green.
+# `test` check is not green, and a cancelled CI run is not green.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

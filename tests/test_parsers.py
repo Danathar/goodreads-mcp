@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 import httpx
 import pytest
@@ -44,6 +45,29 @@ def test_ms_to_iso_handles_falsy_and_bad_input():
     assert _ms_to_iso(0) is None
     assert _ms_to_iso(None) is None
     assert _ms_to_iso("not-a-number") is None
+    assert _ms_to_iso(10**20) is None
+
+
+def test_ms_to_iso_converts_pre_1970_dates():
+    # get_book("5470") publicationTime (live value): 1 July 1950.
+    assert _ms_to_iso(-615488400000) == "1950-07-01"
+
+
+def test_ms_to_iso_does_not_depend_on_c_runtime_negative_timestamps(monkeypatch):
+    # The Windows C runtime makes fromtimestamp raise OSError(22) for
+    # negative input; simulate it so the conversion is proven not to use it.
+    import goodreads_mcp.server as server
+
+    class WindowsDatetime(datetime):
+        @classmethod
+        def fromtimestamp(cls, t, tz=None):
+            if t < 0:
+                raise OSError(22, "Invalid argument")
+            return super().fromtimestamp(t, tz)
+
+    monkeypatch.setattr(server, "datetime", WindowsDatetime)
+    assert _ms_to_iso(-615488400000) == "1950-07-01"
+    assert _ms_to_iso(1600396415413) == "2020-09-18"
 
 
 def test_legacy_id_extracts_numeric():
@@ -250,7 +274,7 @@ SHELF_RSS = """<?xml version="1.0" encoding="UTF-8"?>
 
 
 def test_parse_shelf_rss_full_item():
-    items = GoodreadsClient.parse_shelf_rss(SHELF_RSS)
+    _, items = GoodreadsClient.parse_shelf_rss(SHELF_RSS)
     assert len(items) == 2
     first = items[0]
     assert first["title"] == "Dune"
@@ -262,7 +286,7 @@ def test_parse_shelf_rss_full_item():
 
 
 def test_parse_shelf_rss_missing_fields_default_empty():
-    items = GoodreadsClient.parse_shelf_rss(SHELF_RSS)
+    _, items = GoodreadsClient.parse_shelf_rss(SHELF_RSS)
     second = items[1]
     assert second["title"] == "Neuromancer"
     assert second["isbn"] == ""

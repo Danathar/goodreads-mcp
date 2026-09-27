@@ -1,8 +1,8 @@
 """CONTRIBUTING.md's Releases section, and every other page that says who changes the version.
 
 #165 replaced the push-triggered release with a monthly CalVer one, and moved
-every version change into a pull request that the workflow's `prepare` run
-opens. The rubric and the risk tiers were updated and are pinned by
+every version change into a pull request opened from the branch the
+workflow's `prepare` run pushes. The rubric and the risk tiers were updated and are pinned by
 `test_review_docs.py`. Two copies were not:
 
 * `.github/pull_request_template.md` still asked every contributor to tick
@@ -89,7 +89,9 @@ def _calver() -> re.Pattern[str]:
 # tells a reader about it.
 _REFUSALS = {
     r"Releases run from \$DEFAULT only": "the run is not on `main`",
-    r"checks on .* are not green": "the commit's checks are not green",
+    r"'\$REQUIRED_CHECK' check on .* is not green": (
+        "the commit's `test` check is not green (no other check counts)"
+    ),
     r"no successful '\$REQUIRED_CHECK' check": "the commit has no passing `test` check",
     r"manifest\.json version .* != pyproject\.toml version": "the two files disagree",
     r"is not CalVer": "the version is not CalVer",
@@ -249,7 +251,7 @@ def test_the_prepare_run_pushes_the_branch_and_files_the_section_names():
     section = _releases_section()
     item = re.search(r"1\. \*\*Propose a version\.\*\*(.+?)(?= 2\. )", section)
     assert item, "CONTRIBUTING.md's first release step is gone"
-    body = _prepare_job().step("Open the pull request").run
+    body = _prepare_job().step("Push the release branch and link its pull request").run
 
     branch = re.search(r"pushes `release/<version>`", item.group(1))
     assert branch, "the first release step no longer names the branch it pushes"

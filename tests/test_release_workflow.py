@@ -16,12 +16,12 @@ exactly as the runner hands it over — in a temp directory, against fixture
 files and real throwaway git repositories, with recording stubs on `PATH` for
 the tools that would reach the network.
 
-Since #165 the workflow has jobs that each run on their own: `prepare` opens
-the CalVer version-bump pull request; `build-pypi` builds the wheel and sdist
-in a checkout nothing else has run in (#175); and `release` tags and publishes
-the version the merged `pyproject.toml` carries — monthly, or by hand. Inputs
-reach every script through `env:`, so no `run:` body holds a `${{ }}` at all,
-and the tests pass inputs the same way.
+Since #165 the workflow has jobs that each run on their own: `prepare` pushes
+the CalVer version-bump branch and links its pull request; `build-pypi` builds
+the wheel and sdist in a checkout nothing else has run in (#175); and `release`
+tags and publishes the version the merged `pyproject.toml` carries — monthly,
+or by hand. Inputs reach every script through `env:`, so no `run:` body holds
+a `${{ }}` at all, and the tests pass inputs the same way.
 
 The contracts here that are load-bearing:
 
@@ -34,9 +34,10 @@ The contracts here that are load-bearing:
   default branch and any commit that origin's default branch does not carry
   (#174: `workflow_dispatch` runs on whatever branch is picked). A scheduled
   run is opt-in; a month with no change under `goodreads_mcp/` is skipped; a
-  red check refuses, and so does the absence of a passing `test` check, the
-  one `.github/rulesets/main.json` requires (a commit with no check runs has
-  nothing red on it); a version that is not CalVer, is already tagged, is not
+  red or unfinished `test` check refuses, and so does the absence of a passing
+  one (`test` is the check `.github/rulesets/main.json` requires, and a commit
+  with no `test` run has nothing red on it), while every other check run is
+  ignored (#209); a version that is not CalVer, is already tagged, is not
   newer than the last stable release, or whose `b1`/`rc1` suffix disagrees
   with the `prerelease` box is refused before anything is written. The one
   taken tag let through is a failed attempt's own, on this commit with no
@@ -89,7 +90,7 @@ _RUBRIC = _ROOT / "docs" / "review-rubric.md"
 _BRANCH_STEP = "Refuse any commit that is not on main"
 _ENABLED_STEP = "Check the schedule is enabled"
 _DECIDE_STEP = "Decide whether to release"
-_CHECKS_STEP = "Require green checks on this commit"
+_CHECKS_STEP = "Require a green test check on this commit"
 _PIP_STEP = "Upgrade pip"
 _VERSION_STEP = "Read the version from pyproject.toml"
 _SYNC_STEP = "Check manifest.json matches pyproject.toml"
@@ -134,7 +135,7 @@ _PACKER = _PACKER_MATCH.group(1)
 # The prepare job's `run:` steps.
 _NEXT_STEP = "Decide the next version"
 _BUMP_STEP = "Bump pyproject.toml and manifest.json"
-_PR_STEP = "Open the pull request"
+_PR_STEP = "Push the release branch and link its pull request"
 
 _PREPARE_EXECUTED = {_NEXT_STEP, _BUMP_STEP, _PR_STEP}
 
@@ -874,7 +875,7 @@ def test_an_unreadable_release_list_stops_the_decision(tmp_path: Path):
 
 
 # --------------------------------------------------------------------------
-# Require green checks on this commit
+# Require a green test check on this commit
 # --------------------------------------------------------------------------
 
 
@@ -916,7 +917,7 @@ def _check_runs(tmp_path: Path, *pages: list[dict]) -> subprocess.CompletedProce
     )
 
 
-def test_green_checks_let_the_release_through(tmp_path: Path):
+def test_a_passed_test_check_lets_the_release_through(tmp_path: Path):
     result = _check_runs(
         tmp_path,
         [
@@ -930,6 +931,34 @@ def test_green_checks_let_the_release_through(tmp_path: Path):
     calls = (tmp_path / "gh-args").read_text(encoding="utf-8").splitlines()
     assert len(calls) == 1, "the check runs are read once, so both questions see one snapshot"
     assert f"repos/o/r/commits/{'a' * 40}/check-runs" in calls[0]
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        # prepare fails when main already carries an unreleased version, and
+        # its run sits on the commit the release then runs on (3546dcf).
+        {"name": "prepare", "status": "completed", "conclusion": "failure"},
+        # ai-fix.yml, started by a comment anyone can post, attaches to
+        # main's head (a4f25b4 carries three of these).
+        {"name": "requested", "status": "completed", "conclusion": "failure"},
+        # The nightly live run fails when Goodreads changes, not the code.
+        {"name": "live", "status": "completed", "conclusion": "failure"},
+        {"name": "live", "status": "in_progress", "conclusion": None},
+        {"name": "label", "status": "completed", "conclusion": "cancelled"},
+    ],
+    ids=["prepare-failed", "requested-failed", "live-failed", "live-running", "label-cancelled"],
+)
+def test_a_red_check_other_than_test_does_not_stop_the_release(tmp_path: Path, other: dict):
+    """Only `test` says whether the code is good. Any other red check run on
+    main's head used to make it unreleasable until a new commit landed (#209)."""
+    result = _check_runs(
+        tmp_path,
+        [other, {"name": "test", "status": "completed", "conclusion": "success"}],
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert other["name"] not in result.stderr
 
 
 # The check-runs endpoint's default page size, which the step does not
@@ -953,31 +982,47 @@ def test_the_required_check_is_found_when_it_has_fallen_off_the_first_page(tmp_p
     assert "--paginate" in (tmp_path / "gh-args").read_text(encoding="utf-8")
 
 
-def test_a_red_check_on_a_later_page_still_stops_the_release(tmp_path: Path):
+def test_a_red_test_check_on_a_later_page_still_stops_the_release(tmp_path: Path):
+    noise = [{"name": "requested", "status": "completed", "conclusion": "skipped"}] * _CHECK_RUNS_PAGE
     result = _check_runs(
         tmp_path,
-        [{"name": "test", "status": "completed", "conclusion": "success"}] * _CHECK_RUNS_PAGE,
-        [{"name": "live", "status": "completed", "conclusion": "failure"}],
+        [{"name": "test", "status": "completed", "conclusion": "success"}] + noise[1:],
+        [{"name": "test", "status": "completed", "conclusion": "failure"}],
     )
 
     assert result.returncode == 1
-    assert "live: failure" in result.stderr
+    assert f"the 'test' check on {'a' * 12} is not green" in result.stderr
+    assert "test: failure" in result.stderr
 
 
-def test_a_red_or_unfinished_check_stops_the_release(tmp_path: Path):
+@pytest.mark.parametrize(
+    "status,conclusion,shown",
+    [
+        ("completed", "failure", "test: failure"),
+        ("completed", "cancelled", "test: cancelled"),
+        ("completed", "timed_out", "test: timed_out"),
+        ("completed", "action_required", "test: action_required"),
+        ("in_progress", None, "test: in_progress"),
+        ("queued", None, "test: queued"),
+    ],
+)
+def test_a_red_or_unfinished_test_check_stops_the_release(
+    tmp_path: Path, status: str, conclusion: str | None, shown: str
+):
+    """Even beside a successful `test` run: a red one on the same commit
+    means CI did not pass it cleanly."""
     result = _check_runs(
         tmp_path,
         [
-            {"name": "test", "status": "completed", "conclusion": "failure"},
-            {"name": "live", "status": "queued", "conclusion": None},
-            {"name": "ok", "status": "completed", "conclusion": "success"},
+            {"name": "test", "status": status, "conclusion": conclusion},
+            {"name": "test", "status": "completed", "conclusion": "success"},
+            {"name": "prepare", "status": "completed", "conclusion": "failure"},
         ],
     )
 
     assert result.returncode == 1
-    assert "test: failure" in result.stderr
-    assert "live: queued" in result.stderr
-    assert "ok:" not in result.stderr
+    assert shown in result.stderr.splitlines()
+    assert "prepare" not in result.stderr, "other checks are neither judged nor listed"
 
 
 def test_a_commit_with_no_checks_at_all_is_refused(tmp_path: Path):
@@ -990,18 +1035,20 @@ def test_a_commit_with_no_checks_at_all_is_refused(tmp_path: Path):
     assert f"no successful 'test' check on {'a' * 12}" in result.stderr
 
 
-def test_green_checks_without_the_required_one_are_refused(tmp_path: Path):
-    """Only the `release` job's own run and a skipped labeler: nothing failed, and `test` never ran."""
+def test_red_checks_without_the_required_one_are_refused(tmp_path: Path):
+    """Other checks are ignored either way: whether they are green or red,
+    a commit with no `test` run is one CI never ran on."""
     result = _check_runs(
         tmp_path,
         [
             {"name": "label", "status": "completed", "conclusion": "skipped"},
+            {"name": "prepare", "status": "completed", "conclusion": "failure"},
             {"name": "release", "status": "in_progress", "conclusion": None},
         ],
     )
 
     assert result.returncode == 1
-    assert "are not green" not in result.stderr
+    assert "is not green" not in result.stderr
     assert "no successful 'test' check" in result.stderr
 
 
@@ -1448,59 +1495,87 @@ def test_the_bump_refuses_a_pyproject_with_no_version_line(tmp_path: Path, pytho
 
 
 # --------------------------------------------------------------------------
-# prepare: Open the pull request
+# prepare: Push the release branch and link its pull request
 # --------------------------------------------------------------------------
 
 
-def _open_pr(work: Path, version: str) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
+def _push_branch(work: Path, version: str) -> tuple[subprocess.CompletedProcess[str], list[list[str]], str]:
+    """Run the step with a recording `gh`, so any attempt to open the pull request shows."""
     log = work.parent / "gh-argv"
     stubs = work.parent / "bin"
     stubs.mkdir(exist_ok=True)
     _write_stub(stubs, "gh", _recorder(log))
+    summary = work.parent / "summary"
     result = _run(
         _PREPARE.body(_PR_STEP),
         work,
         path_dirs=[stubs],
         env={
             "VERSION": version,
-            "GH_TOKEN": "x",
+            "GITHUB_REPOSITORY": "Danathar/goodreads-mcp",
             "GITHUB_REF_NAME": "main",
-            "GITHUB_STEP_SUMMARY": str(work.parent / "summary"),
+            "GITHUB_STEP_SUMMARY": str(summary),
         },
     )
-    return result, _argv(log)
+    return result, _argv(log), summary.read_text(encoding="utf-8") if summary.exists() else ""
 
 
-def test_the_pull_request_carries_the_bump_on_a_release_branch(tmp_path: Path):
+def _bump_files(work: Path, version: str) -> None:
+    (work / "pyproject.toml").write_text(_pyproject(version), encoding="utf-8")
+    (work / "manifest.json").write_text(f'{{"version": "{version}"}}\n', encoding="utf-8")
+
+
+_COMPARE = "https://github.com/Danathar/goodreads-mcp/compare/main...release/2026.10.0?expand=1"
+
+
+def test_prepare_pushes_only_the_release_branch_and_links_its_pull_request(tmp_path: Path):
     work = _repo_with_remote(tmp_path)
-    main_before = _git(work, "ls-remote", "origin", "refs/heads/main")
-    (work / "pyproject.toml").write_text(_pyproject("2026.10.0"), encoding="utf-8")
-    (work / "manifest.json").write_text('{"version": "2026.10.0"}\n', encoding="utf-8")
+    refs_before = _git(work, "ls-remote", "origin").splitlines()
+    _bump_files(work, "2026.10.0")
 
-    result, calls = _open_pr(work, "2026.10.0")
+    result, calls, summary = _push_branch(work, "2026.10.0")
 
     assert result.returncode == 0, result.stderr
-    assert _git(work, "ls-remote", "origin", "refs/heads/main") == main_before, "main was written"
-    branch = _git(work, "ls-remote", "origin", "refs/heads/release/2026.10.0")
-    assert branch, "release/2026.10.0 was not pushed"
-    sha = branch.split()[0]
+    added = set(_git(work, "ls-remote", "origin").splitlines()) - set(refs_before)
+    assert [line.split()[1] for line in added] == ["refs/heads/release/2026.10.0"]
+    assert set(refs_before) <= set(_git(work, "ls-remote", "origin").splitlines()), "an existing ref was rewritten"
+    sha = next(iter(added)).split()[0]
     assert _git(work, "log", "-1", "--format=%s", sha).strip() == "chore(release): 2026.10.0"
     assert sorted(_git(work, "diff", "--name-only", f"{sha}~1", sha).split()) == ["manifest.json", "pyproject.toml"]
-    ((gh, *args),) = calls
-    assert args[:2] == ["pr", "create"]
-    assert args[args.index("--base") + 1] == "main"
-    assert args[args.index("--head") + 1] == "release/2026.10.0"
-    assert args[args.index("--title") + 1] == "chore(release): 2026.10.0"
+    assert calls == [], "the step called gh; GitHub refuses pull requests from github.token here"
+    assert _COMPARE in summary
+    assert "Open the version-bump pull request" in summary
 
 
-def test_no_pull_request_when_the_files_are_already_at_the_version(tmp_path: Path):
+def test_a_rerun_reuses_the_pushed_branch_instead_of_failing_or_forcing(tmp_path: Path):
+    work = _repo_with_remote(tmp_path)
+    _bump_files(work, "2026.10.0")
+    first, _, _ = _push_branch(work, "2026.10.0")
+    assert first.returncode == 0, first.stderr
+    pushed = _git(work, "ls-remote", "origin", "refs/heads/release/2026.10.0")
+
+    # A re-run starts from a fresh checkout of main and makes its own bump.
+    _git(work, "checkout", "--quiet", "main")
+    _bump_files(work, "2026.10.0")
+    (work.parent / "summary").unlink()
+    result, calls, summary = _push_branch(work, "2026.10.0")
+
+    assert result.returncode == 0, result.stderr
+    assert _git(work, "ls-remote", "origin", "refs/heads/release/2026.10.0") == pushed, "the branch was rewritten"
+    assert "already exists" in result.stdout
+    assert calls == []
+    assert _COMPARE in summary and "Reused the existing" in summary
+
+
+def test_no_branch_when_the_files_are_already_at_the_version(tmp_path: Path):
     work = _repo_with_remote(tmp_path)
 
-    result, calls = _open_pr(work, "2026.10.0")
+    result, calls, summary = _push_branch(work, "2026.10.0")
 
     assert result.returncode == 1
     assert "already at 2026.10.0" in result.stderr
     assert calls == []
+    assert summary == ""
     assert not _git(work, "ls-remote", "origin", "refs/heads/release/*")
 
 
@@ -1608,6 +1683,7 @@ def test_prepare_never_writes_main():
     assert 'branch="release/$VERSION"' in body
     pushes = [line for step in _PREPARE.steps for line in (step.run or "").splitlines() if "git push" in line]
     assert len(pushes) == 1, pushes
+    assert not any("--force" in line or "+HEAD" in line for line in pushes), pushes
 
 
 # --------------------------------------------------------------------------

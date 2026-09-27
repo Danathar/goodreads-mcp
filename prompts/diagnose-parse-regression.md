@@ -33,10 +33,14 @@ A goodreads-mcp tool is returning wrong or empty data. Diagnose it.
      rotation that re-discovery did not fix. `graphql` already re-discovers
      once on a 401/403, so a fresh `graphql_config` still found a stale or
      wrong pair; check what `graphql_config(force=True)` returns.
-   - `GraphQLError` → AppSync rejected the query itself and sent no `data`,
-     which means a schema change (a field or argument was renamed; the
-     message reads like "Validation error of type FieldUndefined"), not a
-     rotated key. Compare the query document in `server.py` with the error.
+   - `GraphQLError` → AppSync failed the query itself. With no `data`, it
+     rejected the document: a schema change (a field or argument was
+     renamed; the message reads like "Validation error of type
+     FieldUndefined"), not a rotated key. Compare the query document in
+     `server.py` with the error. When a root field failed instead, the
+     message starts with that field and its `errorType` (such as
+     `Throttling`); that is Goodreads refusing the request, not a parse
+     regression.
    - Empty/None fields from `__NEXT_DATA__` → Apollo state keys were renamed.
      Fetch the page, dump the blob, and diff the shape against what the
      parser expects.

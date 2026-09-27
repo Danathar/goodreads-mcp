@@ -3,9 +3,12 @@
 ## Setup
 
 ```bash
-python3.10 -m venv .venv
+python3.11 -m venv .venv
 .venv/bin/pip install -e ".[test]"
 ```
+
+The test suite needs Python 3.11 or newer (it reads TOML with the standard
+library's `tomllib`); the package itself supports 3.10 (`requires-python`).
 
 ## Test
 
@@ -44,8 +47,11 @@ it. Everything runs in [`release.yml`](.github/workflows/release.yml):
 
 1. **Propose a version.** Run the workflow by hand with `prepare` ticked. It
    takes the next number from the date (or the `version` you give it), sets it
-   in `pyproject.toml` and `manifest.json`, pushes `release/<version>` and opens
-   the pull request. Merging that pull request approves the number.
+   in `pyproject.toml` and `manifest.json`, pushes `release/<version>` and
+   prints a link to open its pull request in the run summary. You open the pull
+   request from that link; the workflow cannot, because GitHub runs no checks
+   on a pull request its own token opens. Re-running reuses the branch if it
+   is already there. Merging that pull request approves the number.
 2. **Release.** On 09:00 UTC on the 1st of each month, or when run by hand
    without `prepare`, the workflow tags the version the merged `pyproject.toml`
    carries, attaches the `.mcpb` to a GitHub release, publishes to PyPI, and
@@ -61,8 +67,9 @@ The scheduled run does nothing until the repository variable
 `AUTO_RELEASE_ENABLED` is `true`; a run by hand always proceeds. A release is
 skipped when nothing under `goodreads_mcp/` changed since the last release;
 tick `force` to release anyway (for a dependency-only change, say). It is
-refused when the run is not on `main`, when the commit's checks are not green,
-when the commit has no passing `test` check, when the two files disagree,
+refused when the run is not on `main`, when the commit's `test` check is not
+green (no other check counts), when the commit has no passing `test` check,
+when the two files disagree,
 when a `version` given by hand is not the one `pyproject.toml` carries, when
 the version is not CalVer, is already tagged or is not newer than the last
 release, or when a `b1`/`rc1` suffix and the `prerelease` box disagree.

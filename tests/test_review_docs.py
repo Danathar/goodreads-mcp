@@ -531,16 +531,16 @@ def test_the_release_claims_are_what_release_yml_does():
     """Rubric §6 and Tier 2 describe the CalVer flow; each clause is a step here."""
     rubric = _squashed(_RUBRIC)
     tiers = _squashed(_TIERS)
-    assert "The version changes only in a release pull request, opened by the `prepare` run" in rubric
+    assert "The version changes only in a release pull request, opened from the branch the `prepare` run" in rubric
     assert (
         "Release CI refuses a version that is not CalVer, is already tagged, or is not newer than the last release."
         in rubric
     )
-    assert "in the release pull request the `prepare` run opens" in tiers
+    assert "in the release pull request opened from the branch the `prepare` run pushes" in tiers
     assert "the release workflow tags it and never sets it" in tiers
 
     text = _RELEASE.read_text(encoding="utf-8")
-    assert "  prepare:\n" in text and "gh pr create" in text
+    assert "  prepare:\n" in text and "gh pr create" not in text
     assert 'branch="release/$VERSION"' in text
     for refusal in ("is not CalVer", "already exists", "is not newer than the latest release"):
         assert refusal in text, f"release.yml no longer refuses: {refusal!r}"
