@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import functools
 import html as html_mod
+import importlib.metadata
 import inspect
 import re
 from datetime import datetime, timezone
@@ -112,6 +113,12 @@ inventing a link.
 """
 
 mcp = OffLoopFastMCP("goodreads", instructions=SERVER_INSTRUCTIONS)
+# FastMCP takes no version, so `initialize` would report the mcp SDK's own
+# version as ours. Left None (the SDK default) when not installed as a package.
+try:
+    mcp._mcp_server.version = importlib.metadata.version("goodreads-mcp-ai")
+except importlib.metadata.PackageNotFoundError:
+    pass
 gr = GoodreadsClient()
 DEFAULT_USER_ID = load_user_id()
 
