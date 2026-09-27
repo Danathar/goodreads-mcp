@@ -467,7 +467,7 @@ _DENIED = [
     ("python -m pytest -q -- *", "starts with a glob"),
     # and in git, before `--`, to a file named like an option: with a file
     # named `--output=pwned` in the checkout, `git diff *` wrote `pwned`
-    # (git 2.55.0, #197)
+    # (git 2.47.3, #197)
     ("git diff HEAD *", "starts with a glob"),
     ("git log --oneline [-]*", "starts with a glob"),
     ("git log --grep ? HEAD", "starts with a glob"),

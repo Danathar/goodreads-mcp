@@ -751,7 +751,7 @@ def _check_git(verb: str, args: list[str], cwd: Path) -> None:
             )
         # Before `--`, a word the shell expands can become an option:
         # `git diff *` with a file named `--output=pwned` in the checkout
-        # wrote `pwned` (git 2.55.0). After `--` every word is a path, so
+        # wrote `pwned` (git 2.47.3). After `--` every word is a path, so
         # `git diff -- '*.py'` is left alone.
         if not after_dashdash and token.startswith(_GLOB_START):
             raise Denied(
