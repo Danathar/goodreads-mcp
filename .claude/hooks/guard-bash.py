@@ -588,6 +588,17 @@ def _split_redirections(words: list[str]) -> tuple[list[str], list[str]]:
 
 
 def _check_pytest(args: list[str], cwd: Path) -> None:
+    # pytest's parser reads any word that starts with `@` as a file of further
+    # arguments (argparse `fromfile_prefix_chars`), wherever the word stands:
+    # an option's value, or after `--`. The guard never reads that file, so
+    # `-k @.env` printed `.env`'s first line in pytest's error, and a file
+    # naming `/tmp/x/test_a.py` or `--junitxml=...` passed every check below.
+    for token in args:
+        if token.startswith("@"):
+            raise Denied(
+                f"`{token}` is a pytest argument file: pytest reads the named "
+                "file as more arguments, which the guard cannot check"
+            )
     positional: list[str] = []
     i = 0
     while i < len(args):
