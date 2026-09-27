@@ -274,7 +274,7 @@ SHELF_RSS = """<?xml version="1.0" encoding="UTF-8"?>
 
 
 def test_parse_shelf_rss_full_item():
-    items = GoodreadsClient.parse_shelf_rss(SHELF_RSS)
+    _, items = GoodreadsClient.parse_shelf_rss(SHELF_RSS)
     assert len(items) == 2
     first = items[0]
     assert first["title"] == "Dune"
@@ -286,7 +286,7 @@ def test_parse_shelf_rss_full_item():
 
 
 def test_parse_shelf_rss_missing_fields_default_empty():
-    items = GoodreadsClient.parse_shelf_rss(SHELF_RSS)
+    _, items = GoodreadsClient.parse_shelf_rss(SHELF_RSS)
     second = items[1]
     assert second["title"] == "Neuromancer"
     assert second["isbn"] == ""

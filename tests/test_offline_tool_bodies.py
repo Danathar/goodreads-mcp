@@ -408,6 +408,31 @@ def test_get_reviews_accepts_the_edges_of_the_star_range(kwargs, monkeypatch):
             assert variables["filters"][key] == kwargs[name]
 
 
+def test_get_reviews_rejects_a_negative_limit_before_the_book_lookup(monkeypatch):
+    """A negative limit used to be read as 0, after spending the book lookup."""
+    graphql = _Graphql({})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    with pytest.raises(ValueError, match="limit must be zero or greater"):
+        server.get_reviews("1", limit=-1)
+
+    assert graphql.calls == []
+
+
+def test_get_reviews_accepts_a_zero_limit(monkeypatch):
+    graphql = _Graphql(
+        {
+            server._Q_BOOK_BY_LEGACY: [_reviews_book_response()],
+            server._Q_REVIEWS: [{"getReviews": _page([])}],
+        }
+    )
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    result = server.get_reviews("1", limit=0)
+
+    assert (result["returned"], result["reviews"]) == (0, [])
+
+
 def test_get_reviews_pages_with_the_next_token(monkeypatch):
     graphql = _Graphql(
         {
@@ -807,7 +832,7 @@ def test_book_lists_summarizes_listopia_entries(monkeypatch):
     ]
 
 
-def test_book_lists_tolerates_an_edge_with_no_node(monkeypatch):
+def test_book_lists_skips_an_edge_with_no_node(monkeypatch):
     graphql = _Graphql(
         {
             server._Q_BOOK_IDS: [_BOOK_IDS_RESPONSE],
@@ -816,15 +841,11 @@ def test_book_lists_tolerates_an_edge_with_no_node(monkeypatch):
     )
     monkeypatch.setattr(server.gr, "graphql", graphql)
 
-    (entry,) = server.book_lists("1", limit=1)["lists"]
+    result = server.book_lists("1", limit=1)
 
-    assert entry == {
-        "list_id": None,
-        "title": None,
-        "votes": None,
-        "books_count": None,
-        "url": None,
-    }
+    # An all-null entry would count toward limit and cite nothing.
+    assert result["lists"] == []
+    assert result["returned"] == 0
 
 
 # ------------------------------------------------------------ popular_books
@@ -877,6 +898,46 @@ def test_popular_books_accepts_the_edges_of_the_calendar(month, monkeypatch):
     monkeypatch.setattr(server.gr, "graphql", graphql)
 
     assert server.popular_books(2024, month=month, limit=1)["month"] == month
+
+
+@pytest.mark.parametrize("year", [25, 0, -1, 999, 10000])
+def test_popular_books_rejects_a_year_that_is_not_four_digits(year, monkeypatch):
+    """A nonsense year used to come back as an empty chart."""
+    graphql = _Graphql({})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    with pytest.raises(ValueError, match="year must be a 4-digit release year"):
+        server.popular_books(year)
+
+    assert graphql.calls == []
+
+
+@pytest.mark.parametrize("year", [1000, 9999])
+def test_popular_books_accepts_the_edges_of_the_four_digit_range(year, monkeypatch):
+    graphql = _Graphql({server._Q_TOP_LIST: [{"getTopList": _page([])}]})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    assert server.popular_books(year, limit=1)["year"] == year
+
+
+def test_popular_books_rejects_a_negative_limit(monkeypatch):
+    """A negative limit used to be read as 0 and answer an empty chart."""
+    graphql = _Graphql({})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    with pytest.raises(ValueError, match="limit must be zero or greater"):
+        server.popular_books(2024, limit=-1)
+
+    assert graphql.calls == []
+
+
+def test_popular_books_accepts_a_zero_limit(monkeypatch):
+    graphql = _Graphql({server._Q_TOP_LIST: [{"getTopList": _page([])}]})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    result = server.popular_books(2024, limit=0)
+
+    assert (result["returned"], result["books"]) == (0, [])
 
 
 def test_popular_books_carries_rank_and_count_onto_the_summary(monkeypatch):
@@ -1128,7 +1189,7 @@ def test_get_shelf_requests_the_rss_feed_and_returns_its_parse(monkeypatch):
     parsed = [{"title": "A Book", "link": "https://www.goodreads.com/book/show/1"}]
     get = _Get(_Response(text="<rss/>"))
     monkeypatch.setattr(server.gr, "get", get)
-    monkeypatch.setattr(server.gr, "parse_shelf_rss", lambda text: parsed)
+    monkeypatch.setattr(server.gr, "parse_shelf_rss", lambda text: ("to-read", parsed))
     monkeypatch.setattr(server, "DEFAULT_USER_ID", "111")
 
     result = server.get_shelf()
@@ -1140,7 +1201,7 @@ def test_get_shelf_requests_the_rss_feed_and_returns_its_parse(monkeypatch):
 def test_get_shelf_passes_the_requested_shelf_user_and_page(monkeypatch):
     get = _Get(_Response(text="<rss/>"))
     monkeypatch.setattr(server.gr, "get", get)
-    monkeypatch.setattr(server.gr, "parse_shelf_rss", lambda text: [])
+    monkeypatch.setattr(server.gr, "parse_shelf_rss", lambda text: ("read", []))
 
     server.get_shelf(shelf="read", user_id="222", page=3)
 
@@ -1152,7 +1213,7 @@ def test_get_shelf_rejects_a_page_below_one(page, monkeypatch):
     """page=0 or a negative page went straight into the RSS URL."""
     get = _Get(_Response(text="<rss/>"))
     monkeypatch.setattr(server.gr, "get", get)
-    monkeypatch.setattr(server.gr, "parse_shelf_rss", lambda text: [])
+    monkeypatch.setattr(server.gr, "parse_shelf_rss", lambda text: ("to-read", []))
 
     with pytest.raises(ValueError, match="page must be 1 or greater"):
         server.get_shelf(user_id="222", page=page)
@@ -1165,7 +1226,7 @@ def test_get_shelf_parses_the_body_of_the_response_it_fetched(monkeypatch):
     seen: list[str] = []
     monkeypatch.setattr(server.gr, "get", _Get(_Response(text="<rss>feed</rss>")))
     monkeypatch.setattr(
-        server.gr, "parse_shelf_rss", lambda text: seen.append(text) or []
+        server.gr, "parse_shelf_rss", lambda text: seen.append(text) or ("to-read", [])
     )
 
     server.get_shelf(user_id="222")
