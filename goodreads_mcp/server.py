@@ -117,13 +117,23 @@ DEFAULT_USER_ID = load_user_id()
 
 
 def _user_id(user_id: str | None) -> str:
-    uid = user_id or DEFAULT_USER_ID
+    """The Goodreads user id to use: the argument, else the configured
+    default. Either must be the number, optionally followed by '-' and the
+    name slug, as in goodreads.com/user/show/<ID>-name (#205)."""
+    uid = str(user_id or "").strip() or str(DEFAULT_USER_ID or "").strip()
     if not uid:
         raise ValueError(
             "No user_id given and GOODREADS_USER_ID is not configured. "
             "It's the number in goodreads.com/user/show/<ID>-name."
         )
-    return str(uid)
+    if not _USER_ID_RE.fullmatch(uid):
+        raise ValueError(
+            "user_id must be a Goodreads user id: the number, optionally "
+            "followed by '-' and the name slug, e.g. '1' or '1-otis-chandler'. "
+            "It's the number in goodreads.com/user/show/<ID>-name; pass just "
+            f"that, not the URL. Got {uid!r}."
+        )
+    return uid
 
 
 def _clean_text(s: str | None) -> str:
@@ -149,7 +159,7 @@ def _fetch_book_apollo(book_id: str) -> dict[str, Any]:
     challenge (HTTP 202). The .xml-suffixed path serves the identical
     Next.js page with __NEXT_DATA__ intact and is not challenged.
     """
-    bid = str(book_id)
+    bid = _match_book_id(book_id).group(0)
     if not bid.endswith(".xml"):
         bid += ".xml"
     page = gr.get(f"/book/show/{bid}")
@@ -175,14 +185,63 @@ def _find_book(apollo: dict[str, Any], book_id: str) -> dict[str, Any]:
     return book
 
 
-def _legacy_id(book_id: str) -> int:
-    """Extract the numeric legacy id from '54493401' or '54493401-slug'."""
-    m = re.match(r"\d+", str(book_id))
-    if not m:
+# A Goodreads id is a number without a leading zero, optionally followed by
+# the title (or user name) slug: '54493401', '11870085-the-fault-in-our-stars',
+# or the older dot form '2767052.The_Hunger_Games'. Checking the whole string,
+# not just its leading digits, keeps an ISBN, a URL or a query string from
+# being read as whatever number it starts with, and from reaching the URL
+# path (#205). The slug never holds / ? # & = % or whitespace.
+_SLUG = r"[\w.-]+"
+_BOOK_ID_RE = re.compile(rf"([1-9][0-9]*)(?:[-.]{_SLUG})?")
+_USER_ID_RE = re.compile(rf"([1-9][0-9]*)(?:-{_SLUG})?")
+_GRAPHQL_INT_MAX = 2**31 - 1
+
+
+def _is_isbn(value: str) -> bool:
+    """True for a checksum-valid ISBN-13 (978/979) or ISBN-10.
+
+    Hyphens and spaces are ignored in an ISBN-13. An ISBN-10 counts only as
+    one run of ten characters or split into its four groups: a book id with a
+    short all-digit slug ('100000000-1') is ten characters too, and stays a
+    book id.
+    """
+    s = re.sub(r"[-\s]", "", value).upper()
+    if re.fullmatch(r"97[89][0-9]{10}", s):
+        return sum(int(c) * (3 if i % 2 else 1) for i, c in enumerate(s)) % 10 == 0
+    groups = len(re.split(r"[-\s]+", value))
+    if re.fullmatch(r"[0-9]{9}[0-9X]", s) and groups in (1, 4):
+        total = sum((10 - i) * (10 if c == "X" else int(c)) for i, c in enumerate(s))
+        return total % 11 == 0
+    return False
+
+
+def _match_book_id(book_id: Any) -> re.Match[str]:
+    """Validate a book_id (surrounding whitespace ignored). Group 0 is the
+    id to put in a URL path, group 1 its number."""
+    bid = str(book_id).strip()
+    if _is_isbn(bid):
         raise ValueError(
-            f"book_id must start with the numeric Goodreads id, got {book_id!r}."
+            f"book_id {bid!r} is an ISBN, not a Goodreads book id. "
+            "search_books finds a book by ISBN; pass the book_id it returns."
         )
-    return int(m.group(0))
+    m = _BOOK_ID_RE.fullmatch(bid)
+    # The backend takes the number as a GraphQL Int (32-bit); a longer one is
+    # a typo'd ISBN or another number, never a book (#205).
+    if m and int(m.group(1)) <= _GRAPHQL_INT_MAX:
+        return m
+    raise ValueError(
+        "book_id must be a Goodreads book id: the number, optionally followed "
+        "by '-' or '.' and the title slug, e.g. '54493401', "
+        "'11870085-the-fault-in-our-stars' or '2767052.The_Hunger_Games'. "
+        "For a goodreads.com/book/show/<ID>... URL pass just the number. "
+        f"Got {bid!r}."
+    )
+
+
+def _legacy_id(book_id: str) -> int:
+    """The numeric legacy id of a validated book_id: 54493401 for
+    '54493401', '54493401-slug' or '54493401.Slug'."""
+    return int(_match_book_id(book_id).group(1))
 
 
 def _book_id(legacy_id: Any) -> str | None:
@@ -500,7 +559,8 @@ def search_books(query: str, max_results: int = 10) -> list[dict[str, Any]]:
 @mcp.tool(annotations=_READ_ONLY)
 def get_book(book_id: str, review_language_limit: int = 5) -> dict[str, Any]:
     """Get full details for a book by its Goodreads id (numeric, or numeric-slug
-    like '11870085-the-fault-in-our-stars').
+    like '11870085-the-fault-in-our-stars' or '2767052.The_Hunger_Games'). An
+    ISBN is not a book id: find the book with search_books first.
 
     Parses the page's embedded __NEXT_DATA__ JSON (Apollo state) rather than
     scraping the DOM, which survives markup changes. Includes the full
