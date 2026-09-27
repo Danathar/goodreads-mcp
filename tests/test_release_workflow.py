@@ -39,7 +39,10 @@ The contracts here that are load-bearing:
   with no `test` run has nothing red on it), while every other check run is
   ignored (#209); a version that is not CalVer, is already tagged, is not
   newer than the last stable release, or whose `b1`/`rc1` suffix disagrees
-  with the `prerelease` box is refused before anything is written. Every
+  with the `prerelease` box is refused before anything is written. The one
+  taken tag let through is a failed attempt's own, on this commit with no
+  release carrying the bundle: the re-run resumes it (#210), and the next
+  release measures its changes from the last tag that really shipped. Every
   `steps.<id>.outputs.<name>` reference in the file is joined back to the
   body that writes it, because a typo there does not fail anything — it
   quietly skips the release.
@@ -145,6 +148,12 @@ _CALVER_SPEC = r"^[0-9]{4}\.(1[0-2]|[1-9])\.(0|[1-9][0-9]*)((b|rc)[1-9][0-9]*)?$
 _CALVER_MATCH = re.search(r"^  CALVER_PATTERN: '(.+)'$", _RELEASE_TEXT, re.M)
 assert _CALVER_MATCH, "release.yml no longer defines CALVER_PATTERN in its top-level env:"
 _CALVER = _CALVER_MATCH.group(1)
+
+# The jq program the release job's gates hand to `gh api .../releases`: the
+# tags of the published releases that carry the bundle.
+_RELEASED_TAGS_MATCH = re.search(r"^      RELEASED_TAGS: '(.+)'$", _RELEASE_TEXT, re.M)
+assert _RELEASED_TAGS_MATCH, "release.yml's release job no longer defines RELEASED_TAGS in its env:"
+_RELEASED_TAGS = _RELEASED_TAGS_MATCH.group(1)
 
 _OUTPUT_REF = _workflow_steps.OUTPUT_REF
 
@@ -656,17 +665,79 @@ def test_the_opt_in_is_the_repository_variable():
 # --------------------------------------------------------------------------
 
 
-def _decide(work: Path, force: str = "") -> tuple[dict[str, str], str]:
-    output = work / "github_output"
-    summary = work / "summary"
-    result = _run(
+_BUNDLE = "goodreads-mcp.mcpb"
+
+
+def _release(tag: str, *, draft: bool = False, assets: tuple[str, ...] = (_BUNDLE,)) -> dict:
+    """One entry of `GET /repos/{owner}/{repo}/releases`, with the fields the gates read."""
+    return {"tag_name": tag, "draft": draft, "assets": [{"name": name} for name in assets]}
+
+
+def _releases_gh(directory: Path, pages: list[list[dict]]) -> Path:
+    """A directory holding a `gh` that answers `gh api .../releases` with `pages`.
+
+    It behaves like the real `gh api`: without `--paginate` only the first page
+    is served, and the `--jq` program is applied to each page in turn, strings
+    printed raw. Any other endpoint fails. Calls are appended to `gh-args`.
+    """
+    if shutil.which("jq") is None:
+        pytest.skip("jq is not installed")
+    stubs = directory / "gh-stub"
+    stubs.mkdir(exist_ok=True)
+    for index, releases in enumerate(pages or [[]]):
+        (stubs / f"page-{index}.json").write_text(json.dumps(releases), encoding="utf-8")
+    _write_stub(
+        stubs,
+        "gh",
+        f'printf "%s\\n" "$*" >> "{stubs}/gh-args"\n'
+        'case "$*" in "api "*"repos/o/r/releases "*) ;; *) exit 9 ;; esac\n'
+        "paginate=false; filter=.\n"
+        'while [ $# -gt 0 ]; do\n'
+        '  case "$1" in\n'
+        "    --paginate) paginate=true ;;\n"
+        '    --jq) filter="$2"; shift ;;\n'
+        "  esac\n"
+        "  shift\n"
+        "done\n"
+        f'for page in "{stubs}"/page-*.json; do\n'
+        '  jq -r "$filter" "$page" || exit 1\n'
+        '  [ "$paginate" = true ] || break\n'
+        "done\n",
+    )
+    return stubs
+
+
+def _published(*tags: str) -> list[list[dict]]:
+    """One page listing a complete release for each tag."""
+    return [[_release(tag) for tag in tags]]
+
+
+def _run_decide(work: Path, force: str = "", pages: list[list[dict]] | None = None) -> subprocess.CompletedProcess[str]:
+    """Run the step; unless `pages` says otherwise, every tag in `work` has a complete release."""
+    if pages is None:
+        pages = _published(*_git(work, "tag", "--list").split())
+    return _run(
         _body(_DECIDE_STEP),
         work,
-        env={"FORCE": force, "GITHUB_STEP_SUMMARY": str(summary)},
-        github_output=output,
+        path_dirs=[_releases_gh(work.parent, pages)],
+        env={
+            "FORCE": force,
+            "GITHUB_STEP_SUMMARY": str(work / "summary"),
+            "GH_TOKEN": "x",
+            "GITHUB_REPOSITORY": "o/r",
+            "RELEASED_TAGS": _RELEASED_TAGS,
+        },
+        github_output=work / "github_output",
     )
+
+
+def _decide(
+    work: Path, force: str = "", pages: list[list[dict]] | None = None
+) -> tuple[dict[str, str], str]:
+    result = _run_decide(work, force, pages)
     assert result.returncode == 0, result.stderr
-    return _outputs(output), summary.read_text(encoding="utf-8") if summary.exists() else ""
+    summary = work / "summary"
+    return _outputs(work / "github_output"), summary.read_text(encoding="utf-8") if summary.exists() else ""
 
 
 def test_the_first_calver_release_goes_ahead_with_no_tags(tmp_path: Path):
@@ -731,6 +802,76 @@ def test_the_baseline_is_sorted_as_versions_not_as_text(tmp_path: Path):
     _git(work, "tag", "2026.10.0")
 
     assert _decide(work)[0] == {"go": "false"}
+
+
+def test_a_tag_whose_release_failed_is_not_the_baseline(tmp_path: Path):
+    """#210: the tag step pushed 2026.9.3, then the release step failed, so
+    nothing shipped. The bump to 2026.9.4 that follows changes no package file,
+    and measured from the orphan tag the fix it was meant to publish is skipped."""
+    work = _repo_with_remote(tmp_path)
+    _git(work, "tag", "-a", "2026.9.2", "-m", "Release 2026.9.2")
+    _commit(work, "goodreads_mcp/server.py", "the fix\n")
+    _git(work, "tag", "-a", "2026.9.3", "-m", "Release 2026.9.3")
+    _commit(work, "pyproject.toml", _PYPROJECT.read_text(encoding="utf-8") + "\n# bumped\n")
+
+    result = _run_decide(work, pages=_published("2026.9.2"))
+
+    assert result.returncode == 0, result.stderr
+    assert _outputs(work / "github_output") == {"go": "true"}
+    assert "since 2026.9.2: 1." in result.stdout
+    assert "Tag 2026.9.3 has no GitHub release with the bundle" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "unfinished",
+    [
+        pytest.param(_release("2026.9.3", assets=()), id="published-without-the-bundle"),
+        pytest.param(_release("2026.9.3", draft=True), id="left-a-draft"),
+    ],
+)
+def test_a_release_the_bundle_never_reached_is_not_the_baseline(tmp_path: Path, unfinished: dict):
+    work = _repo_with_remote(tmp_path)
+    _git(work, "tag", "2026.9.2")
+    _commit(work, "goodreads_mcp/server.py", "the fix\n")
+    _git(work, "tag", "2026.9.3")
+
+    outputs, _ = _decide(work, pages=[[unfinished, _release("2026.9.2")]])
+
+    assert outputs == {"go": "true"}
+
+
+def test_the_baseline_is_found_on_a_later_page_of_releases(tmp_path: Path):
+    """The releases endpoint pages at 30, newest first; the baseline can be on page two."""
+    work = _repo_with_remote(tmp_path)
+    _commit(work, "goodreads_mcp/server.py", "released\n")
+    _git(work, "tag", "2026.9.0")
+    _commit(work, "docs/notes.md", "changed\n")
+
+    noise = [_release(f"v0.0.{n}") for n in range(30)]
+    outputs, summary = _decide(work, pages=[noise, [_release("2026.9.0")]])
+
+    assert outputs == {"go": "false"}
+    assert "since **2026.9.0**" in summary
+
+
+def test_an_unreadable_release_list_stops_the_decision(tmp_path: Path):
+    """Read as "nothing released", a failed call would release as if this were the first."""
+    work = _repo_with_remote(tmp_path)
+    _git(work, "tag", "2026.9.0")
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    _write_stub(stubs, "gh", "echo 'HTTP 502' >&2; exit 1\n")
+
+    result = _run(
+        _body(_DECIDE_STEP),
+        work,
+        path_dirs=[stubs],
+        env={"FORCE": "", "GH_TOKEN": "x", "GITHUB_REPOSITORY": "o/r", "RELEASED_TAGS": _RELEASED_TAGS},
+        github_output=work / "github_output",
+    )
+
+    assert result.returncode != 0
+    assert _outputs(work / "github_output") == {}
 
 
 # --------------------------------------------------------------------------
@@ -925,8 +1066,33 @@ def test_the_required_check_is_the_one_the_ruleset_on_main_requires():
 # --------------------------------------------------------------------------
 
 
-def _validate(work: Path, version: str, prerelease: str = "false") -> subprocess.CompletedProcess[str]:
-    return _run(_body(_VALIDATE_STEP), work, env={"VERSION": version, "PRERELEASE": prerelease})
+def _validate(
+    work: Path, version: str, prerelease: str = "false", pages: list[list[dict]] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run the step for `work`'s HEAD; unless `pages` says otherwise, every local tag has a complete release.
+
+    Its outputs are in `_validate_outputs(work)`.
+    """
+    if pages is None:
+        pages = _published(*_git(work, "tag", "--list").split())
+    return _run(
+        _body(_VALIDATE_STEP),
+        work,
+        path_dirs=[_releases_gh(work.parent, pages)],
+        env={
+            "VERSION": version,
+            "PRERELEASE": prerelease,
+            "GH_TOKEN": "x",
+            "GITHUB_REPOSITORY": "o/r",
+            "GITHUB_SHA": _head(work),
+            "RELEASED_TAGS": _RELEASED_TAGS,
+        },
+        github_output=work.parent / "validate-output",
+    )
+
+
+def _validate_outputs(work: Path) -> dict[str, str]:
+    return _outputs(work.parent / "validate-output")
 
 
 @pytest.mark.parametrize(
@@ -970,16 +1136,115 @@ def test_an_existing_local_tag_is_refused(tmp_path: Path):
 
 
 def test_a_tag_only_on_the_remote_is_refused(tmp_path: Path):
-    """Another run can tag after this checkout was made."""
+    """Another run can tag and release after this checkout was made."""
     work = _repo_with_remote(tmp_path)
     _git(work, "tag", "-a", "2026.10.0", "-m", "release")
     _git(work, "push", "--quiet", "origin", "2026.10.0")
     _git(work, "tag", "-d", "2026.10.0")
 
-    result = _validate(work, "2026.10.0")
+    result = _validate(work, "2026.10.0", pages=_published("2026.10.0"))
 
     assert result.returncode == 1
     assert "Tag 2026.10.0 already exists" in result.stderr
+
+
+def _failed_after_tagging(tmp_path: Path, version: str = "2026.10.0", annotated: bool = True) -> Path:
+    """#210: an attempt pushed the tag on HEAD, then failed to create the release.
+
+    The re-run's fresh checkout (fetch-depth 0) has the tag locally as well.
+    """
+    work = _repo_with_remote(tmp_path)
+    _git(work, "tag", *(["-a", "-m", f"Release {version}"] if annotated else []), version)
+    _git(work, "push", "--quiet", "origin", version)
+    return work
+
+
+@pytest.mark.parametrize("annotated", [True, False], ids=["annotated", "lightweight"])
+@pytest.mark.parametrize(
+    "releases",
+    [
+        pytest.param([], id="no-release"),
+        pytest.param([_release("2026.10.0", assets=())], id="release-without-the-bundle"),
+        pytest.param([_release("2026.10.0", draft=True)], id="draft-release"),
+    ],
+)
+def test_a_rerun_after_the_release_failed_resumes(tmp_path: Path, releases: list[dict], annotated: bool):
+    work = _failed_after_tagging(tmp_path, annotated=annotated)
+
+    result = _validate(work, "2026.10.0", pages=[releases])
+
+    assert result.returncode == 0, result.stderr
+    assert _validate_outputs(work) == {"resume": "true"}
+    assert "Resuming" in result.stdout
+
+
+def test_a_new_version_does_not_resume(tmp_path: Path):
+    work = _repo_with_remote(tmp_path)
+
+    assert _validate(work, "2026.10.0").returncode == 0
+    assert _validate_outputs(work) == {"resume": "false"}
+
+
+def test_a_tag_on_another_commit_is_refused_even_without_a_release(tmp_path: Path):
+    """Only the commit the failed attempt tagged may finish it."""
+    work = _failed_after_tagging(tmp_path)
+    tagged = _head(work)
+    _commit(work, "goodreads_mcp/server.py", "later\n")
+
+    result = _validate(work, "2026.10.0", pages=[[]])
+
+    assert result.returncode == 1
+    assert f"Tag 2026.10.0 already exists (on {tagged[:12]}), not on {_head(work)[:12]}" in result.stderr
+    assert "'prepare'" in result.stderr
+    assert _validate_outputs(work) == {}
+
+
+def test_a_released_tag_on_this_commit_is_refused(tmp_path: Path):
+    """Re-running a release that finished must not publish it twice."""
+    work = _failed_after_tagging(tmp_path)
+
+    result = _validate(work, "2026.10.0", pages=_published("2026.10.0"))
+
+    assert result.returncode == 1
+    assert "Tag 2026.10.0 already exists, and its GitHub release already carries" in result.stderr
+    assert _validate_outputs(work) == {}
+
+
+def test_a_resume_is_still_measured_against_the_newest_stable_tag(tmp_path: Path):
+    """An old failed run re-run after a newer release must not publish an older version."""
+    work = _failed_after_tagging(tmp_path, "2026.9.3")
+    _git(work, "tag", "2026.9.4")
+
+    result = _validate(work, "2026.9.3", pages=_published("2026.9.4"))
+
+    assert result.returncode == 1
+    assert "2026.9.3 is not newer than the latest release 2026.9.4" in result.stderr
+
+
+def test_an_unreadable_release_list_does_not_read_as_a_failed_release(tmp_path: Path):
+    work = _failed_after_tagging(tmp_path)
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    _write_stub(stubs, "gh", "echo 'HTTP 502' >&2; exit 1\n")
+    output = tmp_path / "github_output"
+
+    result = _run(
+        _body(_VALIDATE_STEP),
+        work,
+        path_dirs=[stubs],
+        env={
+            "VERSION": "2026.10.0",
+            "PRERELEASE": "false",
+            "GH_TOKEN": "x",
+            "GITHUB_REPOSITORY": "o/r",
+            "GITHUB_SHA": _head(work),
+            "RELEASED_TAGS": _RELEASED_TAGS,
+        },
+        github_output=output,
+    )
+
+    assert result.returncode != 0
+    assert _outputs(output) == {}
 
 
 def test_a_longer_tag_on_the_remote_is_not_this_one(tmp_path: Path):
@@ -1044,7 +1309,7 @@ def test_the_tag_step_pushes_an_annotated_tag_with_no_v_prefix(tmp_path: Path):
     work = _repo_with_remote(tmp_path)
     head = _git(work, "rev-parse", "HEAD").strip()
 
-    result = _run(_body(_TAG_STEP), work, env={"VERSION": "2026.10.0", "GH_TOKEN": "x"})
+    result = _run(_body(_TAG_STEP), work, env={"VERSION": "2026.10.0", "RESUME": "false", "GH_TOKEN": "x"})
 
     assert result.returncode == 0, result.stderr
     assert _remote_tags(work) == ["2026.10.0"]
@@ -1056,9 +1321,32 @@ def test_the_tag_step_writes_no_branch(tmp_path: Path):
     work = _repo_with_remote(tmp_path)
     before = _git(work, "ls-remote", "--heads", "origin")
 
-    _run(_body(_TAG_STEP), work, env={"VERSION": "2026.10.0", "GH_TOKEN": "x"})
+    _run(_body(_TAG_STEP), work, env={"VERSION": "2026.10.0", "RESUME": "false", "GH_TOKEN": "x"})
 
     assert _git(work, "ls-remote", "--heads", "origin") == before
+
+
+def test_a_resumed_run_leaves_the_tag_the_failed_attempt_pushed(tmp_path: Path):
+    """#210: the tag is already on this commit, locally and on origin; tagging
+    again would fail the re-run on `git tag` before the release is retried."""
+    work = _failed_after_tagging(tmp_path)
+    before = _git(work, "ls-remote", "--tags", "origin")
+    assert _validate(work, "2026.10.0", pages=[[]]).returncode == 0
+
+    result = _run(
+        _body(_TAG_STEP),
+        work,
+        env={
+            "VERSION": "2026.10.0",
+            "RESUME": _validate_outputs(work)["resume"],
+            "GH_TOKEN": "x",
+            "GITHUB_SHA": _head(work),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "not tagging again" in result.stdout
+    assert _git(work, "ls-remote", "--tags", "origin") == before
 
 
 # --------------------------------------------------------------------------
@@ -1780,7 +2068,7 @@ def test_a_failed_build_is_a_failed_release():
 
 
 def test_the_release_job_persists_no_credentials():
-    """Its `contents: write` token reaches the tag push and nothing else (#175).
+    """Its `contents: write` token reaches the tag push and the gates' API reads, nothing else (#175).
 
     actions/checkout writes the job token into .git/config unless told not to,
     where every later step, including the unpinned packages the test, pack
@@ -1790,7 +2078,8 @@ def test_the_release_job_persists_no_credentials():
     assert _STEPS[0].with_["persist-credentials"] == "false"
     assert _step(_TAG_STEP).env["GH_TOKEN"] == "${{ github.token }}"
     # The steps that hold a token, by name: adding one is a visible change here.
-    assert {step.name for step in _STEPS if "GH_TOKEN" in step.env} == {_CHECKS_STEP, _TAG_STEP}
+    holders = {step.name for step in _STEPS if "GH_TOKEN" in step.env}
+    assert holders == {_DECIDE_STEP, _CHECKS_STEP, _VALIDATE_STEP, _TAG_STEP}
     assert {step.name for step in _STEPS if "GITHUB_TOKEN" in step.env} == {_PUBLISH_STEP}
 
 
@@ -1801,7 +2090,9 @@ def test_the_tag_push_carries_the_header_the_checkout_did_not_persist(tmp_path: 
     stubs.mkdir()
     _write_stub(stubs, "git", _recorder(log))
 
-    result = _run(_body(_TAG_STEP), tmp_path, path_dirs=[stubs], env={"VERSION": "2026.10.0", "GH_TOKEN": "s3cret"})
+    result = _run(
+        _body(_TAG_STEP), tmp_path, path_dirs=[stubs], env={"VERSION": "2026.10.0", "RESUME": "false", "GH_TOKEN": "s3cret"}
+    )
 
     assert result.returncode == 0, result.stderr
     header = "AUTHORIZATION: basic " + base64.b64encode(b"x-access-token:s3cret").decode("ascii")

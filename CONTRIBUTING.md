@@ -76,6 +76,10 @@ release, or when a `b1`/`rc1` suffix and the `prerelease` box disagree.
 Tick `dry_run` to run every check and build the bundle without tagging or
 publishing.
 
+If a release fails after its tag is pushed, re-run the failed job: it finishes
+that release instead of refusing the tag, and a later release counts changes
+from the last tag that has a GitHub release.
+
 A change to `.claude/settings.json` or `.claude/hooks/**` is a change to the
 agent permission boundary. A human reads it and merges it, whoever wrote it
 (see [risk tiers](docs/risk-tiers.md), Tier 2).
