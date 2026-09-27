@@ -408,6 +408,31 @@ def test_get_reviews_accepts_the_edges_of_the_star_range(kwargs, monkeypatch):
             assert variables["filters"][key] == kwargs[name]
 
 
+def test_get_reviews_rejects_a_negative_limit_before_the_book_lookup(monkeypatch):
+    """A negative limit used to be read as 0, after spending the book lookup."""
+    graphql = _Graphql({})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    with pytest.raises(ValueError, match="limit must be zero or greater"):
+        server.get_reviews("1", limit=-1)
+
+    assert graphql.calls == []
+
+
+def test_get_reviews_accepts_a_zero_limit(monkeypatch):
+    graphql = _Graphql(
+        {
+            server._Q_BOOK_BY_LEGACY: [_reviews_book_response()],
+            server._Q_REVIEWS: [{"getReviews": _page([])}],
+        }
+    )
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    result = server.get_reviews("1", limit=0)
+
+    assert (result["returned"], result["reviews"]) == (0, [])
+
+
 def test_get_reviews_pages_with_the_next_token(monkeypatch):
     graphql = _Graphql(
         {
@@ -877,6 +902,46 @@ def test_popular_books_accepts_the_edges_of_the_calendar(month, monkeypatch):
     monkeypatch.setattr(server.gr, "graphql", graphql)
 
     assert server.popular_books(2024, month=month, limit=1)["month"] == month
+
+
+@pytest.mark.parametrize("year", [25, 0, -1, 999, 10000])
+def test_popular_books_rejects_a_year_that_is_not_four_digits(year, monkeypatch):
+    """A nonsense year used to come back as an empty chart."""
+    graphql = _Graphql({})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    with pytest.raises(ValueError, match="year must be a 4-digit release year"):
+        server.popular_books(year)
+
+    assert graphql.calls == []
+
+
+@pytest.mark.parametrize("year", [1000, 9999])
+def test_popular_books_accepts_the_edges_of_the_four_digit_range(year, monkeypatch):
+    graphql = _Graphql({server._Q_TOP_LIST: [{"getTopList": _page([])}]})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    assert server.popular_books(year, limit=1)["year"] == year
+
+
+def test_popular_books_rejects_a_negative_limit(monkeypatch):
+    """A negative limit used to be read as 0 and answer an empty chart."""
+    graphql = _Graphql({})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    with pytest.raises(ValueError, match="limit must be zero or greater"):
+        server.popular_books(2024, limit=-1)
+
+    assert graphql.calls == []
+
+
+def test_popular_books_accepts_a_zero_limit(monkeypatch):
+    graphql = _Graphql({server._Q_TOP_LIST: [{"getTopList": _page([])}]})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    result = server.popular_books(2024, limit=0)
+
+    assert (result["returned"], result["books"]) == (0, [])
 
 
 def test_popular_books_carries_rank_and_count_onto_the_summary(monkeypatch):
