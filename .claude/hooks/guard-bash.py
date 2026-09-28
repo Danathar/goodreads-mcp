@@ -35,7 +35,7 @@ command, because it is the construct that moves words between them: see
 `_SUBSTITUTION_RE`.
 
 The guard only holds while the string it reads is the string the shell runs.
-Six ways that used to come apart, all of them a bypass:
+Seven ways that used to come apart, all of them a bypass:
 
 * `#` starts a comment in `shlex` wherever it appears, but in a shell only at
   the start of a word. `pytest --ignore=z#z /tmp/evil.py` reached the guard as
@@ -81,6 +81,15 @@ Six ways that used to come apart, all of them a bypass:
   `>out git diff HEAD` and `git diff HEAD >out` as the same command. The
   operator used to be read as the command's name, so the guard fell through
   its dispatch and charged the write to nothing.
+* A wrapper spelled with a `\\` is read differently by the matcher and the
+  shell. Claude Code's permission matcher cuts the command word at its last
+  `/` or `\\` and steps over the wrapper it finds there, reading the command
+  as typed; bash takes an unquoted `\\` out before the word reaches it, so
+  `/usr/bin\\timeout 5 pytest -q >out` reaches the matcher ending in
+  `timeout` -- stepped over, matching `Bash(pytest *)` -- while bash looks
+  for the file `/usr/bintimeout`, neither a wrapper nor a guarded verb, after
+  truncating `out`. The guard now also scans the command word as typed for
+  this spelling (`_backslash_wrapper`, #128).
 
 Four shapes of the corpus are decided as *not reachable* rather than refused,
 so a later pass does not work them out again. Each rests on the allow list,

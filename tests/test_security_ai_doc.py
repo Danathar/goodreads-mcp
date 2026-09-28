@@ -57,6 +57,7 @@ _DIVERGENCES = [
     "noglob pytest -p evil",  # a wrapper the matcher steps over
     "git diff .env /etc/hostname",  # an operand outside the checkout
     ">out git diff HEAD",  # a redirection in front of the command name
+    "/usr/bin\\timeout 5 pytest -q >out",  # a wrapper spelled with a backslash (#128)
 ]
 
 
