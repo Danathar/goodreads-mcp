@@ -20,8 +20,9 @@ checks the agent permission rule. So each claim here is joined to the step of
 `release.yml` that makes it true:
 
 * **The refusal list is compared to the `::error::` lines, both ways.** Every
-  `::error::` the `release` job can print maps to a clause of the sentence, or
-  to an exemption naming the `docs/quality.md` row that documents it instead;
+  `::error::` the `release` job, or a bundle job it needs, can print maps to a
+  clause of the sentence, or to an exemption naming the `docs/quality.md` row
+  that documents it instead;
   every clause maps to an error; every map entry and exemption still matches
   something. A new refusal with no clause fails, and so does a clause for a
   refusal someone deleted.
@@ -70,6 +71,11 @@ def _release_job() -> _workflow_steps.Workflow:
     return _workflow_steps.Workflow(_RELEASE, job="release")
 
 
+# The jobs whose `::error::` stops a release: `release` itself, and the bundle
+# jobs it needs, which pack and check the `.mcpb` without its write token (#237).
+_REFUSING_JOBS = ("build-mcpb", "verify-mcpb", "release")
+
+
 def _prepare_job() -> _workflow_steps.Workflow:
     return _workflow_steps.Workflow(_RELEASE, job="prepare")
 
@@ -112,12 +118,13 @@ _DOCUMENTED_IN_QUALITY = {
 
 
 def _error_lines() -> list[str]:
-    """Every `::error::` message a step of the release job can print."""
+    """Every `::error::` message a step of a job that stops the release can print."""
     lines = []
-    for step in _release_job().steps:
-        for line in (step.run or "").splitlines():
-            if "::error::" in line:
-                lines.append(line.split("::error::", 1)[1])
+    for job in _REFUSING_JOBS:
+        for step in _workflow_steps.Workflow(_RELEASE, job=job).steps:
+            for line in (step.run or "").splitlines():
+                if "::error::" in line:
+                    lines.append(line.split("::error::", 1)[1])
     return lines
 
 
@@ -148,12 +155,12 @@ def test_every_refusal_the_release_job_prints_is_documented():
         )
 
 
-def test_every_mapped_refusal_still_exists_in_the_release_job():
+def test_every_mapped_refusal_still_exists_in_a_job_that_stops_the_release():
     """The other direction: an entry for a deleted gate keeps a clause alive."""
     lines = _error_lines()
     for pattern in {**_REFUSALS, **_DOCUMENTED_IN_QUALITY}:
         assert any(re.search(pattern, line) for line in lines), (
-            f"no ::error:: in release.yml's release job matches {pattern!r}"
+            f"no ::error:: in release.yml's {', '.join(_REFUSING_JOBS)} jobs matches {pattern!r}"
         )
 
 

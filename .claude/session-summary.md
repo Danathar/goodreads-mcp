@@ -24,24 +24,26 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-28 — CI runs the offline suite at pyproject's dependency floors (#234)
+## 2026-09-28 — release.yml packs the bundle outside the job that can write (#237)
 
-**Done:** `ci.yml`'s `test` job has a new step, "Run tests against the
-declared dependency floors". It installs uv 0.12.19, resolves every direct
-dependency to its lower bound (`uv pip install --resolution lowest-direct`)
-in `$RUNNER_TEMP/floor`, and runs the offline suite there. Locally that
-resolves mcp 1.14.0, httpx 0.27.1, pydantic-settings 2.15.0 and gives 1383
-passed. Lowering the floor to `mcp[cli]>=1.13` turns it red (15 collection
-errors). `docs/quality.md` lists it. It lives in `test`, so the ruleset's
-required check and `release.yml`'s `test` gate cover it unchanged.
+**Done:** `release.yml` has two new jobs, both `contents: read`.
+`build-mcpb` packs the `.mcpb` from a fresh checkout, runs the compiled-code
+check and uploads it as the `mcpb` artifact before any Python package is
+installed. `verify-mcpb` runs the suite and starts a downloaded copy of the
+bundle. `release` needs both (and `build-pypi`), downloads the artifact, and
+no longer sets up Node or uv or runs pip, pytest, npx or `uv run`. This is the
+isolation #175 left "tracked apart". The policy file lists both jobs.
+`test_no_job_that_can_write_the_repository_runs_code_from_pypi_or_npm` pins
+the rule for every job that holds `contents: write`.
 
-**In flight:** the pull request for #234. It touches `.github/workflows/`
+**In flight:** the pull request for #237. It touches `.github/workflows/`
 (Tier 2), so a human merges it.
 
 **Blocked on:** nothing.
 
-**Watch:** the step sets `PYTHONWARNINGS` to ignore mcp 1.14–1.29's
-`IncompleteFieldDefinitionWarning` under pydantic-settings 2.15 (#220);
-without it `test_the_module_runs_as_a_script_and_exits_cleanly` fails at the
-floor. Drop the filter when the mcp floor reaches 1.30. The offline suite
-still cannot run on Python 3.10 (`tomllib`), so no 3.10 lane exists.
+**Watch:** the suite and the pack now run on every release run, including a
+scheduled month that releases nothing, as `build-pypi` already did. A red
+suite there fails the run before `release` decides anything. The packer's own
+npm dependencies are caret-ranged; it runs without a write token now, but it
+still runs. The #234 floor lane's `PYTHONWARNINGS` filter can go once the mcp
+floor reaches 1.30.

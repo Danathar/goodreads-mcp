@@ -13,19 +13,27 @@ name: Release MCPB
 # number it releases is one that passed CI and review, not one a workflow run
 # invented.
 #
-# Three jobs, and a run is only ever the first or the other two:
+# A run is either `prepare` alone or the release: every job but `prepare`.
 #
 #   * `prepare` pushes the version-bump branch, prints the link to open its
 #     pull request, and stops. Nothing is tagged or published, and the only
 #     branch it pushes is a release/* one.
 #   * `build-pypi` builds the wheel and sdist from a fresh checkout and
 #     uploads them, before any job has run third-party code in a tree.
+#   * `build-mcpb` packs the `.mcpb` the GitHub release ships from a fresh
+#     checkout and uploads it, before any Python package is installed.
+#   * `verify-mcpb` runs the test suite and starts a downloaded copy of the
+#     bundle. It is the job that runs `pip install` and `uv run` on unpinned
+#     closures, so it holds `contents: read` and nothing it does reaches the
+#     uploaded bundle (#237).
 #   * `release` tags the version pyproject.toml carries on the checked-out
 #     commit and publishes it: monthly on a schedule, or by hand. It refuses
 #     any commit that is not on main, whichever branch it was started from.
 #     Guarded; see "Decide whether to release" below, because most months
 #     here change only docs, tests and agent config, and a release people are
-#     prompted to install should contain something they can observe.
+#     prompted to install should contain something they can observe. It is
+#     the one job that holds `contents: write`, and it runs no code from PyPI
+#     or npm.
 #
 # `publish-pypi` follows `release` and uploads the distributions `build-pypi`
 # built, only when `release` really published. `publish-registry` then lists
@@ -245,11 +253,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Its own job, with its own checkout, so the wheel and sdist are built
-    # from the tree as merged, not from the tree after `release` has run
-    # `pip install -e`, `npx ... pack` and `uv run` on unpinned closures.
-    # Any of those could rewrite goodreads_mcp/ before a build in that job,
-    # and Trusted Publishing would sign the result. Here the only code that
-    # runs before the build is the setup action and hatchling.
+    # from the tree as merged, not from a tree in which `verify-mcpb` has run
+    # `pip install -e` and `uv run` on unpinned closures. Either could
+    # rewrite goodreads_mcp/ before a build in that job, and Trusted
+    # Publishing would sign the result. Here the only code that runs before
+    # the build is the setup action and hatchling.
     #
     # Runs on a dry run too, and on a month with nothing to release: an
     # artifact publishes nothing, and `publish-pypi` uploads it only after
@@ -279,13 +287,161 @@ jobs:
           if-no-files-found: error
 
   # ------------------------------------------------------------------------
+  # Pack the bundle the GitHub release ships, before any third-party Python
+  # code runs, in a job that holds no write token. Uploaded at once, so no
+  # later step or job can change the file `release` attaches (#237).
+  #
+  # The packer itself, `@anthropic-ai/mcpb`, is pinned, but its own npm
+  # dependencies are ranged. It is the one piece of third-party code the
+  # bundle cannot be built without, and here it runs with a read-only token
+  # and before any Python package is installed.
+  #
+  # Runs on a dry run too, and on a month with nothing to release, as
+  # `build-pypi` does: an artifact publishes nothing.
+  # ------------------------------------------------------------------------
+  build-mcpb:
+    if: github.event_name != 'workflow_dispatch' || !inputs.prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Pack MCPB
+        run: |
+          # The bundle ships no dependencies. manifest.json launches the server
+          # with `uv run`, which resolves pyproject.toml on the user's machine,
+          # so one .mcpb runs on every platform and Python the manifest
+          # declares. Resolving them here with `pip install --target` produced
+          # a bundle that only started on this runner's platform and Python:
+          # four of the packages in mcp's closure are compiled (#89).
+          npx -y @anthropic-ai/mcpb@2.1.2 pack
+          ls -lh *.mcpb 2>/dev/null || ls -lh ./*.mcpb 2>/dev/null || find . -maxdepth 2 -name "*.mcpb" -ls
+
+      - name: Check the bundle carries no compiled code
+        run: |
+          # A compiled module was built for one platform and one Python; a
+          # bundle that carries one cannot also be for the platforms the
+          # manifest lists. This is the check that would have failed v0.1.1.
+          python - <<'PY'
+          import json
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          bundles = sorted(Path(".").glob("*.mcpb"))
+          if len(bundles) != 1:
+              print(f"::error::expected exactly one .mcpb to check, found {[b.name for b in bundles]}")
+              sys.exit(1)
+          (bundle,) = bundles
+          platforms = json.load(open("manifest.json", encoding="utf-8"))["compatibility"]["platforms"]
+          names = zipfile.ZipFile(bundle).namelist()
+          compiled = [name for name in names if name.endswith((".so", ".pyd", ".dylib"))]
+          if len(platforms) > 1 and compiled:
+              print(
+                  f"::error::{bundle} declares platforms {platforms} but carries compiled "
+                  f"modules built for one of them: {compiled}"
+              )
+              sys.exit(1)
+          print(f"{bundle}: {len(names)} files, {len(compiled)} compiled, platforms {platforms}")
+          PY
+
+      - name: Upload the bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcpb
+          path: "*.mcpb"
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------------
+  # Run the suite and start the packed bundle. Everything here runs unpinned
+  # closures (`pip install -e`, `uv run`), so the job can read this public
+  # repository and nothing else, and it only ever sees a downloaded copy of
+  # the bundle: what it does to that copy never reaches the one `release`
+  # attaches. A failure here fails `release`, which needs this job.
+  # ------------------------------------------------------------------------
+  verify-mcpb:
+    if: github.event_name != 'workflow_dispatch' || !inputs.prepare
+    needs: build-mcpb
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install test deps and run tests
+        run: |
+          pip install -e ".[test]"
+          pytest -q
+
+      - name: Download the bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: mcpb
+          path: .
+
+      - name: Start the packed bundle the way the manifest launches it
+        run: |
+          # Resolve the bundle's dependencies once, here, the way a user's
+          # machine will: unpack the .mcpb and run its manifest's own command
+          # with `${__dirname}` pointing at the unpacked tree. A file that
+          # .mcpbignore drops -- pyproject.toml, the package itself -- fails
+          # the release instead of the first install. Empty stdin is EOF on
+          # the stdio transport, so a healthy server exits 0 without serving.
+          python - <<'PY'
+          import json
+          import os
+          import shutil
+          import subprocess
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          (bundle,) = sorted(Path(".").glob("*.mcpb"))
+          root = Path(os.environ["RUNNER_TEMP"]) / "bundle"
+          shutil.rmtree(root, ignore_errors=True)
+          zipfile.ZipFile(bundle).extractall(root)
+          config = json.load(open(root / "manifest.json", encoding="utf-8"))["server"]["mcp_config"]
+          argv = [arg.replace("${__dirname}", str(root)) for arg in (config["command"], *config["args"])]
+          print("launching:", *argv)
+          sys.exit(subprocess.run(argv, stdin=subprocess.DEVNULL).returncode)
+          PY
+
+  # ------------------------------------------------------------------------
   # Tag an approved commit and publish it. Reads the version; never sets it.
   # ------------------------------------------------------------------------
   release:
     if: github.event_name != 'workflow_dispatch' || !inputs.prepare
     # A failed build is a failed release: nothing is tagged when there is no
     # distribution to publish under the tag.
-    needs: build-pypi
+    needs: [build-pypi, build-mcpb, verify-mcpb]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Pushes a tag and creates a release; no step in this job writes a branch.
@@ -313,17 +469,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # This job runs `pip install`, `npx` and `uv run` on unpinned
-          # closures. With the default, the checkout leaves this job's
-          # `contents: write` token in .git/config for all of them to read.
-          # The steps that call the API get it through their own `env:`; the
-          # gates only read with it, and "Tag the approved commit" is the one
-          # step that writes with it.
-          # That keeps the token off disk; it does not isolate it. A step
-          # in this job can still reach a later step's env (`$GITHUB_ENV`
-          # sets `BASH_ENV`; a hook written to .git/hooks runs inside `git
-          # tag` and `git push`). Isolation means a separate job, the way
-          # `build-pypi` is one; that is tracked apart from this.
+          # No step in this job runs third-party code: the tests, `npx`, `pip
+          # install` and `uv run` live in `build-mcpb` and `verify-mcpb`, which
+          # hold `contents: read` only. The token still stays off disk; the
+          # steps that call the API get it through their own `env:`, and "Tag
+          # the approved commit" is the one step that writes with it.
           persist-credentials: false
 
       # The schedule always runs on the default branch. `workflow_dispatch`
@@ -498,20 +648,6 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Set up Node 20
-        if: steps.decide.outputs.go == 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Set up uv
-        if: steps.decide.outputs.go == 'true'
-        uses: astral-sh/setup-uv@v6
-
-      - name: Upgrade pip
-        if: steps.decide.outputs.go == 'true'
-        run: python -m pip install --upgrade pip
-
       # The number comes off the merged pyproject.toml, not from this run.
       # That file changed in a reviewed pull request, which is what makes the
       # version an approved one; a workflow input can only confirm it.
@@ -669,80 +805,14 @@ jobs:
 
           echo "resume=$resume" >> "$GITHUB_OUTPUT"
 
-      - name: Install test deps and run tests
+      # The bundle `build-mcpb` uploaded, as it uploaded it; nothing here
+      # packs or rewrites it. A dry run downloads it too, to show it is there.
+      - name: Download the bundle
         if: steps.decide.outputs.go == 'true'
-        run: |
-          pip install -e ".[test]"
-          pytest -q
-
-      - name: Pack MCPB
-        if: steps.decide.outputs.go == 'true'
-        run: |
-          # The bundle ships no dependencies. manifest.json launches the server
-          # with `uv run`, which resolves pyproject.toml on the user's machine,
-          # so one .mcpb runs on every platform and Python the manifest
-          # declares. Resolving them here with `pip install --target` produced
-          # a bundle that only started on this runner's platform and Python:
-          # four of the packages in mcp's closure are compiled (#89).
-          npx -y @anthropic-ai/mcpb@2.1.2 pack
-          ls -lh *.mcpb 2>/dev/null || ls -lh ./*.mcpb 2>/dev/null || find . -maxdepth 2 -name "*.mcpb" -ls
-
-      - name: Check the bundle carries no compiled code
-        if: steps.decide.outputs.go == 'true'
-        run: |
-          # A compiled module was built for one platform and one Python; a
-          # bundle that carries one cannot also be for the platforms the
-          # manifest lists. This is the check that would have failed v0.1.1.
-          python - <<'PY'
-          import json
-          import sys
-          import zipfile
-          from pathlib import Path
-
-          bundles = sorted(Path(".").glob("*.mcpb"))
-          if len(bundles) != 1:
-              print(f"::error::expected exactly one .mcpb to check, found {[b.name for b in bundles]}")
-              sys.exit(1)
-          (bundle,) = bundles
-          platforms = json.load(open("manifest.json", encoding="utf-8"))["compatibility"]["platforms"]
-          names = zipfile.ZipFile(bundle).namelist()
-          compiled = [name for name in names if name.endswith((".so", ".pyd", ".dylib"))]
-          if len(platforms) > 1 and compiled:
-              print(
-                  f"::error::{bundle} declares platforms {platforms} but carries compiled "
-                  f"modules built for one of them: {compiled}"
-              )
-              sys.exit(1)
-          print(f"{bundle}: {len(names)} files, {len(compiled)} compiled, platforms {platforms}")
-          PY
-
-      - name: Start the packed bundle the way the manifest launches it
-        if: steps.decide.outputs.go == 'true'
-        run: |
-          # Resolve the bundle's dependencies once, here, the way a user's
-          # machine will: unpack the .mcpb and run its manifest's own command
-          # with `${__dirname}` pointing at the unpacked tree. A file that
-          # .mcpbignore drops -- pyproject.toml, the package itself -- fails
-          # the release instead of the first install. Empty stdin is EOF on
-          # the stdio transport, so a healthy server exits 0 without serving.
-          python - <<'PY'
-          import json
-          import os
-          import shutil
-          import subprocess
-          import sys
-          import zipfile
-          from pathlib import Path
-
-          (bundle,) = sorted(Path(".").glob("*.mcpb"))
-          root = Path(os.environ["RUNNER_TEMP"]) / "bundle"
-          shutil.rmtree(root, ignore_errors=True)
-          zipfile.ZipFile(bundle).extractall(root)
-          config = json.load(open(root / "manifest.json", encoding="utf-8"))["server"]["mcp_config"]
-          argv = [arg.replace("${__dirname}", str(root)) for arg in (config["command"], *config["args"])]
-          print("launching:", *argv)
-          sys.exit(subprocess.run(argv, stdin=subprocess.DEVNULL).returncode)
-          PY
+        uses: actions/download-artifact@v4
+        with:
+          name: mcpb
+          path: .
 
       - name: Tag the approved commit
         if: steps.decide.outputs.go == 'true' && !inputs.dry_run
@@ -750,9 +820,9 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           RESUME: ${{ steps.validate.outputs.resume }}
           # The checkout above persisted no credentials, so the token is not
-          # on disk for the steps before this one to read; it reaches the env
-          # of the steps that name it, and here one push. Same job, though:
-          # see the note on the checkout for what that does not prevent.
+          # on disk; it reaches the env of the steps that name it, and here
+          # one push. No step in this job runs code from PyPI or npm, so no
+          # earlier step can have set `BASH_ENV` or a git hook to catch it.
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -810,12 +880,12 @@ jobs:
 
   publish-pypi:
     # Trusted Publishing (OIDC): no stored token. Only this job can mint an
-    # id-token; the release job, which runs tests and npx, cannot. The token
-    # signs the `pypi-dist` artifact exactly as `build-pypi` uploaded it, and
-    # that job runs no third-party code in its checkout before the build, so
-    # the split protects the artifact as well as the token. It runs only
-    # after the release job really published, so a dry run, a skipped month
-    # or a refused version never reaches PyPI.
+    # id-token; `release` and the jobs that run tests and npx cannot. The
+    # token signs the `pypi-dist` artifact exactly as `build-pypi` uploaded
+    # it, and that job runs no third-party code in its checkout before the
+    # build, so the split protects the artifact as well as the token. It runs
+    # only after the release job really published, so a dry run, a skipped
+    # month or a refused version never reaches PyPI.
     needs: [build-pypi, release]
     if: needs.release.outputs.released == 'true'
     runs-on: ubuntu-latest
