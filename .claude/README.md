@@ -113,7 +113,7 @@ the whole command string and **denies** the spellings above —
 
 ### The guard only holds if it reads what the shell runs
 
-Six ways that came apart, each of them a bypass, all six closed:
+Seven ways that came apart, each of them a bypass, all seven closed:
 
 - **`#` is not a comment mid-word.** `shlex` ends a token at `#` wherever it
   appears; a shell starts a comment only at the start of a word. So
@@ -155,8 +155,17 @@ Six ways that came apart, each of them a bypass, all six closed:
   `>out git diff HEAD` and `git diff HEAD >out` as the same command. The guard
   read the operator as the command's name, fell through its dispatch, and
   charged the write to nothing.
+- **A wrapper spelled with a `\` reads differently to the matcher and the
+  shell.** Claude Code's permission matcher cuts a word at its last `/` or `\`
+  and steps over the wrapper it finds there, reading the command as typed;
+  bash removes an unquoted `\` before the word ever reaches the shell. So
+  `/usr/bin\timeout 5 pytest -q >out` reaches the matcher ending in `timeout`
+  — stepped over, matching `Bash(pytest *)` — while bash reads the file
+  `/usr/bintimeout`, no wrapper and no guarded verb. The guard now also scans
+  the command as typed for this spelling ([#128][128]).
 
 [115]: https://github.com/Danathar/goodreads-mcp/issues/115
+[128]: https://github.com/Danathar/goodreads-mcp/pull/128
 
 The general shape: any construct the guard resolves differently from the shell
 is a bypass, not a cosmetic difference. Adding one that makes the guard see

@@ -134,7 +134,7 @@ registered — a guard that is not registered guards nothing. See
 
 A guard that reads the command string carries a second failure mode, separate
 from being unregistered: it holds only while the string it reads is the string
-the shell runs. Six constructs broke that, each one a bypass, and each is now
+the shell runs. Seven constructs broke that, each one a bypass, and each is now
 refused or read the way the shell reads it:
 
 1. A `#`, which ends a token for `shlex` wherever it appears but starts a
@@ -155,6 +155,16 @@ refused or read the way the shell reads it:
    `Read(./.env)` exists to withhold.
 6. A redirection in front of the command name, which bash reads the same as
    one after it: `>out git diff HEAD` was read as a command named `>out`.
+7. A wrapper name spelled with a `\`, which Claude Code's permission matcher
+   reads on the command as typed (cutting the word at its last `/` or `\`)
+   while bash removes an unquoted `\` before the word ever reaches the shell:
+   `/usr/bin\timeout 5 pytest -q >out` reaches the matcher ending in
+   `timeout` — stepped over, matching `Bash(pytest *)` — while bash sees the
+   file `/usr/bintimeout` (not found, exit 127) after truncating `out` first;
+   the guard's shlex-based lexer had already dropped the backslash too and saw
+   `/usr/bintimeout`, neither a wrapper nor a guarded verb, and let the
+   command through. The guard now also scans the string as typed for this
+   spelling ([#128](https://github.com/Danathar/goodreads-mcp/pull/128)).
 
 Any new construct the guard resolves differently from the shell is the same
 bug; see [#71](https://github.com/Danathar/goodreads-mcp/issues/71) and the
