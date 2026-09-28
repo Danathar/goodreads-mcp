@@ -49,6 +49,23 @@ jobs:
       - name: Run tests with coverage gate
         run: pytest -q --cov=goodreads_mcp --cov-report=term-missing --cov-fail-under=55
 
+      # pyproject.toml's lower bounds are a promise too: an installer keeps an
+      # older mcp or httpx that already satisfies them (#207). Resolve every
+      # direct dependency to its floor in a separate environment and run the
+      # offline suite there (#234). The warning filter covers mcp 1.14-1.29
+      # with pydantic-settings 2.15, which prints a harmless
+      # IncompleteFieldDefinitionWarning at import (see #220); drop it once
+      # the mcp floor is 1.30 or newer.
+      - name: Run tests against the declared dependency floors
+        env:
+          PYTHONWARNINGS: "ignore:Field 'lifespan' has an incomplete definition"
+        run: |
+          python -m pip install uv==0.12.19
+          uv venv --python "$(command -v python)" "$RUNNER_TEMP/floor"
+          uv pip install --python "$RUNNER_TEMP/floor/bin/python" --resolution lowest-direct -e ".[test]"
+          uv pip list --python "$RUNNER_TEMP/floor/bin/python"
+          "$RUNNER_TEMP/floor/bin/python" -m pytest -q -p no:cacheprovider --ignore=tests/e2e
+
       # Optional: verify the MCPB bundle can be packed (validates manifest)
       - name: Set up Node for mcpb validation
         uses: actions/setup-node@v4

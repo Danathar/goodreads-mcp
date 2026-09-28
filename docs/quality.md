@@ -11,6 +11,7 @@ what's known-weak, and where the real risk sits.
 |---|---|---|
 | offline test suite | `ci.yml` on every push/PR to `main` | yes |
 | coverage floor, 55% | `ci.yml` (`--cov-fail-under`) | yes |
+| offline suite at the declared dependency floors (`uv pip install --resolution lowest-direct`) | `ci.yml` | yes |
 | MCPB manifest validation | `ci.yml` | yes |
 | version sync (`pyproject` vs `manifest`) | `release.yml` | yes, at release |
 | bundle carries no compiled module (it declares three platforms) | `release.yml` | yes, at release |
@@ -23,7 +24,7 @@ what's known-weak, and where the real risk sits.
 
 | | |
 |---|---|
-| offline tests | 1384 passing, 25 skipped (live, opt-in) |
+| offline tests | 1393 passing, 25 skipped (live, opt-in) |
 | coverage | 100% overall — `config.py` 100%, `client.py` 100%, `server.py` 100% |
 | CI, last 30 runs | 28 success |
 

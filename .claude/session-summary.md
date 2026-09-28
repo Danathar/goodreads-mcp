@@ -24,28 +24,24 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-27 — bug sweep: #202–#214 filed, fixed and merged (#215–#227)
+## 2026-09-28 — CI runs the offline suite at pyproject's dependency floors (#234)
 
-**Done:** a bug sweep of `main` at b6f0e75 filed #202–#214. Their fixes,
-#215–#227 in the same order, are all merged. Each was updated from `main`,
-re-pinned and green in CI before it merged. On the result, 3ea19aa, the
-offline suite passes (1383, `goodreads_mcp` at 100%) and so does the live
-suite (25/25). For users of the tools: a GraphQL failure raises instead of
-reading as an empty answer (#215); `popular_books` checks `year` and
-`limit` (#216); `get_shelf` refuses a shelf name the user does not have
-(#217); `book_id` and `user_id` are validated and an ISBN is refused
-(#218); a cancelled call sends no further request (#219); the handshake
-reports this package's version (#227).
+**Done:** `ci.yml`'s `test` job has a new step, "Run tests against the
+declared dependency floors". It installs uv 0.12.19, resolves every direct
+dependency to its lower bound (`uv pip install --resolution lowest-direct`)
+in `$RUNNER_TEMP/floor`, and runs the offline suite there. Locally that
+resolves mcp 1.14.0, httpx 0.27.1, pydantic-settings 2.15.0 and gives 1383
+passed. Lowering the floor to `mcp[cli]>=1.13` turns it red (15 collection
+errors). `docs/quality.md` lists it. It lives in `test`, so the ruleset's
+required check and `release.yml`'s `test` gate cover it unchanged.
 
-**In flight:** nothing from this sweep.
+**In flight:** the pull request for #234. It touches `.github/workflows/`
+(Tier 2), so a human merges it.
 
-**Blocked on:** nothing. Owner only: `delete_branch_on_merge` is false, so
-the `release/2026.9.*` branches and the sweep's fix branches stay on origin.
+**Blocked on:** nothing.
 
-**Watch:** to ship these fixes, run Release MCPB with `prepare`. Since #221 it
-pushes `release/<version>` and links the pull request in the run summary;
-open it from there. Until a bump merges, the scheduled run on 2026-10-01
-refuses, because `main` still carries 2026.9.2. mcp 1.14–1.29 with
-pydantic-settings 2.15 prints an `IncompleteFieldDefinitionWarning` at
-import; harmless, noted in #220. The sweep did not review the Bash guard
-(`.claude/hooks/guard-bash.py`).
+**Watch:** the step sets `PYTHONWARNINGS` to ignore mcp 1.14–1.29's
+`IncompleteFieldDefinitionWarning` under pydantic-settings 2.15 (#220);
+without it `test_the_module_runs_as_a_script_and_exits_cleanly` fails at the
+floor. Drop the filter when the mcp floor reaches 1.30. The offline suite
+still cannot run on Python 3.10 (`tomllib`), so no 3.10 lane exists.

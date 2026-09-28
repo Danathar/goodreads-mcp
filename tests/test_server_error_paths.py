@@ -10,6 +10,8 @@ or a loop that never terminates.
 
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -48,6 +50,77 @@ def test_find_book_ignores_a_book_entry_without_a_title():
     """A Book stub with no title is a reference placeholder, not the book."""
     with pytest.raises(ValueError, match="No Book object in Apollo state"):
         server._find_book({"Book:kca://1": {"legacyId": 1}}, "1")
+
+
+# What a live book page carries (11870085, 2026-09-27): a stub Book for
+# another edition, ahead of the page's own book. The stub has no title today;
+# these tests give it one, as Goodreads could at any time (#229).
+_STUB = {"legacyId": 25856606, "title": "Other Edition", "webUrl": "stub-url"}
+_MAIN = {"legacyId": 11870085, "title": "The Fault in Our Stars", "webUrl": "url"}
+_ROOT_KEY = 'getBookByLegacyId({"legacyId":"11870085"})'
+
+
+def test_find_book_follows_the_root_query_ref_past_a_titled_stub():
+    apollo = {
+        "ROOT_QUERY": {"__typename": "Query", _ROOT_KEY: {"__ref": "Book:main"}},
+        "Book:stub": _STUB,
+        "Book:main": _MAIN,
+    }
+
+    assert server._find_book(apollo, "11870085") is _MAIN
+
+
+def test_find_book_refuses_a_root_query_ref_to_a_missing_book():
+    """The page named its book; a different one is not a stand-in for it."""
+    apollo = {
+        "ROOT_QUERY": {_ROOT_KEY: {"__ref": "Book:gone"}},
+        "Book:stub": _STUB,
+    }
+
+    with pytest.raises(ValueError, match="getBookByLegacyId points at"):
+        server._find_book(apollo, "11870085")
+
+
+def test_find_book_falls_back_to_the_first_titled_book_without_the_root_field():
+    apollo = {"ROOT_QUERY": {"__typename": "Query"}, "Book:main": _MAIN}
+
+    assert server._find_book(apollo, "11870085") is _MAIN
+
+
+def test_get_book_returns_the_page_book_not_a_titled_stub(monkeypatch):
+    apollo = {
+        "ROOT_QUERY": {_ROOT_KEY: {"__ref": "Book:main"}},
+        "Book:stub": _STUB,
+        "Book:main": _MAIN,
+    }
+    monkeypatch.setattr(server, "_fetch_book_apollo", lambda book_id: apollo)
+
+    book = server.get_book("11870085")
+
+    assert (book["book_id"], book["title"]) == ("11870085", "The Fault in Our Stars")
+
+
+@pytest.mark.parametrize(
+    "next_data",
+    [
+        {"props": {"pageProps": {}}},
+        {"props": {}},
+        {},
+        {"props": {"pageProps": {"apolloState": None}}},
+        [],
+    ],
+)
+def test_fetch_book_apollo_names_a_missing_apollo_state(monkeypatch, next_data):
+    """Not a bare KeyError: the model saw only "'apolloState'" (#229)."""
+    html = (
+        '<script id="__NEXT_DATA__" type="application/json">'
+        + json.dumps(next_data)
+        + "</script>"
+    )
+    monkeypatch.setattr(server.gr, "get", lambda url, **kw: SimpleNamespace(text=html))
+
+    with pytest.raises(ValueError, match="No apolloState in the __NEXT_DATA__"):
+        server._fetch_book_apollo("11870085")
 
 
 # ------------------------------------------------- _paginated_graphql_edges

@@ -185,7 +185,15 @@ def _fetch_book_apollo(book_id: str) -> dict[str, Any]:
     if not bid.endswith(".xml"):
         bid += ".xml"
     page = gr.get(f"/book/show/{bid}")
-    return gr.parse_next_data(page.text)["props"]["pageProps"]["apolloState"]
+    try:
+        apollo = gr.parse_next_data(page.text)["props"]["pageProps"]["apolloState"]
+    except (KeyError, TypeError):
+        apollo = None
+    # A renamed key would otherwise reach the model as a bare KeyError,
+    # "Error executing tool get_book: 'apolloState'" (#229).
+    if not isinstance(apollo, dict):
+        raise ValueError(f"No apolloState in the __NEXT_DATA__ of book page {bid!r}.")
+    return apollo
 
 
 def _make_deref(apollo: dict[str, Any]):
@@ -198,6 +206,26 @@ def _make_deref(apollo: dict[str, Any]):
 
 
 def _find_book(apollo: dict[str, Any], book_id: str) -> dict[str, Any]:
+    """The Book the page is for: the one its ROOT_QUERY getBookByLegacyId
+    field points at. A book page also carries stub Book entries for other
+    editions (legacyId and webUrl, no title), sometimes ahead of the page's
+    own book, so "the first Book" is not a safe rule (#229). A page without
+    that field falls back to the first Book that has a title.
+    """
+    root = apollo.get("ROOT_QUERY")
+    refs = [
+        value
+        for key, value in (root.items() if isinstance(root, dict) else ())
+        if key.startswith("getBookByLegacyId(")
+    ]
+    if refs:
+        book = _make_deref(apollo)(refs[0])
+        if not book.get("title"):
+            raise ValueError(
+                f"No Book object in Apollo state for '{book_id}': "
+                f"getBookByLegacyId points at {refs[0]!r}."
+            )
+        return book
     book = next(
         (v for k, v in apollo.items() if k.startswith("Book:") and v.get("title")),
         None,
