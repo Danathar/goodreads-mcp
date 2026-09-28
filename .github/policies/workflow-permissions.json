@@ -22,6 +22,8 @@
       "jobs": {
         "prepare": {"contents": "write"},
         "build-pypi": {"contents": "read"},
+        "build-mcpb": {"contents": "read"},
+        "verify-mcpb": {"contents": "read"},
         "release": {"contents": "write", "checks": "read"},
         "publish-pypi": {"id-token": "write"},
         "publish-registry": {"id-token": "write", "contents": "read"}

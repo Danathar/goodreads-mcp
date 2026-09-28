@@ -76,6 +76,12 @@ release, or when a `b1`/`rc1` suffix and the `prerelease` box disagree.
 Tick `dry_run` to run every check and build the bundle without tagging or
 publishing.
 
+The bundle is packed and started, and the tests run, in jobs that can only read
+the repository. The job that tags and publishes runs no code from PyPI or npm,
+so a compromised dependency cannot reach its write token or change the `.mcpb`
+it attaches. Those jobs run on every release run, including a month that
+releases nothing.
+
 If a release fails after its tag is pushed, re-run the failed job: it finishes
 that release instead of refusing the tag, and a later release counts changes
 from the last tag that has a GitHub release.

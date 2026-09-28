@@ -18,10 +18,12 @@ the tools that would reach the network.
 
 Since #165 the workflow has jobs that each run on their own: `prepare` pushes
 the CalVer version-bump branch and links its pull request; `build-pypi` builds
-the wheel and sdist in a checkout nothing else has run in (#175); and `release`
-tags and publishes the version the merged `pyproject.toml` carries — monthly,
-or by hand. Inputs reach every script through `env:`, so no `run:` body holds
-a `${{ }}` at all, and the tests pass inputs the same way.
+the wheel and sdist in a checkout nothing else has run in (#175);
+`build-mcpb` packs the bundle the same way, and `verify-mcpb` runs the suite
+and starts a downloaded copy of it (#237); and `release` tags and publishes
+the version the merged `pyproject.toml` carries — monthly, or by hand — and
+runs no code from PyPI or npm. Inputs reach every script through `env:`, so
+no `run:` body holds a `${{ }}` at all, and the tests pass inputs the same way.
 
 The contracts here that are load-bearing:
 
@@ -56,7 +58,7 @@ The contracts here that are load-bearing:
   and starts it with the manifest's own command, so a file `.mcpbignore` drops
   is caught before it ships.
 
-A `run:` step that is not in `_EXECUTED` or `_PREPARE_EXECUTED` below fails the
+A `run:` step that is not in one of the `_*EXECUTED` sets below fails the
 last tests in the file, so a new step cannot be added without either running it
 or saying out loud that it is not run.
 
@@ -86,46 +88,52 @@ _PYPROJECT = _ROOT / "pyproject.toml"
 _MANIFEST = _ROOT / "manifest.json"
 _RUBRIC = _ROOT / "docs" / "review-rubric.md"
 
-# Every step in the release job that carries a `run:`. Names are the workflow's own.
+# The release job's steps. Names are the workflow's own.
 _BRANCH_STEP = "Refuse any commit that is not on main"
 _ENABLED_STEP = "Check the schedule is enabled"
 _DECIDE_STEP = "Decide whether to release"
 _CHECKS_STEP = "Require a green test check on this commit"
-_PIP_STEP = "Upgrade pip"
 _VERSION_STEP = "Read the version from pyproject.toml"
 _SYNC_STEP = "Check manifest.json matches pyproject.toml"
 _VALIDATE_STEP = "Validate the version"
-_TEST_STEP = "Install test deps and run tests"
-_PACK_STEP = "Pack MCPB"
-_COMPILED_STEP = "Check the bundle carries no compiled code"
-_LAUNCH_STEP = "Start the packed bundle the way the manifest launches it"
-_PYPI_BUILD_STEP = "Build the PyPI distributions"
-_PYPI_UPLOAD_STEP = "Upload the PyPI distributions"
 _TAG_STEP = "Tag the approved commit"
 _PUBLISH_STEP = "Create GitHub Release and upload .mcpb"
 _SUMMARY_STEP = "Summarise"
 _CLEANUP_STEP = "Clean up the bundle (avoid committing)"
+# The release job's one step that touches the bundle before publishing it.
+_DOWNLOAD_STEP = "Download the bundle"
 
+# build-mcpb's steps: pack, check, upload.
+_PACK_STEP = "Pack MCPB"
+_COMPILED_STEP = "Check the bundle carries no compiled code"
+_MCPB_UPLOAD_STEP = "Upload the bundle"
+
+# verify-mcpb's `run:` steps: everything that installs from PyPI.
+_PIP_STEP = "Upgrade pip"
+_TEST_STEP = "Install test deps and run tests"
+_LAUNCH_STEP = "Start the packed bundle the way the manifest launches it"
+
+_PYPI_BUILD_STEP = "Build the PyPI distributions"
+_PYPI_UPLOAD_STEP = "Upload the PyPI distributions"
+
+# The release job's `run:` steps.
 _EXECUTED = {
     _BRANCH_STEP,
     _ENABLED_STEP,
     _DECIDE_STEP,
     _CHECKS_STEP,
-    _PIP_STEP,
     _VERSION_STEP,
     _SYNC_STEP,
     _VALIDATE_STEP,
-    _TEST_STEP,
-    _PACK_STEP,
-    _COMPILED_STEP,
-    _LAUNCH_STEP,
     _TAG_STEP,
     _SUMMARY_STEP,
     _CLEANUP_STEP,
 }
 
-# The build job's one `run:` step.
+# The build jobs' `run:` steps.
 _BUILD_EXECUTED = {_PYPI_BUILD_STEP}
+_BUILD_MCPB_EXECUTED = {_PACK_STEP, _COMPILED_STEP}
+_VERIFY_MCPB_EXECUTED = {_PIP_STEP, _TEST_STEP, _LAUNCH_STEP}
 
 # The packer, pinned: `npx -y <this> pack`. ci.yml validates with the same one.
 _PACKER_MATCH = re.search(r"npx -y (@anthropic-ai/mcpb\S*) pack", _RELEASE_TEXT)
@@ -163,6 +171,8 @@ _step = _WORKFLOW.step
 _PREPARE = _workflow_steps.Workflow(_RELEASE, job="prepare")
 _PUBLISH_PYPI = _workflow_steps.Workflow(_RELEASE, job="publish-pypi")
 _BUILD_PYPI = _workflow_steps.Workflow(_RELEASE, job="build-pypi")
+_BUILD_MCPB = _workflow_steps.Workflow(_RELEASE, job="build-mcpb")
+_VERIFY_MCPB = _workflow_steps.Workflow(_RELEASE, job="verify-mcpb")
 _write_stub = _workflow_steps.write_stub
 _recorder = _workflow_steps.recorder
 _argv = _workflow_steps.argv
@@ -272,7 +282,7 @@ def test_the_pip_upgrade_step_runs_pip_from_the_selected_interpreter(tmp_path: P
     stubs.mkdir()
     _write_stub(stubs, "python", _recorder(log))
 
-    result = _run(_body(_PIP_STEP), tmp_path, path_dirs=[stubs])
+    result = _run(_VERIFY_MCPB.body(_PIP_STEP), tmp_path, path_dirs=[stubs])
 
     assert result.returncode == 0, result.stderr
     assert _argv(log) == [[str(stubs / "python"), "-m", "pip", "install", "--upgrade", "pip"]]
@@ -1598,9 +1608,47 @@ def test_a_run_is_only_ever_one_of_the_two_jobs():
     assert "  release:\n    if: github.event_name != 'workflow_dispatch' || !inputs.prepare\n" in _RELEASE_TEXT
 
 
+def _jobs() -> list[str]:
+    """Every job in release.yml, by id, in file order."""
+    return re.findall(r"^  ([a-z-]+):\n", _RELEASE_TEXT.split("\njobs:\n", 1)[1], re.M)
+
+
+# A job holding this can push tags and create or edit any release and its
+# assets, earlier releases' bundles included.
+_WRITE_TOKEN = "    permissions:\n      contents: write\n"
+
+# What runs code a package index serves: an install, a resolver, a packer, or
+# the test runner, which imports every plugin and conftest its install brought.
+_THIRD_PARTY_RUN = re.compile(r"\b(pip3?|npx|npm|uvx?|pytest)\b")
+_THIRD_PARTY_SETUP = ("actions/setup-node", "astral-sh/setup-uv")
+
+
+def test_no_job_that_can_write_the_repository_runs_code_from_pypi_or_npm():
+    """Code that runs in a job reaches every later step of it (#237).
+
+    A step can append `BASH_ENV=<script>` to `$GITHUB_ENV`, and every later
+    `run:` step sources it with the token in its env; a hook it writes to
+    .git/hooks runs inside `git tag` and `git push`. `persist-credentials:
+    false` keeps the token off disk, not out of reach. So the unpinned
+    closures of `pip install`, `uv run` and `npx` live in jobs that hold
+    `contents: read`, and the jobs that can push a tag or edit a release run
+    none of them.
+    """
+    writers = [job for job in _jobs() if _WRITE_TOKEN in _job_text(job)]
+    assert "release" in writers and "prepare" in writers, writers
+    for job in writers:
+        workflow = _workflow_steps.Workflow(_RELEASE, job=job)
+        for step in workflow.steps:
+            assert not step.uses.startswith(_THIRD_PARTY_SETUP), f"{job}: {step.uses} sets up a package runner"
+            for line in (step.run or "").splitlines():
+                if line.strip().startswith("#"):
+                    continue
+                assert not _THIRD_PARTY_RUN.search(line), f"{job}: {step.name!r} runs {line.strip()!r}"
+
+
 def test_no_run_body_interpolates_an_expression():
     """`${{ }}` is pasted into the script before bash parses it; inputs go through env:."""
-    for workflow in (_WORKFLOW, _PREPARE, _PUBLISH_PYPI):
+    for workflow in (_WORKFLOW, _PREPARE, _PUBLISH_PYPI, _BUILD_MCPB, _VERIFY_MCPB):
         for step in workflow.steps:
             if step.run:
                 assert "${{" not in step.run, f"{workflow.job}: {step.name!r} interpolates into its script"
@@ -1640,7 +1688,7 @@ def test_every_release_step_after_the_decision_is_gated_on_it():
 
 
 def test_only_the_steps_that_write_are_skipped_on_a_dry_run():
-    """A dry run still tests, packs and starts the bundle."""
+    """A dry run still downloads the bundle `build-mcpb` packed and `verify-mcpb` started."""
     writers = [step.name for step in _STEPS if step.if_ == _WRITE_IF]
     assert writers == [_TAG_STEP, _PUBLISH_STEP]
 
@@ -1653,10 +1701,7 @@ def test_everything_is_checked_before_anything_is_written():
         _VERSION_STEP,
         _SYNC_STEP,
         _VALIDATE_STEP,
-        _TEST_STEP,
-        _PACK_STEP,
-        _COMPILED_STEP,
-        _LAUNCH_STEP,
+        _DOWNLOAD_STEP,
     ]
     assert [order.index(name) for name in checks] == sorted(order.index(name) for name in checks)
     assert max(order.index(name) for name in checks) < order.index(_TAG_STEP) < order.index(_PUBLISH_STEP)
@@ -1698,7 +1743,7 @@ def test_the_test_step_installs_the_test_extra_before_running_pytest(tmp_path: P
     _write_stub(stubs, "pip", _recorder(log))
     _write_stub(stubs, "pytest", _recorder(log))
 
-    result = _run(_body(_TEST_STEP), tmp_path, path_dirs=[stubs])
+    result = _run(_VERIFY_MCPB.body(_TEST_STEP), tmp_path, path_dirs=[stubs])
 
     assert result.returncode == 0, result.stderr
     calls = [record[1:] for record in _argv(log)]
@@ -1712,7 +1757,7 @@ def test_a_failing_test_run_stops_the_release(tmp_path: Path):
     _write_stub(stubs, "pip", "exit 0\n")
     _write_stub(stubs, "pytest", "exit 1\n")
 
-    result = _run(_body(_TEST_STEP), tmp_path, path_dirs=[stubs])
+    result = _run(_VERIFY_MCPB.body(_TEST_STEP), tmp_path, path_dirs=[stubs])
 
     assert result.returncode != 0
 
@@ -1728,7 +1773,8 @@ def test_the_release_resolves_no_dependencies_ahead_of_the_user(tmp_path: Path):
     """
     commands = [
         line.strip()
-        for step in _STEPS
+        for job in _jobs()
+        for step in _workflow_steps.Workflow(_RELEASE, job=job).steps
         if step.run
         for line in step.run.splitlines()
         if line.strip() and not line.strip().startswith("#")
@@ -1748,7 +1794,7 @@ def test_the_pack_step_invokes_the_mcpb_packer_and_lists_the_bundle(tmp_path: Pa
     stubs.mkdir()
     _write_stub(stubs, "npx", _recorder(log) + "touch goodreads-mcp.mcpb\n")
 
-    result = _run(_body(_PACK_STEP), tmp_path, path_dirs=[stubs])
+    result = _run(_BUILD_MCPB.body(_PACK_STEP), tmp_path, path_dirs=[stubs])
 
     assert result.returncode == 0, result.stderr
     assert [record[1:] for record in _argv(log)] == [["-y", _PACKER, "pack"]]
@@ -1767,7 +1813,7 @@ def test_a_failed_pack_stops_the_release(tmp_path: Path):
     stubs.mkdir()
     _write_stub(stubs, "npx", "exit 1\n")
 
-    result = _run(_body(_PACK_STEP), tmp_path, path_dirs=[stubs])
+    result = _run(_BUILD_MCPB.body(_PACK_STEP), tmp_path, path_dirs=[stubs])
 
     assert result.returncode != 0
 
@@ -1781,7 +1827,7 @@ def test_the_pack_step_tolerates_a_packer_that_produced_nothing(tmp_path: Path):
     stubs.mkdir()
     _write_stub(stubs, "npx", "exit 0\n")
 
-    result = _run(_body(_PACK_STEP), tmp_path, path_dirs=[stubs])
+    result = _run(_BUILD_MCPB.body(_PACK_STEP), tmp_path, path_dirs=[stubs])
 
     assert result.returncode == 0
     assert ".mcpb" not in result.stdout
@@ -1824,7 +1870,7 @@ def test_the_compiled_check_passes_a_pure_python_bundle_for_every_platform(
     _manifest_with_platforms(tmp_path, ["darwin", "win32", "linux"])
     _bundle(tmp_path, *_PURE)
 
-    result = _run(_body(_COMPILED_STEP), tmp_path, path_dirs=[python_shim])
+    result = _run(_BUILD_MCPB.body(_COMPILED_STEP), tmp_path, path_dirs=[python_shim])
 
     assert result.returncode == 0, result.stderr
     assert "0 compiled" in result.stdout
@@ -1835,7 +1881,7 @@ def test_the_compiled_check_would_have_failed_the_v011_bundle(tmp_path: Path, py
     _manifest_with_platforms(tmp_path, ["darwin", "win32", "linux"])
     _bundle(tmp_path, *_PURE, *_COMPILED_V011)
 
-    result = _run(_body(_COMPILED_STEP), tmp_path, path_dirs=[python_shim])
+    result = _run(_BUILD_MCPB.body(_COMPILED_STEP), tmp_path, path_dirs=[python_shim])
 
     assert result.returncode == 1
     assert "::error::" in result.stdout
@@ -1852,7 +1898,7 @@ def test_the_compiled_check_recognises_every_native_module_suffix(
     _manifest_with_platforms(tmp_path, ["darwin", "win32"])
     _bundle(tmp_path, *_PURE, f"vendor/native{extension}")
 
-    result = _run(_body(_COMPILED_STEP), tmp_path, path_dirs=[python_shim])
+    result = _run(_BUILD_MCPB.body(_COMPILED_STEP), tmp_path, path_dirs=[python_shim])
 
     assert result.returncode == 1
 
@@ -1868,7 +1914,7 @@ def test_the_compiled_check_allows_native_modules_in_a_single_platform_bundle(
     _manifest_with_platforms(tmp_path, ["linux"])
     _bundle(tmp_path, *_PURE, *_COMPILED_V011)
 
-    result = _run(_body(_COMPILED_STEP), tmp_path, path_dirs=[python_shim])
+    result = _run(_BUILD_MCPB.body(_COMPILED_STEP), tmp_path, path_dirs=[python_shim])
 
     assert result.returncode == 0, result.stderr
 
@@ -1879,14 +1925,14 @@ def test_the_compiled_check_refuses_to_run_without_exactly_one_bundle(
     """No bundle is a packer that silently produced nothing; two is ambiguous."""
     _manifest_with_platforms(tmp_path, ["darwin", "win32", "linux"])
 
-    result = _run(_body(_COMPILED_STEP), tmp_path, path_dirs=[python_shim])
+    result = _run(_BUILD_MCPB.body(_COMPILED_STEP), tmp_path, path_dirs=[python_shim])
     assert result.returncode == 1
     assert "::error::expected exactly one .mcpb" in result.stdout
 
     _bundle(tmp_path, *_PURE)
     shutil.copy2(tmp_path / "goodreads-mcp.mcpb", tmp_path / "goodreads-mcp-old.mcpb")
 
-    result = _run(_body(_COMPILED_STEP), tmp_path, path_dirs=[python_shim])
+    result = _run(_BUILD_MCPB.body(_COMPILED_STEP), tmp_path, path_dirs=[python_shim])
     assert result.returncode == 1
     assert "::error::expected exactly one .mcpb" in result.stdout
 
@@ -1913,7 +1959,7 @@ def _launch(tmp_path: Path, python_shim: Path, uv_script: str) -> subprocess.Com
     runner_temp = tmp_path / "runner-temp"
     runner_temp.mkdir(exist_ok=True)
     return _run(
-        _body(_LAUNCH_STEP),
+        _VERIFY_MCPB.body(_LAUNCH_STEP),
         tmp_path,
         path_dirs=[stubs, python_shim],
         env={"RUNNER_TEMP": str(runner_temp)},
@@ -2006,10 +2052,44 @@ def test_the_launch_step_starts_from_a_clean_unpack_directory(tmp_path: Path, py
 
 def test_the_release_installs_uv_before_it_starts_the_bundle():
     """The launch step's `uv` comes from the setup action, not from the runner image."""
-    order = [step.name or step.uses for step in _STEPS]
-    (setup,) = [step for step in _STEPS if step.uses.startswith("astral-sh/setup-uv@")]
+    order = [step.name or step.uses for step in _VERIFY_MCPB.steps]
+    (setup,) = [step for step in _VERIFY_MCPB.steps if step.uses.startswith("astral-sh/setup-uv@")]
     assert order.index(setup.name) < order.index(_LAUNCH_STEP)
 
+
+def test_the_bundle_is_packed_before_any_third_party_python_code_runs():
+    """The `.mcpb` the release attaches is packed from a fresh checkout and uploaded at once (#237).
+
+    Packed after `pip install -e` and `pytest` in one tree, any code their
+    unpinned closures carry could rewrite goodreads_mcp/ before the pack, or
+    the `.mcpb` after it, and the release would ship the result to every host
+    that installs it. The only code that runs before the upload here is the
+    setup actions and the pinned packer.
+    """
+    assert [step.uses.split("@")[0] for step in _BUILD_MCPB.steps] == [
+        "actions/checkout",
+        "actions/setup-python",
+        "actions/setup-node",
+        "",
+        "",
+        "actions/upload-artifact",
+    ]
+    assert _BUILD_MCPB.steps[0].with_["persist-credentials"] == "false"
+    upload = _BUILD_MCPB.step(_MCPB_UPLOAD_STEP).with_
+    assert (upload["name"], upload["path"], upload["if-no-files-found"]) == ("mcpb", "*.mcpb", "error")
+    # verify-mcpb and release each start from that artifact, not a pack of their own.
+    for workflow in (_VERIFY_MCPB, _WORKFLOW):
+        assert workflow.step(_DOWNLOAD_STEP).uses.startswith("actions/download-artifact@")
+        assert workflow.step(_DOWNLOAD_STEP).with_["name"] == "mcpb"
+    assert _step(_PUBLISH_STEP).with_["files"] == "*.mcpb"
+    for job in ("build-mcpb", "verify-mcpb"):
+        text = _job_text(job)
+        assert "    permissions:\n      contents: read\n" in text, job
+        # Same gate as `release`: they run with it, never beside `prepare`.
+        assert re.search(r"^    if: (.+)$", text, re.M).group(1) == re.search(
+            r"^    if: (.+)$", _job_text("release"), re.M
+        ).group(1), job
+    assert _VERIFY_MCPB.steps[0].with_["persist-credentials"] == "false"
 
 
 # --------------------------------------------------------------------------
@@ -2040,11 +2120,11 @@ def test_the_pypi_build_writes_where_the_upload_reads(tmp_path: Path):
 def test_the_distributions_are_built_before_any_third_party_code_runs():
     """What Trusted Publishing signs is built in a job that ran nothing else (#175).
 
-    The `release` job runs `pip install -e`, `npx ... pack` and `uv run` on
-    unpinned closures, any of which can rewrite goodreads_mcp/ in that
-    checkout. The build lives in its own job with its own checkout, and the
-    only things that run there before `uv build` are the checkout, the uv
-    setup action and hatchling.
+    `verify-mcpb` runs `pip install -e` and `uv run` on unpinned closures,
+    either of which can rewrite goodreads_mcp/ in its checkout. The build
+    lives in its own job with its own checkout, and the only things that run
+    there before `uv build` are the checkout, the uv setup action and
+    hatchling.
     """
     assert [step.uses.split("@")[0] for step in _BUILD_PYPI.steps] == [
         "actions/checkout",
@@ -2063,16 +2143,23 @@ def test_the_distributions_are_built_before_any_third_party_code_runs():
 
 
 def test_a_failed_build_is_a_failed_release():
-    """Nothing is tagged when there are no distributions to publish under the tag."""
-    assert "    needs: build-pypi\n" in _job_text("release")
+    """Nothing is tagged when a distribution, the bundle, the suite or the bundle's launch failed."""
+    assert re.search(r"^    needs: \[(.+)\]$", _job_text("release"), re.M).group(1).split(", ") == [
+        "build-pypi",
+        "build-mcpb",
+        "verify-mcpb",
+    ]
+    assert "    needs: build-mcpb\n" in _job_text("verify-mcpb")
 
 
 def test_the_release_job_persists_no_credentials():
     """Its `contents: write` token reaches the tag push and the gates' API reads, nothing else (#175).
 
     actions/checkout writes the job token into .git/config unless told not to,
-    where every later step, including the unpinned packages the test, pack
-    and launch steps install, can read it and push a tag or edit a release.
+    where every later step could read it and push a tag or edit a release.
+    No step here runs third-party code any more (see
+    `test_no_job_that_can_write_the_repository_runs_code_from_pypi_or_npm`);
+    the token stays off disk anyway.
     """
     assert _STEPS[0].uses.startswith("actions/checkout@")
     assert _STEPS[0].with_["persist-credentials"] == "false"
@@ -2146,8 +2233,14 @@ def test_the_cleanup_step_succeeds_when_there_is_nothing_to_clean(tmp_path: Path
 
 @pytest.mark.parametrize(
     ("workflow", "executed"),
-    [(_WORKFLOW, _EXECUTED), (_PREPARE, _PREPARE_EXECUTED), (_BUILD_PYPI, _BUILD_EXECUTED)],
-    ids=["release", "prepare", "build-pypi"],
+    [
+        (_WORKFLOW, _EXECUTED),
+        (_PREPARE, _PREPARE_EXECUTED),
+        (_BUILD_PYPI, _BUILD_EXECUTED),
+        (_BUILD_MCPB, _BUILD_MCPB_EXECUTED),
+        (_VERIFY_MCPB, _VERIFY_MCPB_EXECUTED),
+    ],
+    ids=["release", "prepare", "build-pypi", "build-mcpb", "verify-mcpb"],
 )
 def test_every_run_step_in_the_release_workflow_is_executed_by_this_file(workflow, executed):
     """A new step must be run here, or listed here as deliberately not run."""
