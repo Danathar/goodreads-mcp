@@ -78,6 +78,9 @@ This is where this project actually breaks, so it gets the most weight.
       and the `@mcp.tool` count in `AGENTS.md` and the `_paginated_graphql_edges`
       call-site count in `docs/reflections/2026-09-verification.md` bumped.
 - [ ] No generated files committed (`.coverage`, `uv.lock`, `.venv/`, `*.mcpb`).
+- [ ] A new or changed workflow job declares its own timeout-minutes
+      (1-60) next to its runs-on:. A job with none inherits GitHub's
+      360-minute default; `tests/test_workflow_timeouts.py` fails CI on it.
 - [ ] A new runtime dependency goes in `pyproject.toml` only. The bundle ships
       none: `manifest.json` launches with `uv run`, which resolves that file on
       the user's machine. Nothing may put packages or compiled modules in the
