@@ -137,3 +137,19 @@ it, and every gate here (hold label, rubric, risk tiers, coverage) assumed it.
 it is live (`branches/main .protected` prints `true`).
 **Why it matters:** A promise about review is only as strong as whatever
 refuses the push. Check the setting, not the prose. See #148.
+
+## An option's value can be optional
+**Date:** 2026-09-29
+**Wrong:** The guard's pytest table had two states per option, "flag" or
+"takes the next word". `--cov` was listed as taking the next word, so the
+guard skipped it. pytest-cov declares `--cov` with `nargs="?"`, and argparse
+gives it the next word only when that word does not look like an option.
+`pytest --cov --junitxml=/path` wrote a file the guard never saw.
+**Right:** Options with an optional value are listed on their own, and the
+word after them is a value only when it does not start with `-`. A test reads
+pytest's parser and fails when the table disagrees with it.
+**Why it matters:** An arity table decides which words the guard reads. When
+an entry claims a value that the tool does not always take, the word it skips
+is one the tool obeys. Check the table against the parser, not against the
+help text. See #242.
+

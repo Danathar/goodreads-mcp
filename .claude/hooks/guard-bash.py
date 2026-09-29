@@ -326,6 +326,19 @@ _PYTEST_LONG = {
 }
 _COV_REPORT_RE = re.compile(r"^(term|term-missing)(:skip-covered)?$|^$")
 
+# Options whose value is optional: argparse `nargs="?"`, which takes the next
+# word only when it does not look like an option. `--cov` is one -- bare, it
+# measures the rootdir. Reading it as always taking the next word let that word
+# through unchecked while pytest read it as an option of its own:
+# `pytest --cov --junitxml=/path` wrote /path, `pytest --cov -pmod` imported
+# `mod`, and `pytest --cov --basetemp=/dir` emptied /dir. So the next word is
+# its value only when it does not start with `-`; otherwise it is read as the
+# option pytest will read it as. `--cache-show` is optional too, but it is
+# listed as a flag, so the word after it is checked as a path: the stricter
+# reading, and the safe one. `tests/test_agent_permissions.py` replays every
+# entry against pytest's own parser.
+_PYTEST_OPTIONAL_VALUE = frozenset({"--cov"})
+
 
 def _check_warning_filter(value: str) -> None:
     """Refuse a `-W` value whose warning category is a dotted name (#117).
@@ -643,6 +656,11 @@ def _check_pytest(args: list[str], cwd: Path) -> None:
                     "relocate collection or write files are refused"
                 )
             if _PYTEST_LONG[name] and not eq:
+                if name in _PYTEST_OPTIONAL_VALUE and (
+                    i + 1 >= len(args) or args[i + 1].startswith("-")
+                ):
+                    i += 1
+                    continue
                 i += 1
                 value = args[i] if i < len(args) else ""
             if name == "--pythonwarnings":
