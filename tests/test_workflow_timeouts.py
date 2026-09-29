@@ -36,6 +36,12 @@ _WORKFLOWS = _ROOT / ".github" / "workflows"
 # default is 360; the slowest job here is the live suite, which is minutes.
 _CEILING = 60
 
+# What a job with no `timeout-minutes` gets instead.
+_GITHUB_DEFAULT = 360
+
+# The one reviewer-facing statement of this rule. It quotes both numbers above.
+_RUBRIC = _ROOT / "docs" / "review-rubric.md"
+
 # `  <job-id>:` — a key indented exactly two spaces under `jobs:`.
 _JOB = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$")
 
@@ -94,8 +100,8 @@ def test_the_job_declares_a_timeout(path: Path, job: str):
     found = [match.group(1) for match in declared if match]
     assert found, (
         f"{path.name}: job {job!r} sets no timeout-minutes, so a hung step holds a "
-        "runner for GitHub's default 360 minutes. Add `timeout-minutes: <n>` next "
-        "to its `runs-on:`."
+        f"runner for GitHub's default {_GITHUB_DEFAULT} minutes. Add "
+        "`timeout-minutes: <n>` next to its `runs-on:`."
     )
     assert len(found) == 1, f"{path.name}: job {job!r} sets timeout-minutes {len(found)} times"
 
@@ -122,8 +128,44 @@ def test_the_new_workflow_is_covered_too():
         ("labeler.yml", "label"),
         ("nightly-compliance.yml", "live"),
         ("release.yml", "prepare"),
+        ("release.yml", "build-pypi"),
+        ("release.yml", "build-mcpb"),
+        ("release.yml", "verify-mcpb"),
         ("release.yml", "release"),
         ("release.yml", "publish-pypi"),
         ("release.yml", "publish-registry"),
     }
     assert expected <= seen, f"workflow jobs have gone missing: {sorted(expected - seen)}"
+
+
+def test_the_rubric_quotes_the_numbers_this_test_enforces():
+    """docs/review-rubric.md states the range and the default this file checks.
+
+    The rubric's Housekeeping item tells a reviewer to expect a cap of "1-60"
+    and names this file as what fails CI. `_CEILING` is the number CI actually
+    holds a job to, and the failure message above invites raising it. Without
+    this check the rubric would keep saying 60 after that raise, and a reviewer
+    would send back a job CI accepts.
+    """
+    text = " ".join(_RUBRIC.read_text(encoding="utf-8").split())
+    items = [
+        item
+        for item in re.split(r"- \[ \] ", text)
+        if "tests/test_workflow_timeouts.py" in item
+    ]
+    assert len(items) == 1, (
+        f"expected one rubric item naming tests/test_workflow_timeouts.py, "
+        f"found {len(items)}"
+    )
+    item = items[0]
+
+    ranges = re.findall(r"\((\d+)-(\d+)\)", item)
+    assert ranges == [("1", str(_CEILING))], (
+        f"the rubric's timeout item states the range {ranges}, but this test "
+        f"holds every job to 1..{_CEILING}"
+    )
+    defaults = re.findall(r"(\d+)-minute default", item)
+    assert defaults == [str(_GITHUB_DEFAULT)], (
+        f"the rubric's timeout item states a default of {defaults} minutes; "
+        f"GitHub's is {_GITHUB_DEFAULT}"
+    )
