@@ -251,6 +251,13 @@ _DENIED = [
     ("pytest --basetemp=/tmp/gone tests", "not on the guard's safe list"),
     ("pytest --junitxml=/tmp/out.xml tests", "not on the guard's safe list"),
     ("pytest --cov-report=html:/tmp/cov tests", "writes files"),
+    # `--cov` takes its value only when the next word is not an option, so a
+    # word after a bare `--cov` is an option of its own to pytest, not a value
+    # to skip. Each of these ran on pytest 9.1.1 + pytest-cov 7.1.0.
+    ("pytest --cov --junitxml=/tmp/out.xml", "not on the guard's safe list"),
+    ("pytest -q --cov -psome_module", "imports a module"),
+    ("pytest --cov --basetemp=/tmp/gone", "not on the guard's safe list"),
+    ("python -m pytest --cov -o addopts=-pevil", "not on the guard's safe list"),
     ("PYTEST_ADDOPTS='-p evil' pytest -q", "changes what it loads"),
     ("PYTEST_PLUGINS=evil pytest -q", "changes what it loads"),
     ("PYTHONPATH=/tmp pytest -q", "changes what it loads"),
@@ -478,6 +485,10 @@ _DENIED = [
 # no opinion on at all -- it must not become a general Bash gate.
 _PERMITTED = [
     "pytest -q --cov=goodreads_mcp --cov-report=term-missing --cov-fail-under=55",
+    # A bare `--cov` still works, before an option or a test path or last.
+    "pytest -q --cov goodreads_mcp --cov-report=term-missing",
+    "pytest --cov -q",
+    "pytest -q --cov",
     "pytest -q",
     "GOODREADS_LIVE=1 pytest tests/e2e -v",
     "GOODREADS_USER_ID=12345678 GOODREADS_LIVE=1 pytest tests/e2e -v",
@@ -864,6 +875,12 @@ _UNREACHABLE: tuple[tuple[str, str, str], ...] = (
 # the rule. `(label, before, after, witness)`: the edit is applied to a copy of
 # the guard and the witness must stop being denied.
 _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "a bare `--cov` taking no value when an option follows it",
+        "if name in _PYTEST_OPTIONAL_VALUE and (",
+        "if False and (",
+        "pytest --cov --junitxml=/tmp/out.xml",
+    ),
     (
         "the operand-outside-the-checkout rule",
         "if _is_outside_repo(token, cwd):",
@@ -1316,3 +1333,44 @@ def test_a_word_skipped_as_a_value_is_a_value_to_git(guard, scratch_git, verb):
         f"`{verb}` reads the word after {operands} as an operand, so the "
         "operand rule must not skip it"
     )
+
+
+# ------------------------------------- the pytest arity table, against pytest
+#
+# `_PYTEST_LONG` and `_PYTEST_SHORT` say which options take the next word as
+# their value, and the guard skips that word unread. An entry that says "takes
+# a value" for an option whose value pytest only takes sometimes lets an option
+# through behind it: `--cov` was listed as always taking one, so
+# `pytest --cov --junitxml=/path` wrote /path. Every entry is replayed against
+# the parser of the pytest on this machine, plugins included.
+
+
+def test_a_word_the_guard_skips_as_a_value_is_a_value_to_pytest(guard):
+    from _pytest.config import _prepareconfig
+
+    config = _prepareconfig(["-q"])
+    try:
+        nargs = {
+            name: action.nargs
+            for action in config._parser.optparser._actions
+            for name in action.option_strings
+        }
+    finally:
+        config._ensure_unconfigure()
+    short = {f"-{letter}": value for letter, value in guard._PYTEST_SHORT.items()}
+    table = {**guard._PYTEST_LONG, **short}
+    assert "--cov" in nargs, "pytest-cov is not loaded, so this compares nothing"
+
+    wrong = []
+    for name, takes_value in sorted(table.items()):
+        if name not in nargs:
+            continue  # pytest refuses an option it does not know
+        optional = nargs[name] == "?"
+        if name in guard._PYTEST_OPTIONAL_VALUE:
+            if not optional:
+                wrong.append(f"{name} listed as optional, nargs={nargs[name]!r}")
+        elif takes_value and (optional or nargs[name] == 0):
+            wrong.append(f"{name} listed as taking a value, nargs={nargs[name]!r}")
+        elif not takes_value and nargs[name] not in (0, "?"):
+            wrong.append(f"{name} listed as a flag, nargs={nargs[name]!r}")
+    assert not wrong, wrong
