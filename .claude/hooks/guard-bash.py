@@ -243,9 +243,10 @@ SAFE_ENV = {
 # ones deliberately absent load code (`-p`, `-c`, `--pdbcls`, `--pyargs`,
 # `--doctest-modules`), relocate collection (`--rootdir`, `--confcutdir`,
 # `--import-mode`, `-o`/`--override-ini`), or write files (`--basetemp`, which
-# also deletes, `--junitxml`, `--log-file`, `--debug`). Two listed options are
+# also deletes, `--junitxml`, `--log-file`, `--debug`). Three listed options are
 # safe only for some values, and their values are checked: `--cov-report`
-# (terminal reporters only) and `-W`/`--pythonwarnings` (no dotted category).
+# (terminal reporters only), `-W`/`--pythonwarnings` (no dotted category) and
+# `--cov` (no dotted package name).
 _PYTEST_SHORT = {
     "q": False,
     "v": False,
@@ -356,6 +357,26 @@ def _check_warning_filter(value: str) -> None:
             f"`-W {value}` names the warning category `{category}`, and pytest "
             "imports the module of a dotted category before it runs anything; "
             "only a built-in category (no dot) is allowed"
+        )
+
+
+def _check_cov_source(value: str, cwd: Path) -> None:
+    """Refuse a `--cov` value that makes coverage import a package.
+
+    coverage reads a `--cov` value that is not a directory as a package name
+    and looks it up with `importlib.util.find_spec`, which imports every parent
+    of a dotted name first: `--cov=pkg.x` imports `pkg` and runs its top-level
+    code before a test is collected, the reach `-p` is refused for. The
+    editable install puts the checkout on `sys.path`, so an untracked `pkg/`
+    at the root is enough (pytest 9.1.1, pytest-cov 7.1.0, coverage 7.16.2).
+    A name with no dot is only looked up, and a directory is walked, not
+    imported; `--cov=goodreads_mcp`, the spelling CI uses, is both.
+    """
+    if "." in value and not (cwd / value).is_dir():
+        raise Denied(
+            f"`--cov {value}` names a dotted package, and coverage imports the "
+            "parents of a dotted name to find it before it runs anything; "
+            "name a directory or an undotted package (`--cov=goodreads_mcp`)"
         )
 
 
@@ -665,6 +686,8 @@ def _check_pytest(args: list[str], cwd: Path) -> None:
                 value = args[i] if i < len(args) else ""
             if name == "--pythonwarnings":
                 _check_warning_filter(value)
+            if name == "--cov":
+                _check_cov_source(value, cwd)
             if name == "--cov-report" and not _COV_REPORT_RE.match(value):
                 raise Denied(
                     f"`--cov-report={value}` writes files; only the terminal "

@@ -258,6 +258,13 @@ _DENIED = [
     ("pytest -q --cov -psome_module", "imports a module"),
     ("pytest --cov --basetemp=/tmp/gone", "not on the guard's safe list"),
     ("python -m pytest --cov -o addopts=-pevil", "not on the guard's safe list"),
+    # coverage looks a non-directory `--cov` value up as a package, and
+    # `find_spec` imports the parents of a dotted name: with an untracked
+    # `pkg/__init__.py` at the root, each of these ran it on pytest 9.1.1 +
+    # pytest-cov 7.1.0 + coverage 7.16.2.
+    ("pytest --cov=pkg.x tests", "dotted package"),
+    ("pytest -q --cov pkg.x tests", "dotted package"),
+    ("pytest --cov=goodreads_mcp --cov=pkg.sub.x", "dotted package"),
     ("PYTEST_ADDOPTS='-p evil' pytest -q", "changes what it loads"),
     ("PYTEST_PLUGINS=evil pytest -q", "changes what it loads"),
     ("PYTHONPATH=/tmp pytest -q", "changes what it loads"),
@@ -489,6 +496,9 @@ _PERMITTED = [
     "pytest -q --cov goodreads_mcp --cov-report=term-missing",
     "pytest --cov -q",
     "pytest -q --cov",
+    # A directory is walked rather than imported, whatever its name.
+    "pytest -q --cov=. tests",
+    "pytest -q --cov=./goodreads_mcp tests",
     "pytest -q",
     "GOODREADS_LIVE=1 pytest tests/e2e -v",
     "GOODREADS_USER_ID=12345678 GOODREADS_LIVE=1 pytest tests/e2e -v",
@@ -876,10 +886,18 @@ _UNREACHABLE: tuple[tuple[str, str, str], ...] = (
 # the guard and the witness must stop being denied.
 _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
     (
+        "a dotted `--cov` package name",
+        'if "." in value and not (cwd / value).is_dir():',
+        "if False:",
+        "pytest --cov=pkg.x tests",
+    ),
+    (
         "a bare `--cov` taking no value when an option follows it",
         "if name in _PYTEST_OPTIONAL_VALUE and (",
         "if False and (",
-        "pytest --cov --junitxml=/tmp/out.xml",
+        # No dot in the word: read as `--cov`'s value, a dotted one would be
+        # refused by the package-name rule instead of the one under test.
+        "pytest --cov --basetemp=/tmp/gone",
     ),
     (
         "the operand-outside-the-checkout rule",
