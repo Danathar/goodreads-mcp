@@ -69,6 +69,7 @@ this file and `tests/test_nightly_compliance_workflow.py` share.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -107,6 +108,8 @@ _DOWNLOAD_STEP = "Download the bundle"
 _PACK_STEP = "Pack MCPB"
 _COMPILED_STEP = "Check the bundle carries no compiled code"
 _MCPB_UPLOAD_STEP = "Upload the bundle"
+_DIGEST_STEP = "Record the bundle's digest"
+_BUNDLE_CHECK_STEP = "Check the bundle is the one build-mcpb packed"
 
 # verify-mcpb's `run:` steps: everything that installs from PyPI.
 _PIP_STEP = "Upgrade pip"
@@ -125,6 +128,7 @@ _EXECUTED = {
     _VERSION_STEP,
     _SYNC_STEP,
     _VALIDATE_STEP,
+    _BUNDLE_CHECK_STEP,
     _TAG_STEP,
     _SUMMARY_STEP,
     _CLEANUP_STEP,
@@ -132,7 +136,7 @@ _EXECUTED = {
 
 # The build jobs' `run:` steps.
 _BUILD_EXECUTED = {_PYPI_BUILD_STEP}
-_BUILD_MCPB_EXECUTED = {_PACK_STEP, _COMPILED_STEP}
+_BUILD_MCPB_EXECUTED = {_PACK_STEP, _COMPILED_STEP, _DIGEST_STEP}
 _VERIFY_MCPB_EXECUTED = {_PIP_STEP, _TEST_STEP, _LAUNCH_STEP}
 
 # The packer, pinned: `npx -y <this> pack`. ci.yml validates with the same one.
@@ -1702,6 +1706,7 @@ def test_everything_is_checked_before_anything_is_written():
         _SYNC_STEP,
         _VALIDATE_STEP,
         _DOWNLOAD_STEP,
+        _BUNDLE_CHECK_STEP,
     ]
     assert [order.index(name) for name in checks] == sorted(order.index(name) for name in checks)
     assert max(order.index(name) for name in checks) < order.index(_TAG_STEP) < order.index(_PUBLISH_STEP)
@@ -2072,6 +2077,7 @@ def test_the_bundle_is_packed_before_any_third_party_python_code_runs():
         "actions/setup-node",
         "",
         "",
+        "",
         "actions/upload-artifact",
     ]
     assert _BUILD_MCPB.steps[0].with_["persist-credentials"] == "false"
@@ -2090,6 +2096,107 @@ def test_the_bundle_is_packed_before_any_third_party_python_code_runs():
             r"^    if: (.+)$", _job_text("release"), re.M
         ).group(1), job
     assert _VERIFY_MCPB.steps[0].with_["persist-credentials"] == "false"
+
+
+def _two_bundles(tmp_path: Path) -> tuple[bytes, bytes]:
+    """The bundle `build-mcpb` packed, and one of the same name that differs by a byte."""
+    packed = b"PK packed by build-mcpb"
+    return packed, packed[:-1] + b"!"
+
+
+def test_the_digest_step_records_the_sha256_of_the_one_bundle(tmp_path: Path):
+    packed, _ = _two_bundles(tmp_path)
+    (tmp_path / "goodreads-mcp.mcpb").write_bytes(packed)
+    output = tmp_path / "github-output"
+
+    result = _run(_BUILD_MCPB.body(_DIGEST_STEP), tmp_path, github_output=output)
+
+    assert result.returncode == 0, result.stderr
+    assert _outputs(output) == {"sha256": hashlib.sha256(packed).hexdigest()}
+
+
+@pytest.mark.parametrize("names", [(), ("a.mcpb", "b.mcpb")], ids=["none", "two"])
+def test_the_digest_step_refuses_anything_but_exactly_one_bundle(tmp_path: Path, names: tuple[str, ...]):
+    for name in names:
+        (tmp_path / name).write_bytes(b"PK")
+    output = tmp_path / "github-output"
+
+    result = _run(_BUILD_MCPB.body(_DIGEST_STEP), tmp_path, github_output=output)
+
+    assert result.returncode == 1
+    assert "::error::expected exactly one .mcpb" in result.stderr
+    assert _outputs(output) == {}
+
+
+def test_the_bundle_digest_is_a_job_output_the_release_job_reads():
+    """The digest crosses jobs as an output, fixed when `build-mcpb` ends.
+
+    An artifact is looked up by name and can be deleted and uploaded again by
+    any later step in the run that holds the artifact token -- an action in
+    `verify-mcpb`, after `pip install -e` and `pytest` have run there. A job
+    output cannot be.
+    """
+    assert _BUILD_MCPB.step(_DIGEST_STEP).id == "digest"
+    assert "    outputs:\n" in _job_text("build-mcpb")
+    assert re.search(
+        r"^      sha256: \$\{\{ steps\.digest\.outputs\.sha256 \}\}$", _job_text("build-mcpb"), re.M
+    )
+    names = [step.name for step in _BUILD_MCPB.steps]
+    assert names.index(_COMPILED_STEP) < names.index(_DIGEST_STEP) < names.index(_MCPB_UPLOAD_STEP)
+    check = _step(_BUNDLE_CHECK_STEP)
+    assert check.env["EXPECTED_SHA256"] == "${{ needs.build-mcpb.outputs.sha256 }}"
+    assert check.if_ == _GO_IF
+    order = [step.name for step in _STEPS]
+    assert order.index(_DOWNLOAD_STEP) + 1 == order.index(_BUNDLE_CHECK_STEP)
+    assert re.search(r"^    needs: \[.*\bbuild-mcpb\b.*\]$", _job_text("release"), re.M)
+
+
+def test_the_release_accepts_the_bundle_build_mcpb_packed(tmp_path: Path):
+    packed, _ = _two_bundles(tmp_path)
+    (tmp_path / "goodreads-mcp.mcpb").write_bytes(packed)
+
+    result = _run(
+        _body(_BUNDLE_CHECK_STEP), tmp_path, env={"EXPECTED_SHA256": hashlib.sha256(packed).hexdigest()}
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_the_release_refuses_a_bundle_replaced_after_the_pack(tmp_path: Path):
+    packed, replaced = _two_bundles(tmp_path)
+    (tmp_path / "goodreads-mcp.mcpb").write_bytes(replaced)
+
+    result = _run(
+        _body(_BUNDLE_CHECK_STEP), tmp_path, env={"EXPECTED_SHA256": hashlib.sha256(packed).hexdigest()}
+    )
+
+    assert result.returncode == 1
+    assert "::error::" in result.stderr
+    assert hashlib.sha256(replaced).hexdigest() in result.stderr
+
+
+def test_the_release_refuses_when_build_mcpb_recorded_no_digest(tmp_path: Path):
+    """An output that did not resolve is empty, and empty must not match anything."""
+    (tmp_path / "goodreads-mcp.mcpb").write_bytes(b"PK")
+
+    result = _run(_body(_BUNDLE_CHECK_STEP), tmp_path, env={"EXPECTED_SHA256": ""})
+
+    assert result.returncode == 1
+    assert "no digest" in result.stderr
+
+
+@pytest.mark.parametrize("names", [(), ("a.mcpb", "b.mcpb")], ids=["none", "two"])
+def test_the_release_check_refuses_anything_but_exactly_one_bundle(tmp_path: Path, names: tuple[str, ...]):
+    """A second `.mcpb` beside the checked one would be attached by `files: "*.mcpb"` unchecked."""
+    for name in names:
+        (tmp_path / name).write_bytes(b"PK")
+
+    result = _run(
+        _body(_BUNDLE_CHECK_STEP), tmp_path, env={"EXPECTED_SHA256": hashlib.sha256(b"PK").hexdigest()}
+    )
+
+    assert result.returncode == 1
+    assert "::error::expected exactly one .mcpb" in result.stderr
 
 
 # --------------------------------------------------------------------------

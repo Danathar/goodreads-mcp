@@ -24,24 +24,27 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-29 — a bare `--cov` hid the option after it from the guard (#242)
+## 2026-09-30 — don't re-post a GraphQL key rediscovery returned unchanged (#247)
 
-**Done:** `.claude/hooks/guard-bash.py` read `--cov` as always taking the next
-word as its value and skipped that word unchecked. pytest-cov declares it
-`nargs="?"`, so pytest takes the next word only when it is not an option:
-`pytest --cov --junitxml=/path` wrote /path, `pytest --cov -pmod` imported
-`mod` (an untracked module at the repo root is on `sys.path` through the
-editable install), and `pytest --cov --basetemp=/dir` emptied /dir. All three
-matched `Bash(pytest *)` with no prompt. `_PYTEST_OPTIONAL_VALUE` now names
-`--cov`, and the word after it is its value only when it does not start with
-`-`. Four `_DENIED` rows, three `_PERMITTED` rows, one `_MUTATIONS` row, and
-`test_a_word_the_guard_skips_as_a_value_is_a_value_to_pytest`, which replays
-the whole pytest arity table against pytest's own parser, plugins included.
-Test count 1399 → 1408.
+**Done:** `graphql()` treated every 401/403 as a key rotation: it rediscovered
+(`/giveaway` plus the `_app` bundle) and posted again, even when rediscovery
+returned the pair AppSync had just refused. A refusal that is not a rotation
+cost 4 requests per call. Now `graphql()` passes the refused pair to
+`graphql_config(refused=...)` and re-raises the original error when the same
+pair comes back. Inside `_config_lock`, `graphql_config` skips the fetch when
+the cached pair already differs from the refused one, so calls refused
+together share one rediscovery. `force=True` is unchanged (the
+check-live-endpoints snippet uses it). Three tests that faked a "rotation"
+with a page serving the same key now rotate the key. Two new tests in
+`tests/test_client_failures.py`. Test count 1409 → 1411.
 
-**In flight:** the pull request for #242. It touches `.claude/hooks/`
-(Tier 2), so a human merges it.
+**In flight:** the pull request for #247.
 
-**Watch:** `--cache-show` is also `nargs="?"`; the guard lists it as a flag,
-which checks the next word as a path. That is the stricter reading and the
-arity test accepts it.
+**Blocked on:** the maintainer's A/B/C choice on #247: whether a refused key
+that came back unchanged is remembered (a cool-down, or until restart). Until
+then a persisting refusal still costs 3 requests per call: the POST plus the
+two discovery GETs.
+
+**Watch:** `_graphql_client` in `tests/test_client_failures.py` replaces
+`graphql_config` with a stub that takes only `force`; a test that drives it
+into a 401 needs the stub to accept `refused` too.

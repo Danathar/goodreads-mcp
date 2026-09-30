@@ -16,6 +16,7 @@ what's known-weak, and where the real risk sits.
 | version sync (`pyproject` vs `manifest`) | `release.yml` | yes, at release |
 | bundle carries no compiled module (it declares three platforms) | `release.yml` | yes, at release |
 | packed bundle starts under the manifest's own `uv run` command | `release.yml` | yes, at release |
+| released `.mcpb` is the one `build-mcpb` packed (sha256 job output, checked after download) | `release.yml` | yes, at release |
 | release refused unless the run is on `main`, the commit is on `main`, `test` passed on it and no run of `test` is red or unfinished (no other check counts), and the version is CalVer, untagged and newer than the last release | `release.yml` | yes, at release |
 | automated code review | Codex, every PR | advisory |
 | offline tests on source edit | `.claude/settings.json` hook | advisory, local |
@@ -24,7 +25,7 @@ what's known-weak, and where the real risk sits.
 
 | | |
 |---|---|
-| offline tests | 1415 passing, 25 skipped (live, opt-in) |
+| offline tests | 1426 passing, 25 skipped (live, opt-in) |
 | coverage | 100% overall — `config.py` 100%, `client.py` 100%, `server.py` 100% |
 | CI, last 30 runs | 28 success |
 
@@ -65,9 +66,9 @@ broken in production.**
 The mitigation is procedural, not mechanical: run the live suite after any
 parsing change ([review rubric](review-rubric.md) §2), and before a release.
 
-`server.py` at 74% is the second-order version of the same thing — the
-uncovered lines are mostly GraphQL tool bodies whose behavior is only
-meaningfully exercised against live data.
+`server.py` reaching 100% doesn't change this: full statement coverage from
+fixtures still can't exercise how the GraphQL tool bodies behave against
+Goodreads' actual, changing responses.
 
 ## What would actually improve quality
 

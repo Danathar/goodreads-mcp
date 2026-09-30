@@ -10,6 +10,7 @@ the live tier covers *less* of this module than the offline one.
 from __future__ import annotations
 
 import json
+import threading
 
 import httpx
 import pytest
@@ -353,3 +354,79 @@ def test_graphql_tolerates_errors_below_a_root_field():
     assert client.graphql("query { ping }") == {
         "getReviews": {"edges": [{"node": {"shelving": None}}]}
     }
+
+
+# ------------------------------------------- graphql 401/403 re-discovery (#247)
+
+
+ENDPOINT_BUNDLE = '{"endpoint":"' + ENDPOINT_PROD + '","shortName":"Prod"}'
+
+
+def _refusing_site(page_keys, refused_keys, seen, on_refusal=lambda: None):
+    """Discovery serves `page_keys` in turn (the last one repeats); AppSync
+    answers 403 to any key in `refused_keys` and 200 to the rest."""
+    keys = list(page_keys)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            key = request.headers["x-api-key"]
+            seen.append(("POST", key))
+            if key in refused_keys:
+                on_refusal()
+                return httpx.Response(403, json={"message": "Forbidden"})
+            return httpx.Response(200, json={"data": {"ok": True}})
+        seen.append(("GET", request.url.path))
+        if request.url.path.startswith("/_next/"):
+            return httpx.Response(200, text=ENDPOINT_BUNDLE)
+        key = keys.pop(0) if len(keys) > 1 else keys[0]
+        return httpx.Response(200, text=_discovery_page(key))
+
+    return handler
+
+
+def test_graphql_does_not_repost_a_refused_key_that_rediscovery_returns_unchanged():
+    # A refusal that is not a rotation (a WAF rule, an IP block): the page
+    # keeps serving the key AppSync refuses. Posting it again cannot help.
+    key = "da2-prodkey0000000000000000"
+    seen: list[tuple[str, str]] = []
+    client = _client(_refusing_site([key], {key}, seen))
+
+    for _ in range(3):
+        with pytest.raises(httpx.HTTPStatusError) as excinfo:
+            client.graphql("query { ping }")
+        assert excinfo.value.response.status_code == 403
+
+    discovery = [("GET", "/giveaway"), ("GET", "/_next/static/chunks/pages/_app-deadbeef.js")]
+    assert seen == (
+        discovery + [("POST", key)] + discovery  # first call: discover, post, rediscover
+        + [("POST", key)] + discovery  # second call
+        + [("POST", key)] + discovery  # third call
+    )
+
+
+def test_graphql_rediscovers_once_for_calls_refused_together():
+    # Both calls hold the old key when AppSync refuses it. The first to take
+    # the config lock rediscovers; the second finds the cache already moved
+    # past the key it was refused with and uses the new one.
+    old, new = "da2-oldkey00000000000000000", "da2-newkey00000000000000000"
+    both_refused = threading.Barrier(2, timeout=5)
+    seen: list[tuple[str, str]] = []
+    client = _client(_refusing_site([old, new], {old}, seen, both_refused.wait))
+
+    results: list[object] = []
+
+    def call() -> None:
+        try:
+            results.append(client.graphql("query { ping }"))
+        except Exception as exc:  # surfaced through the assertion below
+            results.append(exc)
+
+    threads = [threading.Thread(target=call) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert results == [{"ok": True}, {"ok": True}]
+    assert seen.count(("GET", "/giveaway")) == 2  # first discovery + one rediscovery
+    assert [k for m, k in seen if m == "POST"] == [old, old, new, new]

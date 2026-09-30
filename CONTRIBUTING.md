@@ -72,15 +72,17 @@ green (no other check counts), when the commit has no passing `test` check,
 when the two files disagree,
 when a `version` given by hand is not the one `pyproject.toml` carries, when
 the version is not CalVer, is already tagged or is not newer than the last
-release, or when a `b1`/`rc1` suffix and the `prerelease` box disagree.
+release, when a `b1`/`rc1` suffix and the `prerelease` box disagree, or
+when the bundle it downloads is not the one `build-mcpb` packed.
 Tick `dry_run` to run every check and build the bundle without tagging or
 publishing.
 
 The bundle is packed and started, and the tests run, in jobs that can only read
 the repository. The job that tags and publishes runs no code from PyPI or npm,
-so a compromised dependency cannot reach its write token or change the `.mcpb`
-it attaches. Those jobs run on every release run, including a month that
-releases nothing.
+so a compromised dependency cannot reach its write token, and it checks the
+`.mcpb` it attaches against the digest `build-mcpb` recorded, so a bundle
+replaced after the pack stops the release. Those jobs run on every release
+run, including a month that releases nothing.
 
 If a release fails after its tag is pushed, re-run the failed job: it finishes
 that release instead of refusing the tag, and a later release counts changes
