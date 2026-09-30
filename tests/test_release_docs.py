@@ -107,6 +107,7 @@ _REFUSALS = {
     r"Tag \$VERSION already exists": "is already tagged",
     r"is not newer than the latest release": "is not newer than the last release",
     r"and prerelease=.* disagree": "a `b1`/`rc1` suffix and the `prerelease` box disagree",
+    r"but build-mcpb packed": "the bundle it downloads is not the one `build-mcpb` packed",
 }
 
 # Refusals CONTRIBUTING.md leaves to docs/quality.md's gate table, by the
