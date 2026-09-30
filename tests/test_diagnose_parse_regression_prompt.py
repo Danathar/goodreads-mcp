@@ -381,26 +381,34 @@ def test_the_rotation_route_statuses_are_the_ones_graphql_re_discovers_on(goodre
     assert named == _compared_statuses(_function(_CLIENT_PY, "graphql"))
 
     # "already re-discovers once": a persisting 401 costs two discovery
-    # rounds and two POSTs, then surfaces.
+    # rounds, then surfaces. Re-discovery found the same pair, so it is not
+    # posted a second time (#247).
     handler, call, *_ = _SCENARIOS["key rotated and re-discovery did not help"]
     seen = goodreads(handler)
     with pytest.raises(httpx.HTTPStatusError) as excinfo:
         call()
     assert excinfo.value.response.status_code in named
-    assert [m for m, _ in seen].count("POST") == 2
+    assert [m for m, _ in seen].count("POST") == 1
     assert seen.count(("GET", client_mod.CONFIG_DISCOVERY_PATH)) == 2
 
 
 def test_a_single_rotation_self_heals_so_it_is_not_a_symptom(goodreads):
-    answers = iter((401, 200))
+    rotated = "da2-rotatedrotatedrot"
+    pages = iter((_CONFIG_PAGE, _CONFIG_PAGE.replace(_FAKE_KEY, rotated)))
 
     def post(request):
-        status = next(answers)
-        if status != 200:
-            return httpx.Response(status, json={})
+        if request.headers["x-api-key"] == _FAKE_KEY:
+            return httpx.Response(401, json={})
         return httpx.Response(200, json={"data": {"ok": True}})
 
-    goodreads(_graphql_site(post=post))
+    site = _graphql_site(post=post)
+
+    def handler(request):
+        if request.url.path == client_mod.CONFIG_DISCOVERY_PATH:
+            return httpx.Response(200, text=next(pages))
+        return site(request)
+
+    goodreads(handler)
     assert server.gr.graphql("query { x }") == {"ok": True}
 
 
