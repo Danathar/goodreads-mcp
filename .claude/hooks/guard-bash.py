@@ -360,7 +360,7 @@ def _check_warning_filter(value: str) -> None:
         )
 
 
-def _check_cov_source(value: str, cwd: Path) -> None:
+def _check_cov_source(value: str) -> None:
     """Refuse a `--cov` value that makes coverage import a package.
 
     coverage reads a `--cov` value that is not a directory as a package name
@@ -369,14 +369,22 @@ def _check_cov_source(value: str, cwd: Path) -> None:
     code before a test is collected, the reach `-p` is refused for. The
     editable install puts the checkout on `sys.path`, so an untracked `pkg/`
     at the root is enough (pytest 9.1.1, pytest-cov 7.1.0, coverage 7.16.2).
-    A name with no dot is only looked up, and a directory is walked, not
-    imported; `--cov=goodreads_mcp`, the spelling CI uses, is both.
+
+    Whether the value is a directory is decided where pytest runs, which the
+    command can move (`cd tests && pytest --cov=x.y`), so the filesystem is not
+    consulted. A name with no dot has no parent to import. A value starting
+    `./` or `../` (or `.`/`..` itself) is a path, and if coverage does look it
+    up as a name, `find_spec` refuses a leading dot without a package and
+    imports nothing. `--cov=goodreads_mcp`, the spelling CI uses, has no dot.
     """
-    if "." in value and not (cwd / value).is_dir():
+    if "." in value and not (
+        value in (".", "..") or value.startswith(("./", "../"))
+    ):
         raise Denied(
             f"`--cov {value}` names a dotted package, and coverage imports the "
             "parents of a dotted name to find it before it runs anything; "
-            "name a directory or an undotted package (`--cov=goodreads_mcp`)"
+            "name an undotted package (`--cov=goodreads_mcp`) or a path "
+            "starting `./` or `../`"
         )
 
 
@@ -687,7 +695,7 @@ def _check_pytest(args: list[str], cwd: Path) -> None:
             if name == "--pythonwarnings":
                 _check_warning_filter(value)
             if name == "--cov":
-                _check_cov_source(value, cwd)
+                _check_cov_source(value)
             if name == "--cov-report" and not _COV_REPORT_RE.match(value):
                 raise Denied(
                     f"`--cov-report={value}` writes files; only the terminal "

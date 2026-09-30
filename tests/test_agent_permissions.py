@@ -265,6 +265,11 @@ _DENIED = [
     ("pytest --cov=pkg.x tests", "dotted package"),
     ("pytest -q --cov pkg.x tests", "dotted package"),
     ("pytest --cov=goodreads_mcp --cov=pkg.sub.x", "dotted package"),
+    # Whether a value is a directory depends on where pytest runs, which the
+    # command can move: with `x.y/` at the root (`_dotted_dir_at_root`) and an
+    # untracked `x/__init__.py`, these imported `x` from `tests/`.
+    ("cd tests && pytest --cov=x.y", "dotted package"),
+    ("cd tests; pytest -q --cov=x.y", "dotted package"),
     ("PYTEST_ADDOPTS='-p evil' pytest -q", "changes what it loads"),
     ("PYTEST_PLUGINS=evil pytest -q", "changes what it loads"),
     ("PYTHONPATH=/tmp pytest -q", "changes what it loads"),
@@ -496,9 +501,11 @@ _PERMITTED = [
     "pytest -q --cov goodreads_mcp --cov-report=term-missing",
     "pytest --cov -q",
     "pytest -q --cov",
-    # A directory is walked rather than imported, whatever its name.
+    # A path starting `./` or `../` imports nothing, directory or not: a
+    # leading dot is a relative name `find_spec` refuses without a package.
     "pytest -q --cov=. tests",
     "pytest -q --cov=./goodreads_mcp tests",
+    "pytest -q --cov=../x.y tests",
     "pytest -q",
     "GOODREADS_LIVE=1 pytest tests/e2e -v",
     "GOODREADS_USER_ID=12345678 GOODREADS_LIVE=1 pytest tests/e2e -v",
@@ -610,8 +617,23 @@ _PERMITTED = [
 ]
 
 
+@pytest.fixture(scope="module")
+def _dotted_dir_at_root():
+    """A directory at the root named like a dotted package, for the `cd` rows.
+
+    It must exist for those rows to prove anything: without it the value is
+    not a directory from either working directory.
+    """
+    path = _ROOT / "x.y"
+    created = not path.exists()
+    path.mkdir(exist_ok=True)
+    yield path
+    if created:
+        path.rmdir()
+
+
 @pytest.mark.parametrize("command,fragment", _DENIED, ids=[c for c, _ in _DENIED])
-def test_the_guard_denies(guard, command: str, fragment: str):
+def test_the_guard_denies(guard, _dotted_dir_at_root, command: str, fragment: str):
     reason = guard.decide(command, _ROOT)
     assert reason is not None, f"{command!r} was let through"
     assert fragment in reason, f"{command!r} was denied for the wrong reason: {reason}"
@@ -887,9 +909,9 @@ _UNREACHABLE: tuple[tuple[str, str, str], ...] = (
 _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
     (
         "a dotted `--cov` package name",
-        'if "." in value and not (cwd / value).is_dir():',
-        "if False:",
-        "pytest --cov=pkg.x tests",
+        'if "." in value and not (',
+        "if False and (",
+        "cd tests && pytest --cov=x.y",
     ),
     (
         "a bare `--cov` taking no value when an option follows it",
