@@ -258,6 +258,18 @@ _DENIED = [
     ("pytest -q --cov -psome_module", "imports a module"),
     ("pytest --cov --basetemp=/tmp/gone", "not on the guard's safe list"),
     ("python -m pytest --cov -o addopts=-pevil", "not on the guard's safe list"),
+    # coverage looks a non-directory `--cov` value up as a package, and
+    # `find_spec` imports the parents of a dotted name: with an untracked
+    # `pkg/__init__.py` at the root, each of these ran it on pytest 9.1.1 +
+    # pytest-cov 7.1.0 + coverage 7.16.2.
+    ("pytest --cov=pkg.x tests", "dotted package"),
+    ("pytest -q --cov pkg.x tests", "dotted package"),
+    ("pytest --cov=goodreads_mcp --cov=pkg.sub.x", "dotted package"),
+    # Whether a value is a directory depends on where pytest runs, which the
+    # command can move: with `x.y/` at the root (`_dotted_dir_at_root`) and an
+    # untracked `x/__init__.py`, these imported `x` from `tests/`.
+    ("cd tests && pytest --cov=x.y", "dotted package"),
+    ("cd tests; pytest -q --cov=x.y", "dotted package"),
     ("PYTEST_ADDOPTS='-p evil' pytest -q", "changes what it loads"),
     ("PYTEST_PLUGINS=evil pytest -q", "changes what it loads"),
     ("PYTHONPATH=/tmp pytest -q", "changes what it loads"),
@@ -489,6 +501,11 @@ _PERMITTED = [
     "pytest -q --cov goodreads_mcp --cov-report=term-missing",
     "pytest --cov -q",
     "pytest -q --cov",
+    # A path starting `./` or `../` imports nothing, directory or not: a
+    # leading dot is a relative name `find_spec` refuses without a package.
+    "pytest -q --cov=. tests",
+    "pytest -q --cov=./goodreads_mcp tests",
+    "pytest -q --cov=../x.y tests",
     "pytest -q",
     "GOODREADS_LIVE=1 pytest tests/e2e -v",
     "GOODREADS_USER_ID=12345678 GOODREADS_LIVE=1 pytest tests/e2e -v",
@@ -600,8 +617,23 @@ _PERMITTED = [
 ]
 
 
+@pytest.fixture(scope="module")
+def _dotted_dir_at_root():
+    """A directory at the root named like a dotted package, for the `cd` rows.
+
+    It must exist for those rows to prove anything: without it the value is
+    not a directory from either working directory.
+    """
+    path = _ROOT / "x.y"
+    created = not path.exists()
+    path.mkdir(exist_ok=True)
+    yield path
+    if created:
+        path.rmdir()
+
+
 @pytest.mark.parametrize("command,fragment", _DENIED, ids=[c for c, _ in _DENIED])
-def test_the_guard_denies(guard, command: str, fragment: str):
+def test_the_guard_denies(guard, _dotted_dir_at_root, command: str, fragment: str):
     reason = guard.decide(command, _ROOT)
     assert reason is not None, f"{command!r} was let through"
     assert fragment in reason, f"{command!r} was denied for the wrong reason: {reason}"
@@ -876,10 +908,18 @@ _UNREACHABLE: tuple[tuple[str, str, str], ...] = (
 # the guard and the witness must stop being denied.
 _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
     (
+        "a dotted `--cov` package name",
+        'if "." in value and not (',
+        "if False and (",
+        "cd tests && pytest --cov=x.y",
+    ),
+    (
         "a bare `--cov` taking no value when an option follows it",
         "if name in _PYTEST_OPTIONAL_VALUE and (",
         "if False and (",
-        "pytest --cov --junitxml=/tmp/out.xml",
+        # No dot in the word: read as `--cov`'s value, a dotted one would be
+        # refused by the package-name rule instead of the one under test.
+        "pytest --cov --basetemp=/tmp/gone",
     ),
     (
         "the operand-outside-the-checkout rule",
