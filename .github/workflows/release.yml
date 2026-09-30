@@ -24,8 +24,9 @@ name: Release MCPB
 #     checkout and uploads it, before any Python package is installed.
 #   * `verify-mcpb` runs the test suite and starts a downloaded copy of the
 #     bundle. It is the job that runs `pip install` and `uv run` on unpinned
-#     closures, so it holds `contents: read` and nothing it does reaches the
-#     uploaded bundle (#237).
+#     closures, so it holds `contents: read`. It can still replace the
+#     `mcpb` artifact by name, so `release` checks the bundle it downloads
+#     against the digest `build-mcpb` recorded as a job output (#237).
 #   * `release` tags the version pyproject.toml carries on the checked-out
 #     commit and publishes it: monthly on a schedule, or by hand. It refuses
 #     any commit that is not on main, whichever branch it was started from.
@@ -305,6 +306,11 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+    outputs:
+      # The digest of the bundle as packed. `release` checks the artifact it
+      # downloads against it: a job output is fixed when this job ends, while
+      # the artifact can be replaced by name from any later step of the run.
+      sha256: ${{ steps.digest.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -359,6 +365,19 @@ jobs:
           print(f"{bundle}: {len(names)} files, {len(compiled)} compiled, platforms {platforms}")
           PY
 
+      - name: Record the bundle's digest
+        id: digest
+        run: |
+          set -euo pipefail
+          set -- ./*.mcpb
+          if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+            echo "::error::expected exactly one .mcpb to record, found: $*" >&2
+            exit 1
+          fi
+          sha256=$(sha256sum "$1" | cut -d' ' -f1)
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          echo "$1: sha256 $sha256"
+
       - name: Upload the bundle
         uses: actions/upload-artifact@v4
         with:
@@ -370,8 +389,10 @@ jobs:
   # Run the suite and start the packed bundle. Everything here runs unpinned
   # closures (`pip install -e`, `uv run`), so the job can read this public
   # repository and nothing else, and it only ever sees a downloaded copy of
-  # the bundle: what it does to that copy never reaches the one `release`
-  # attaches. A failure here fails `release`, which needs this job.
+  # the bundle. The actions it runs after the tests hold the run's artifact
+  # token, so a replaced `mcpb` artifact is possible from here; `release`
+  # refuses one by its digest. A failure here fails `release`, which needs
+  # this job.
   # ------------------------------------------------------------------------
   verify-mcpb:
     if: github.event_name != 'workflow_dispatch' || !inputs.prepare
@@ -813,6 +834,29 @@ jobs:
         with:
           name: mcpb
           path: .
+
+      # `verify-mcpb` runs unpinned closures before its own download step, and
+      # any action that step runs holds the run's artifact token: code there
+      # can delete `mcpb` and upload another under the same name. The digest
+      # `build-mcpb` recorded is a job output, which nothing after it can
+      # change, so a bundle that is not the one packed stops the release here.
+      - name: Check the bundle is the one build-mcpb packed
+        if: steps.decide.outputs.go == 'true'
+        env:
+          EXPECTED_SHA256: ${{ needs.build-mcpb.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          set -- ./*.mcpb
+          if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+            echo "::error::expected exactly one .mcpb to release, found: $*" >&2
+            exit 1
+          fi
+          actual=$(sha256sum "$1" | cut -d' ' -f1)
+          if [ "$actual" != "$EXPECTED_SHA256" ]; then
+            echo "::error::$1 has sha256 $actual, but build-mcpb packed ${EXPECTED_SHA256:-no digest}; the artifact was replaced after it was uploaded." >&2
+            exit 1
+          fi
+          echo "$1: sha256 $actual, as build-mcpb packed it"
 
       - name: Tag the approved commit
         if: steps.decide.outputs.go == 'true' && !inputs.dry_run
