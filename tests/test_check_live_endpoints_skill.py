@@ -220,13 +220,16 @@ _CONFIG_PAGE = (
     + "</script></body></html>"
 )
 _APP_BUNDLE = '{"endpoint":"' + _FAKE_ENDPOINT + '","shortName":"Prod"}'
+_ROTATED_KEY = "da2-rotatedrotatedrot"
 
 
-def _discovery_handler(seen: list[str]):
+def _discovery_handler(seen: list[str], pages=None):
+    """Serve the discovery page and bundle; `pages` yields each page in turn."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.url.path)
         if request.url.path == client_mod.CONFIG_DISCOVERY_PATH:
-            return httpx.Response(200, text=_CONFIG_PAGE)
+            return httpx.Response(200, text=next(pages) if pages else _CONFIG_PAGE)
         if request.url.path == _APP_CHUNK:
             return httpx.Response(200, text=_APP_BUNDLE)
         return httpx.Response(404, text="")
@@ -526,25 +529,28 @@ def test_the_graphql_row_names_the_exception_a_dataless_body_raises(mock_goodrea
 def test_the_graphql_row_statuses_are_the_ones_that_force_re_discovery(
     mock_goodreads,
 ):
-    """The 401/403 row is the rotation path: each one re-resolves once and retries."""
+    """The 401/403 row is the rotation path: each one re-resolves once and
+    retries with the key the re-resolve found."""
     statuses = [int(s) for s in re.findall(r"\b(\d{3})\b", _symptom("401/403"))]
     assert statuses, "the row no longer names a status"
 
     for status in statuses:
-        posts: list[int] = []
+        posts: list[str] = []
         seen: list[str] = []
+        pages = iter((_CONFIG_PAGE, _CONFIG_PAGE.replace(_FAKE_KEY, _ROTATED_KEY)))
+        discovery = _discovery_handler(seen, pages)
 
         def handler(request: httpx.Request) -> httpx.Response:
             if request.method == "POST":
-                posts.append(len(posts))
-                if len(posts) == 1:
+                posts.append(request.headers["x-api-key"])
+                if request.headers["x-api-key"] == _FAKE_KEY:
                     return httpx.Response(status, json={})
                 return httpx.Response(200, json={"data": {"ok": True}})
-            return _discovery_handler(seen)(request)
+            return discovery(request)
 
         mock_goodreads(handler)
         assert GoodreadsClient().graphql("query { x }") == {"ok": True}
-        assert len(posts) == 2, f"{status} did not trigger a retry"
+        assert posts == [_FAKE_KEY, _ROTATED_KEY], f"{status} did not trigger a retry"
         # Two discovery rounds: the first config, then the forced re-resolve.
         assert seen.count(client_mod.CONFIG_DISCOVERY_PATH) == 2
 

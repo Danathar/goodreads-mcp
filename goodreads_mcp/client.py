@@ -368,7 +368,9 @@ class GoodreadsClient:
 
     # ------------------------------------------------------------- graphql
 
-    def graphql_config(self, force: bool = False) -> tuple[str, str]:
+    def graphql_config(
+        self, force: bool = False, refused: tuple[str, str] | None = None
+    ) -> tuple[str, str]:
         """Resolve (endpoint, api_key) for the AppSync GraphQL backend.
 
         Reads the anonymous key from page-level Next data and the production
@@ -378,12 +380,17 @@ class GoodreadsClient:
         Discovery runs under a lock: when several tool calls arrive together
         on a fresh process, the first one discovers and the rest wait for its
         answer instead of each fetching the page and bundle themselves.
+
+        `refused` is a pair AppSync just turned away with 401/403. Discovery
+        runs again unless the cached pair already differs from it, which
+        means another call rediscovered first; calls refused together then
+        share one rediscovery. `force` rediscovers unconditionally.
         """
-        if self._graphql_config and not force:
-            return self._graphql_config
+        if (cached := self._cached_config(force, refused)) is not None:
+            return cached
         with self._config_lock:
-            if self._graphql_config and not force:
-                return self._graphql_config
+            if (cached := self._cached_config(force, refused)) is not None:
+                return cached
             page = self.get(CONFIG_DISCOVERY_PATH).text
             app_chunk = APP_CHUNK_RE.search(page)
             if not app_chunk:
@@ -397,6 +404,14 @@ class GoodreadsClient:
             except ValueError:
                 self._graphql_config = parse_appsync_config(bundle)
             return self._graphql_config
+
+    def _cached_config(
+        self, force: bool, refused: tuple[str, str] | None
+    ) -> tuple[str, str] | None:
+        cached = self._graphql_config
+        if cached is None or force or cached == refused:
+            return None
+        return cached
 
     def _graphql_post(
         self, endpoint: str, key: str, query: str, variables: dict[str, Any] | None
@@ -418,7 +433,9 @@ class GoodreadsClient:
         null and an error whose `path` is that field alone.
 
         If the key/endpoint has rotated (401/403), re-discovers it once and
-        retries before giving up.
+        retries before giving up. When rediscovery finds the pair that was
+        just refused, the refusal is not a rotation: the original error is
+        raised without posting the same pair again.
         """
         endpoint, key = self.graphql_config()
         try:
@@ -426,7 +443,10 @@ class GoodreadsClient:
         except httpx.HTTPStatusError as e:
             if e.response.status_code not in (401, 403):
                 raise
-            endpoint, key = self.graphql_config(force=True)
+            refused = (endpoint, key)
+            endpoint, key = self.graphql_config(refused=refused)
+            if (endpoint, key) == refused:
+                raise
             resp = self._graphql_post(endpoint, key, query, variables)
         body = resp.json()
         data = body.get("data")
