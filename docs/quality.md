@@ -65,9 +65,9 @@ broken in production.**
 The mitigation is procedural, not mechanical: run the live suite after any
 parsing change ([review rubric](review-rubric.md) §2), and before a release.
 
-`server.py` at 74% is the second-order version of the same thing — the
-uncovered lines are mostly GraphQL tool bodies whose behavior is only
-meaningfully exercised against live data.
+`server.py` reaching 100% doesn't change this: full statement coverage from
+fixtures still can't exercise how the GraphQL tool bodies behave against
+Goodreads' actual, changing responses.
 
 ## What would actually improve quality
 
