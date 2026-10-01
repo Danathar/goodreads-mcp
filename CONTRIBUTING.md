@@ -7,8 +7,8 @@ python3.11 -m venv .venv
 .venv/bin/pip install -e ".[test]"
 ```
 
-The test suite needs Python 3.11 or newer (it reads TOML with the standard
-library's `tomllib`); the package itself supports 3.10 (`requires-python`).
+The package and its test suite both need Python 3.11 or newer
+(`requires-python`).
 
 ## Test
 
