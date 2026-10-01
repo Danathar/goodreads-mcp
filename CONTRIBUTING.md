@@ -81,7 +81,9 @@ The bundle is packed and started, and the tests run, in jobs that can only read
 the repository. The job that tags and publishes runs no code from PyPI or npm,
 so a compromised dependency cannot reach its write token, and it checks the
 `.mcpb` it attaches against the digest `build-mcpb` recorded, so a bundle
-replaced after the pack stops the release. Those jobs run on every release
+replaced after the pack stops the release. `publish-pypi` checks the wheel
+and sdist it downloads against the digest `build-pypi` recorded in the same
+way, before Trusted Publishing signs them. Those jobs run on every release
 run, including a month that releases nothing.
 
 If a release fails after its tag is pushed, re-run the failed job: it finishes

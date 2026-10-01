@@ -118,6 +118,9 @@ _LAUNCH_STEP = "Start the packed bundle the way the manifest launches it"
 
 _PYPI_BUILD_STEP = "Build the PyPI distributions"
 _PYPI_UPLOAD_STEP = "Upload the PyPI distributions"
+_PYPI_DIGEST_STEP = "Record the distributions' digest"
+_PYPI_DOWNLOAD_STEP = "Download the PyPI distributions"
+_PYPI_CHECK_STEP = "Check the distributions are the ones build-pypi built"
 
 # The release job's `run:` steps.
 _EXECUTED = {
@@ -135,7 +138,8 @@ _EXECUTED = {
 }
 
 # The build jobs' `run:` steps.
-_BUILD_EXECUTED = {_PYPI_BUILD_STEP}
+_BUILD_EXECUTED = {_PYPI_BUILD_STEP, _PYPI_DIGEST_STEP}
+_PUBLISH_PYPI_EXECUTED = {_PYPI_CHECK_STEP}
 _BUILD_MCPB_EXECUTED = {_PACK_STEP, _COMPILED_STEP, _DIGEST_STEP}
 _VERIFY_MCPB_EXECUTED = {_PIP_STEP, _TEST_STEP, _LAUNCH_STEP}
 
@@ -2237,9 +2241,10 @@ def test_the_distributions_are_built_before_any_third_party_code_runs():
         "actions/checkout",
         "astral-sh/setup-uv",
         "",
+        "",
         "actions/upload-artifact",
     ]
-    assert _BUILD_PYPI.run_step_names() == {_PYPI_BUILD_STEP}
+    assert _BUILD_PYPI.run_step_names() == {_PYPI_BUILD_STEP, _PYPI_DIGEST_STEP}
     assert _BUILD_PYPI.steps[0].with_["persist-credentials"] == "false"
     job = _job_text("build-pypi")
     assert "    permissions:\n      contents: read\n" in job
@@ -2302,12 +2307,128 @@ def test_the_publish_job_runs_only_when_the_release_job_released():
     assert _step(_PUBLISH_STEP).if_ == _WRITE_IF
     assert [step.uses.split("@")[0] for step in _PUBLISH_PYPI.steps] == [
         "actions/download-artifact",
+        "",
         "pypa/gh-action-pypi-publish",
     ]
-    assert _PUBLISH_PYPI.step("Download the PyPI distributions").with_["name"] == "pypi-dist"
+    assert _PUBLISH_PYPI.step(_PYPI_DOWNLOAD_STEP).with_["name"] == "pypi-dist"
     assert "  publish-pypi:" in _RELEASE_TEXT
     job = _RELEASE_TEXT.split("  publish-pypi:\n", 1)[1]
     assert "    needs: [build-pypi, release]\n    if: needs.release.outputs.released == 'true'\n" in job
+
+
+def _dist(tmp_path: Path, files: dict[str, bytes] | None = None) -> Path:
+    """A `dist/` holding a wheel and an sdist, as `uv build` leaves it."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    for name, data in (_BUILT if files is None else files).items():
+        (dist / name).write_bytes(data)
+    return dist
+
+
+_BUILT = {
+    "goodreads_mcp_ai-2026.10.0-py3-none-any.whl": b"PK wheel built by build-pypi",
+    "goodreads_mcp_ai-2026.10.0.tar.gz": b"sdist built by build-pypi",
+}
+
+
+def _built_digest(tmp_path: Path) -> str:
+    output = tmp_path / "github-output"
+    _dist(tmp_path)
+    result = _run(_BUILD_PYPI.body(_PYPI_DIGEST_STEP), tmp_path, github_output=output)
+    assert result.returncode == 0, result.stderr
+    shutil.rmtree(tmp_path / "dist")
+    return _outputs(output)["sha256"]
+
+
+def test_the_distributions_digest_is_a_job_output_the_publish_job_reads():
+    """The digest crosses jobs as an output, fixed when `build-pypi` ends.
+
+    `pypi-dist` is looked up by name, and any action `verify-mcpb` runs after
+    its unpinned closures holds the artifact token that can delete it and
+    upload another. A job output cannot be replaced that way.
+    """
+    assert _BUILD_PYPI.step(_PYPI_DIGEST_STEP).id == "digest"
+    assert re.search(
+        r"^    outputs:\n(?:      #.*\n)*      sha256: \$\{\{ steps\.digest\.outputs\.sha256 \}\}$",
+        _job_text("build-pypi"),
+        re.M,
+    )
+    names = [step.name for step in _BUILD_PYPI.steps]
+    assert names.index(_PYPI_BUILD_STEP) < names.index(_PYPI_DIGEST_STEP) < names.index(_PYPI_UPLOAD_STEP)
+    check = _PUBLISH_PYPI.step(_PYPI_CHECK_STEP)
+    assert check.env["EXPECTED_SHA256"] == "${{ needs.build-pypi.outputs.sha256 }}"
+    assert not check.if_, "a skipped check lets the publish go ahead unchecked"
+    order = [step.name for step in _PUBLISH_PYPI.steps]
+    assert order == [_PYPI_DOWNLOAD_STEP, _PYPI_CHECK_STEP, "Publish to PyPI"]
+    assert _PUBLISH_PYPI.step(_PYPI_DOWNLOAD_STEP).with_["path"] == "dist/"
+
+
+def test_the_publish_job_accepts_the_distributions_build_pypi_built(tmp_path: Path):
+    expected = _built_digest(tmp_path)
+    _dist(tmp_path)
+
+    result = _run(_PUBLISH_PYPI.body(_PYPI_CHECK_STEP), tmp_path, env={"EXPECTED_SHA256": expected})
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {**_BUILT, "goodreads_mcp_ai-2026.10.0.tar.gz": b"sdist replaced after the build"},
+        {**_BUILT, "goodreads_mcp_ai-2026.10.0-cp313-cp313-manylinux_x86_64.whl": b"PK extra"},
+        {"goodreads_mcp_ai-2026.10.0-py3-none-any.whl": _BUILT["goodreads_mcp_ai-2026.10.0-py3-none-any.whl"]},
+        {
+            "goodreads_mcp_ai-2026.10.1-py3-none-any.whl": _BUILT["goodreads_mcp_ai-2026.10.0-py3-none-any.whl"],
+            "goodreads_mcp_ai-2026.10.0.tar.gz": _BUILT["goodreads_mcp_ai-2026.10.0.tar.gz"],
+        },
+    ],
+    ids=["changed", "added", "removed", "renamed"],
+)
+def test_the_publish_job_refuses_distributions_replaced_after_the_build(tmp_path: Path, files: dict[str, bytes]):
+    expected = _built_digest(tmp_path)
+    _dist(tmp_path, files)
+
+    result = _run(_PUBLISH_PYPI.body(_PYPI_CHECK_STEP), tmp_path, env={"EXPECTED_SHA256": expected})
+
+    assert result.returncode == 1
+    assert "but build-pypi built " + expected in result.stderr
+
+
+def test_the_publish_job_refuses_when_build_pypi_recorded_no_digest(tmp_path: Path):
+    """An output that did not resolve is empty, and empty must not match anything."""
+    _dist(tmp_path)
+
+    result = _run(_PUBLISH_PYPI.body(_PYPI_CHECK_STEP), tmp_path, env={"EXPECTED_SHA256": ""})
+
+    assert result.returncode == 1
+    assert "no digest" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("workflow", "step"), [(_BUILD_PYPI, _PYPI_DIGEST_STEP), (_PUBLISH_PYPI, _PYPI_CHECK_STEP)], ids=["record", "check"]
+)
+def test_the_distributions_digest_refuses_an_empty_dist(tmp_path: Path, workflow, step):
+    """An empty `dist/` has a digest too; it must not be recorded, or matched."""
+    _dist(tmp_path, {})
+    output = tmp_path / "github-output"
+
+    result = _run(workflow.body(step), tmp_path, env={"EXPECTED_SHA256": "x"}, github_output=output)
+
+    assert result.returncode == 1
+    assert "::error::dist/ holds no distribution" in result.stderr
+    assert _outputs(output) == {}
+
+
+def test_the_distributions_digest_refuses_a_directory_in_dist(tmp_path: Path):
+    """A directory's name alone is not its contents; it stops the check instead."""
+    expected = _built_digest(tmp_path)
+    _dist(tmp_path)
+    (tmp_path / "dist" / "extra").mkdir()
+
+    result = _run(_PUBLISH_PYPI.body(_PYPI_CHECK_STEP), tmp_path, env={"EXPECTED_SHA256": expected})
+
+    assert result.returncode != 0
 
 
 # --------------------------------------------------------------------------
@@ -2346,8 +2467,9 @@ def test_the_cleanup_step_succeeds_when_there_is_nothing_to_clean(tmp_path: Path
         (_BUILD_PYPI, _BUILD_EXECUTED),
         (_BUILD_MCPB, _BUILD_MCPB_EXECUTED),
         (_VERIFY_MCPB, _VERIFY_MCPB_EXECUTED),
+        (_PUBLISH_PYPI, _PUBLISH_PYPI_EXECUTED),
     ],
-    ids=["release", "prepare", "build-pypi", "build-mcpb", "verify-mcpb"],
+    ids=["release", "prepare", "build-pypi", "build-mcpb", "verify-mcpb", "publish-pypi"],
 )
 def test_every_run_step_in_the_release_workflow_is_executed_by_this_file(workflow, executed):
     """A new step must be run here, or listed here as deliberately not run."""

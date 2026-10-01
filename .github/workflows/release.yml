@@ -265,6 +265,12 @@ jobs:
     # `release` really published. The build failing fails `release`.
     permissions:
       contents: read
+    outputs:
+      # The digest of the distributions as built. `publish-pypi` checks the
+      # artifact it downloads against it: a job output is fixed when this job
+      # ends, while the artifact can be replaced by name from any later step
+      # of the run, `verify-mcpb`'s included.
+      sha256: ${{ steps.digest.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -279,6 +285,23 @@ jobs:
         run: |
           # `uv build` runs only the `[build-system]` backend, hatchling.
           uv build --out-dir dist
+
+      # One digest over every file's name and sha256, so a file added,
+      # removed, renamed or changed in `dist/` changes it.
+      - name: Record the distributions' digest
+        id: digest
+        run: |
+          set -euo pipefail
+          cd dist
+          set -- *
+          if [ "$#" -eq 0 ] || [ ! -e "$1" ]; then
+            echo "::error::dist/ holds no distribution to record" >&2
+            exit 1
+          fi
+          sha256sum -- "$@"
+          sha256=$(sha256sum -- "$@" | sha256sum | cut -d' ' -f1)
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          echo "dist/: sha256 $sha256"
 
       - name: Upload the PyPI distributions
         uses: actions/upload-artifact@v4
@@ -925,11 +948,12 @@ jobs:
   publish-pypi:
     # Trusted Publishing (OIDC): no stored token. Only this job can mint an
     # id-token; `release` and the jobs that run tests and npx cannot. The
-    # token signs the `pypi-dist` artifact exactly as `build-pypi` uploaded
-    # it, and that job runs no third-party code in its checkout before the
-    # build, so the split protects the artifact as well as the token. It runs
-    # only after the release job really published, so a dry run, a skipped
-    # month or a refused version never reaches PyPI.
+    # token signs the `pypi-dist` artifact only after it is checked against
+    # the digest `build-pypi` recorded, and that job runs no third-party code
+    # in its checkout before the build, so the split protects the artifact
+    # as well as the token. It runs only after the release job really
+    # published, so a dry run, a skipped month or a refused version never
+    # reaches PyPI.
     needs: [build-pypi, release]
     if: needs.release.outputs.released == 'true'
     runs-on: ubuntu-latest
@@ -945,6 +969,31 @@ jobs:
         with:
           name: pypi-dist
           path: dist/
+
+      # `verify-mcpb` runs unpinned closures, and any action it runs after
+      # them holds the run's artifact token: code there can delete
+      # `pypi-dist` and upload another under the same name. The digest
+      # `build-pypi` recorded is a job output, which nothing after it can
+      # change, so distributions that are not the ones built never reach
+      # Trusted Publishing.
+      - name: Check the distributions are the ones build-pypi built
+        env:
+          EXPECTED_SHA256: ${{ needs.build-pypi.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          cd dist
+          set -- *
+          if [ "$#" -eq 0 ] || [ ! -e "$1" ]; then
+            echo "::error::dist/ holds no distribution to publish" >&2
+            exit 1
+          fi
+          sha256sum -- "$@"
+          actual=$(sha256sum -- "$@" | sha256sum | cut -d' ' -f1)
+          if [ "$actual" != "$EXPECTED_SHA256" ]; then
+            echo "::error::dist/ has sha256 $actual, but build-pypi built ${EXPECTED_SHA256:-no digest}; the artifact was replaced after it was uploaded." >&2
+            exit 1
+          fi
+          echo "dist/: sha256 $actual, as build-pypi built it"
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
