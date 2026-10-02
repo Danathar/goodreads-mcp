@@ -78,7 +78,7 @@ jobs:
             *) echo "::error::$ACTOR lacks write access (got '$role'); refusing." ; exit 1 ;;
           esac
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
