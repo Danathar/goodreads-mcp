@@ -1,0 +1,27 @@
+# Propose updates for the GitHub Actions the workflows call.
+#
+# Pinning every `uses:` to a commit SHA (#260) makes a run reproducible and
+# stops an upstream tag being moved under us, but a pin never moves on its own.
+# Without something proposing updates, "pinned" turns into "stuck on whatever
+# was current the day it was pinned", security fixes included.
+#
+# Dependabot reads the `# vN` comment beside each SHA and moves both together,
+# so a bump stays readable in review. Until the pins land it still works on the
+# floating tags, offering the next major version as a pull request.
+#
+# Only github-actions is configured. Python and Node dependencies are a
+# separate decision, not an oversight.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # One pull request a week for all actions, not one per action, so the
+    # bumps are reviewed rather than waved through.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
