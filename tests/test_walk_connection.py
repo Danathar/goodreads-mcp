@@ -15,13 +15,15 @@ walker itself rather than per tool:
 * `cursor_only`, for `getReviews`, whose `hasNextPage` is always null and
   whose last page carries an empty cursor (checked live on 2026-10-03).
 
-The last section pins the structure: no tool body reads `pageInfo` or runs a
+The middle section checks what each caller does with the walk: the request
+budget, `has_more` and `totalCount`. The last section pins the structure: no tool body reads `pageInfo` or runs a
 `while` loop of its own, so a fourth copy of the rules cannot creep back in.
 """
 
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 from typing import Any
 
@@ -106,9 +108,139 @@ def test_cursor_only_follows_the_cursor_when_has_next_page_is_null():
     assert fetch.tokens == [None, "a"]
 
 
-def test_a_missing_connection_or_page_info_is_a_last_page():
-    fetch = _Pages({}, _page([_EDGE], None, False))
+@pytest.mark.parametrize("missing", [{}, None])
+def test_a_missing_connection_or_page_info_is_a_last_page(missing):
+    fetch = _Pages(missing, _page([_EDGE], None, False))
     assert _walk(fetch) == [None]
+
+
+def test_a_cursor_that_comes_back_later_in_the_walk_ends_it():
+    """Not only the cursor just followed: any cursor already followed."""
+    fetch = _Pages(*(_page([_EDGE], token) for token in ("a", "b", "a", "b", "a")))
+    assert _walk(fetch) == ["a", "b", "a"]
+    assert fetch.tokens == [None, "a", "b"]
+
+
+# ------------------------------------------------- what callers do with it
+
+
+class _Graphql:
+    """A `gr.graphql` stand-in: serves queued responses per query, counts calls."""
+
+    def __init__(self, pages: dict[str, list[dict[str, Any]]]):
+        self.pages = {query: list(queue) for query, queue in pages.items()}
+        self.calls: list[str] = []
+
+    def __call__(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append(query)
+        return self.pages[query].pop(0)
+
+    def count(self, query: str) -> int:
+        return self.calls.count(query)
+
+
+_BOOK = {"getBookByLegacyId": {"legacyId": 1, "title": "A Book", "work": {"id": "kca://work/1"}}}
+
+
+def _entries(n: int, start: int = 0) -> list[dict[str, Any]]:
+    return [{"rank": start + i, "count": 1, "node": {"legacyId": start + i}} for i in range(n)]
+
+
+@pytest.mark.parametrize(
+    ("tool", "query", "pages"),
+    [
+        (lambda: server.popular_books(2024, limit=0), "_Q_TOP_LIST", {}),
+        (lambda: server.get_reviews("1", limit=0), "_Q_REVIEWS", {"_Q_BOOK_BY_LEGACY": [_BOOK]}),
+    ],
+    ids=["popular_books", "get_reviews"],
+)
+def test_a_zero_limit_sends_no_page_request(monkeypatch, tool, query, pages):
+    """`limit=0` asks for nothing, so it costs no page of results."""
+    graphql = _Graphql({getattr(server, q): v for q, v in pages.items()})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    result = tool()
+
+    assert graphql.count(getattr(server, query)) == 0
+    assert (result["returned"], result["has_more"]) == (0, False)
+
+
+def test_popular_books_has_no_more_when_its_last_page_exactly_fills_the_limit(monkeypatch):
+    graphql = _Graphql({server._Q_TOP_LIST: [{"getTopList": _page(_entries(5), None, False)}]})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    result = server.popular_books(2024, limit=5)
+
+    assert (result["returned"], result["has_more"]) == (5, False)
+
+
+def test_the_helper_keeps_the_total_count_of_the_first_page(monkeypatch):
+    """A later page without `totalCount` must not erase it, or the unread
+    remainder it proves stops showing up in `has_more`."""
+    edges = [{"node": {"id": n}} for n in range(server._DISCOVERY_PAGE_SIZE)]
+    first = {**_page(edges, "2"), "totalCount": 3 * len(edges)}
+    graphql = _Graphql({"Q": [{"conn": first}, {"conn": _page(edges, None, False)}]})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    found, has_more, total = server._paginated_graphql_edges("Q", "conn", {}, server._MAX_DISCOVERY)
+
+    assert (len(found), has_more, total) == (2 * len(edges), True, 3 * len(edges))
+
+
+def _after_a_page_of_nulls(size: int, want: int, connection: str) -> list[dict[str, Any]]:
+    """One page of only null edges, then full pages until `want` is reached."""
+    pages = [{connection: _page([None] * size, "1")}]
+    for n in range(-(-want // size)):
+        last = (n + 1) * size >= want
+        edges = _entries(size, start=n * size)
+        pages.append({connection: _page(edges, None if last else str(n + 2), not last)})
+    return pages
+
+
+def test_a_page_of_nulls_leaves_popular_books_room_for_a_full_walk(monkeypatch):
+    """The page cap is twice a full walk so that a page of nulls, which no
+    longer ends the walk (#267), cannot cut the chart short."""
+    pages = _after_a_page_of_nulls(server._POPULAR_PAGE_SIZE, server._MAX_POPULAR, "getTopList")
+    monkeypatch.setattr(server.gr, "graphql", _Graphql({server._Q_TOP_LIST: pages}))
+
+    result = server.popular_books(2024, limit=server._MAX_POPULAR)
+
+    assert result["returned"] == server._MAX_POPULAR
+
+
+def test_a_page_of_nulls_leaves_the_helper_room_for_a_full_walk(monkeypatch):
+    pages = _after_a_page_of_nulls(server._DISCOVERY_PAGE_SIZE, server._MAX_DISCOVERY, "conn")
+    monkeypatch.setattr(server.gr, "graphql", _Graphql({"Q": pages}))
+
+    found, has_more, _ = server._paginated_graphql_edges("Q", "conn", {}, server._MAX_DISCOVERY)
+
+    assert (len(found), has_more) == (server._MAX_DISCOVERY, False)
+
+
+_DESIGN = _SERVER.parent.parent / "docs" / "design.md"
+
+
+def test_the_design_doc_states_the_page_caps_the_code_enforces():
+    """`docs/design.md` is where a reader learns how many requests one call
+    may cost; every number in its polite-client bullet is a cap in the code."""
+    text = " ".join(_DESIGN.read_text(encoding="utf-8").split())
+    bullet = text[text.index("**Polite client.**") :].split(" - **", 1)[0]
+    stated = {
+        "get_reviews": r"`get_reviews` caps paging at (\d+) reviews and (\d+) pages per call",
+        "discovery": r"discovery tools page in batches of (\d+) up to (\d+) results and (\d+) pages",
+        "popular_books": r"`popular_books` in batches of (\d+) up to (\d+) results and (\d+) pages",
+    }
+    found = {}
+    for name, pattern in stated.items():
+        match = re.search(pattern, bullet)
+        assert match, f"docs/design.md no longer states the {name} caps as {pattern!r}"
+        found[name] = tuple(int(n) for n in match.groups())
+
+    assert found == {
+        "get_reviews": (server._MAX_REVIEWS, server._MAX_REVIEW_PAGES),
+        "discovery": (server._DISCOVERY_PAGE_SIZE, server._MAX_DISCOVERY, server._MAX_DISCOVERY_PAGES),
+        "popular_books": (server._POPULAR_PAGE_SIZE, server._MAX_POPULAR, server._MAX_POPULAR_PAGES),
+    }
 
 
 # ---------------------------------------------------- one copy of the rules
