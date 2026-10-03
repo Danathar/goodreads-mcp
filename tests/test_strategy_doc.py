@@ -3,7 +3,7 @@
 The page holds no volatile numbers, so there is little to pin. What can drift is
 the names its commands depend on: a `gh run list --workflow X.yml` that names a
 renamed workflow prints nothing and looks like "no runs", and a drift-issue
-search for a title the workflow no longer files prints `[]` and looks like
+query for a title the workflow no longer files prints nothing and looks like
 "no drift". Both fail silently, so each is joined to its source here.
 """
 
@@ -22,14 +22,12 @@ def test_every_workflow_the_page_reads_exists():
     assert not missing, f"docs/strategy.md reads workflows that do not exist: {missing}"
 
 
-def test_drift_issue_search_matches_the_title_the_workflow_files():
-    search = re.search(r"--search '([^']+) in:title'", STRATEGY)
-    assert search, "docs/strategy.md no longer searches for the nightly drift issue"
-    title = re.search(r'TITLE: "([^"]+)"', NIGHTLY)
-    assert title, "nightly-compliance.yml no longer sets a drift issue TITLE"
-    assert title.group(1).startswith(search.group(1)), (
-        f"search {search.group(1)!r} would not find the issue titled {title.group(1)!r}"
-    )
+def test_drift_issue_title_on_the_page_equals_the_one_the_workflow_files():
+    page = re.search(r'select\(\.title == "([^"]+)"', STRATEGY)
+    assert page, "docs/strategy.md no longer matches the nightly drift issue by exact title"
+    workflow = re.search(r'TITLE: "([^"]+)"', NIGHTLY)
+    assert workflow, "nightly-compliance.yml no longer sets a drift issue TITLE"
+    assert page.group(1) == workflow.group(1)
 
 
 def test_schedules_the_page_states_match_the_workflows():

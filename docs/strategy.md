@@ -78,15 +78,17 @@ gh run list --repo Danathar/goodreads-mcp --workflow nightly-compliance.yml \
   --event schedule --limit 7 --json createdAt,status,conclusion \
   --jq '.[] | "\(.createdAt) \(.status) \(.conclusion)"'
 
-# is a drift issue open? (prints [] when none is)
-gh issue list --repo Danathar/goodreads-mcp --state open \
-  --search 'Nightly live check failing in:title' --json number,title
+# is a drift issue open? An exact title match on an issue opened by the
+# workflow's token; prints nothing, and exits 0, when none is open
+gh issue list --repo Danathar/goodreads-mcp --state open --limit 1000 \
+  --json number,title,author --jq '.[] | select(.title == "Nightly live check failing — Goodreads may have changed" and (.author.login == "app/github-actions" or .author.login == "github-actions[bot]" or .author.login == "github-actions")) | "#\(.number) \(.title)"'
 ```
 
 On track: recent runs are `completed success` and no drift issue is open.
 A run with `status` other than `completed` is still in flight and says
 nothing yet. One failure is not proof of drift, since the run already retries
-once; several in a row are.
+once and transient network or rate-limit failures look the same; several in a
+row warrant investigation.
 
 ### 2. Is the offline gate green on `main`? (now)
 
@@ -123,10 +125,11 @@ the whole history, left as it was read.
 
 Two things to know before running them:
 
-- The range filters (`.number >= 31 and .number <= 40`) pin a query. The
-  `--limit` does not: `gh pr list` returns only the newest `--limit` PRs, so a
-  limit smaller than the repository's PR count silently drops the old ones.
-  The `metrics.md` commands use `--limit 1000` for that reason.
+- The range filters (`.number >= 31 and .number <= 40`) pin a query. A
+  `gh pr list --limit N` does not: it returns only the newest N PRs, so a
+  history that outgrows N silently drops the old ones. The `metrics.md` PR
+  commands therefore read the pulls API with `gh api --paginate`, which has
+  no cap.
 - Findings arrive as inline comments and as review bodies. The inline-only
   command undercounts; `metrics/2026-09-24.md` counts both.
 
