@@ -127,6 +127,7 @@ The offline suite runs on fixtures; CI runs it with `pytest-cov` and enforces a 
 - [docs/design.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/design.md) — design notes: the data surfaces, WAF and login handling, politeness and concurrency
 - [docs/roadmap.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/roadmap.md) — ideas not built yet
 - [docs/maintenance.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/maintenance.md) — how this repository is maintained (Hive, ACMM L5, human review)
+- [docs/ai-ops-runbook.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/ai-ops-runbook.md) — what to check and do for each automated signal
 - [docs/quality.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/quality.md) — what the tests and numbers do and do not prove
 - [docs/risk-tiers.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/risk-tiers.md) — the risk tier every pull request declares
 - [docs/review-rubric.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/review-rubric.md) — the review checklist

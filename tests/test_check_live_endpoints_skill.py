@@ -77,6 +77,7 @@ _QUOTES_THE_COMMAND = (
     ".claude/README.md",
     ".claude/memory/corrections.md",
     ".github/copilot-instructions.md",
+    "docs/ai-ops-runbook.md",
     "docs/quality.md",
     "docs/review-rubric.md",
     "docs/risk-tiers.md",

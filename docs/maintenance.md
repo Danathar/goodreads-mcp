@@ -12,6 +12,7 @@ Each pass is meant to leave the next one starting from a better position:
 - **Risk is classified, not guessed.** Every pull request declares a [risk tier](risk-tiers.md) in its description — a judgment call a reviewer can disagree with, not an automated verdict. The [labeler](../.github/labeler.yml) applies path labels (`client`, `server`, `live-tests`, `ci`) that inform that call without determining it. Either way a change to the client or the GraphQL config discovery is held to a different standard than a change to a doc.
 - **Lessons are written down where the next pass will read them.** [`reflections/`](reflections/) holds what a piece of work taught about this codebase, [review-rubric.md](review-rubric.md) is the review checklist, and [AGENTS.md](../AGENTS.md) is the standing brief.
 - **The measurement is of outcomes, not activity.** [`metrics.md`](metrics.md) tracks acceptance rate, time to merge and review rounds — not lines written or PRs opened.
+- **Signals have a written response.** [`ai-ops-runbook.md`](ai-ops-runbook.md) says, for each automated signal here (the nightly drift issue, a red `test`, a refused release, an agent pull request that misbehaves), how the maintainer notices it, what to check first and what to do.
 
 [quality.md](quality.md) is honest about what the numbers do *not* prove — chiefly that no fixture-backed test can detect the failure mode that actually threatens this project.
 
