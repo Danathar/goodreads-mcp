@@ -39,7 +39,7 @@ import importlib.metadata
 import inspect
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 from urllib.parse import unquote
 
 import anyio  # mcp's own async layer (it requires anyio>=4.5), not a new dependency
@@ -416,9 +416,11 @@ _DISCOVERY_PAGE_SIZE = 20
 # A page of nulls alone does not end a walk, so the cap on results no longer
 # bounds the requests; this does, at twice the pages a full walk needs.
 _MAX_DISCOVERY_PAGES = 2 * -(-_MAX_DISCOVERY // _DISCOVERY_PAGE_SIZE)
-# popular_books paginates; cap total and page size.
+# popular_books paginates; cap total, page size and pages, the last at twice
+# the pages a full walk needs, as for discovery.
 _MAX_POPULAR = 50
 _POPULAR_PAGE_SIZE = 30
+_MAX_POPULAR_PAGES = 2 * -(-_MAX_POPULAR // _POPULAR_PAGE_SIZE)
 # compare_books fetches one book page per id; cap the fan-out.
 _MAX_COMPARE = 10
 
@@ -427,6 +429,46 @@ def _validate_discovery_limit(limit: int) -> int:
     if limit < 0:
         raise ValueError("limit must be zero or greater.")
     return min(limit, _MAX_DISCOVERY)
+
+
+def _walk_connection(
+    fetch_page: Callable[[str | None], dict[str, Any]],
+    max_pages: int,
+    *,
+    cursor_only: bool = False,
+) -> Iterator[tuple[dict[str, Any], str | None]]:
+    """Walk a cursor-paginated GraphQL connection, one page per step.
+
+    ``fetch_page(token)`` requests one page (``token`` is None for the first)
+    and returns the connection object. Yields ``(connection, next_token)``
+    per page, where ``next_token`` is the cursor to the next page, or None
+    when this page is the last: ``hasNextPage`` is false or there is no
+    ``nextPageToken``. ``cursor_only`` trusts the cursor alone, for a
+    connection whose ``hasNextPage`` is always null (``getReviews``).
+
+    Every paginated tool walks through here, so this is the one place that
+    decides when a walk stops: after ``max_pages`` requests, on the last
+    page, after a page whose ``edges`` list is empty (a page of nulls alone
+    does not end it), or on a cursor already followed. The caller stops
+    sooner by leaving the loop once it has what it wants, and reports
+    ``has_more`` when ``next_token`` is set or it left edges unread.
+    """
+    token: str | None = None
+    seen_tokens: set[str] = set()
+    for _ in range(max_pages):
+        connection = fetch_page(token) or {}
+        info = connection.get("pageInfo") or {}
+        next_token = info.get("nextPageToken") or None
+        if not cursor_only and not info.get("hasNextPage"):
+            next_token = None
+        yield connection, next_token
+        if not next_token or not connection.get("edges"):
+            return
+        # A server that hands back the same cursor must not loop forever.
+        if next_token in seen_tokens:
+            return
+        seen_tokens.add(next_token)
+        token = next_token
 
 
 def _paginated_graphql_edges(
@@ -446,17 +488,7 @@ def _paginated_graphql_edges(
     if want == 0:
         return [], False, None
 
-    collected: list[dict[str, Any]] = []
-    token: str | None = None
-    total_count: int | None = None
-    has_more = False
-    seen_tokens: set[str] = set()
-    # Edges read so far, the skipped null ones included: they are not unread
-    # results, so they must not make `totalCount` report more.
-    read = 0
-    pages = 0
-
-    while len(collected) < want and pages < _MAX_DISCOVERY_PAGES:
+    def fetch_page(token: str | None) -> dict[str, Any]:
         # Goodreads' cursor is a page number and the server derives the
         # offset from the limit sent with each request, so the page size
         # must stay constant across the walk. Overshoot is trimmed below.
@@ -464,8 +496,16 @@ def _paginated_graphql_edges(
         if token:
             pagination["after"] = token
         page_variables = {**variables, "pagination": pagination}
-        connection = gr.graphql(query, page_variables).get(connection_name) or {}
-        pages += 1
+        return gr.graphql(query, page_variables).get(connection_name) or {}
+
+    collected: list[dict[str, Any]] = []
+    total_count: int | None = None
+    has_more = False
+    # Edges read so far, the skipped null ones included: they are not unread
+    # results, so they must not make `totalCount` report more.
+    read = 0
+
+    for connection, next_token in _walk_connection(fetch_page, _MAX_DISCOVERY_PAGES):
         if total_count is None:
             total_count = connection.get("totalCount")
 
@@ -474,19 +514,9 @@ def _paginated_graphql_edges(
         read += len(raw_edges)
         remaining = want - len(collected)
         collected.extend(page_edges[:remaining])
-
-        info = connection.get("pageInfo") or {}
-        next_token = info.get("nextPageToken")
-        has_more = bool(info.get("hasNextPage") and next_token)
-        if len(page_edges) > remaining:
-            has_more = True
-        # An empty page ends the walk; a page of nulls alone does not.
-        if len(collected) >= want or not raw_edges or not has_more:
+        has_more = bool(next_token) or len(page_edges) > remaining
+        if len(collected) >= want:
             break
-        if next_token in seen_tokens:
-            break
-        seen_tokens.add(next_token)
-        token = next_token
 
     if total_count is not None and read < total_count:
         has_more = True
@@ -767,20 +797,21 @@ def get_reviews(
     if max_rating is not None:
         filters["ratingMax"] = max_rating
 
-    reviews: list[dict[str, Any]] = []
-    total: int | None = None
-    token: str | None = None
-    has_more = False
-    seen_tokens: set[str] = set()
-    pages = 0
-    while len(reviews) < want and pages < _MAX_REVIEW_PAGES:
+    def fetch_page(token: str | None) -> dict[str, Any]:
         pagination: dict[str, Any] = {"limit": _REVIEW_PAGE_SIZE}
         if token:
             pagination["after"] = token
-        conn = gr.graphql(
+        return gr.graphql(
             _Q_REVIEWS, {"filters": filters, "pagination": pagination}
         ).get("getReviews") or {}
-        pages += 1
+
+    reviews: list[dict[str, Any]] = []
+    total: int | None = None
+    has_more = False
+    # getReviews answers hasNextPage with null on every page and marks its
+    # last page with an empty cursor, so the cursor alone says more follow.
+    walk = _walk_connection(fetch_page, _MAX_REVIEW_PAGES, cursor_only=True)
+    for conn, next_token in walk if want else ():
         if total is None:
             total = conn.get("totalCount")
         # Null edges and null reviews are skipped: they are not reviews, so
@@ -811,15 +842,10 @@ def get_reviews(
             if len(reviews) >= want:
                 unread = len(edges) - index - 1
                 break
-        token = (conn.get("pageInfo") or {}).get("nextPageToken")
         # A remaining cursor means unread reviews, even on an empty page.
-        has_more = bool(unread or token)
-        if not token or not raw_edges:
+        has_more = bool(unread or next_token)
+        if len(reviews) >= want:
             break
-        # A server that hands back the same cursor must not loop forever.
-        if token in seen_tokens:
-            break
-        seen_tokens.add(token)
 
     return {
         "book_id": _book_id(book.get("legacyId")),
@@ -1051,13 +1077,9 @@ def popular_books(
     )
     want = min(limit, _MAX_POPULAR)
 
-    entries: list[dict[str, Any]] = []
-    token: str | None = None
-    has_more = False
-    seen_tokens: set[str] = set()
-    while len(entries) < want:
+    def fetch_page(token: str | None) -> dict[str, Any]:
         try:
-            page = gr.graphql(
+            return gr.graphql(
                 _Q_TOP_LIST,
                 {
                     "name": name,
@@ -1077,25 +1099,22 @@ def popular_books(
             raise ValueError(
                 f"Goodreads has no popular-by-date chart for {period}."
             ) from e
+
+    entries: list[dict[str, Any]] = []
+    has_more = False
+    walk = _walk_connection(fetch_page, _MAX_POPULAR_PAGES)
+    for page, next_token in walk if want else ():
         edges = [e for e in (page.get("edges") or []) if e and e.get("node")]
         remaining = want - len(entries)
         for edge in edges[:remaining]:
             entry = {"rank": edge.get("rank"), "count": edge.get("count")}
             entry.update(_node_summary(edge["node"]))
             entries.append(entry)
-        info = page.get("pageInfo") or {}
-        token = info.get("nextPageToken")
         # Same rule as _paginated_graphql_edges: the chart continues if the
         # page says so, or if we stopped at `want` with entries left unread.
-        has_more = bool(token and info.get("hasNextPage"))
-        if len(edges) > remaining:
-            has_more = True
-        if not edges or not has_more:
+        has_more = bool(next_token) or len(edges) > remaining
+        if len(entries) >= want:
             break
-        # A server that hands back the same cursor must not loop forever.
-        if token in seen_tokens:
-            break
-        seen_tokens.add(token)
 
     return {
         "year": year,

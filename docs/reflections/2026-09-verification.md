@@ -17,7 +17,8 @@ Concretely:
   that working code was wrong.
 - A review rubric required `_paginated_graphql_edges` for new pagination. It
   has five call sites and handles only the standard `PaginationInput` shape;
-  `get_reviews` and `popular_books` legitimately paginate by hand. The rule
+  `get_reviews` and `popular_books` legitimately paginate outside it
+  (by hand, until #267 gave all three one walker). The rule
   could have been cited to demand an invalid refactor.
 - A metrics doc shipped commands that didn't reproduce their own table.
 - A permissions file gated `Edit` on workflows but not `Write`.
