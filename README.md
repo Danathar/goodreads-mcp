@@ -132,6 +132,7 @@ The offline suite runs on fixtures; CI runs it with `pytest-cov` and enforces a 
 - [docs/risk-tiers.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/risk-tiers.md) — the risk tier every pull request declares
 - [docs/review-rubric.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/review-rubric.md) — the review checklist
 - [docs/metrics.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/metrics.md) — outcome metrics
+- [docs/strategy.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/strategy.md) — what the project is for, what it won't do, and the commands that say whether it is on track
 - [docs/reflections/](https://github.com/Danathar/goodreads-mcp/tree/main/docs/reflections/) — lessons learned about this codebase
 - [docs/SECURITY-AI.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/SECURITY-AI.md) — what AI agents may and may not touch
 

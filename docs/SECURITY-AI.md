@@ -185,6 +185,20 @@ bug; see [#71](https://github.com/Danathar/goodreads-mcp/issues/71) and the
   workflow cannot gain a scope unless the same pull request also changes the
   policy file.
 
+## Agent provenance
+
+Agent pull requests here are opened by the Hive GitHub App
+(`app/danathar-atomic-hive`) and end with a `— hive: agent=… backend=… model=…`
+line; a maintainer-run agent may push under the maintainer's own login, so the
+signature line is the only mark in that case. `agent-audit.yml` reads that
+record back once a month, with a token that can only read pull requests, and
+lists each merged agent pull request in the run summary with who merged it, its
+signature, how many commits carry a `Signed-off-by` trailer, and any change to
+`.claude/settings.json` or `.claude/hooks/**`. It fails on one thing: an agent
+pull request touching those paths that a bot or app merged, because the rule
+above says a human merges them. A missing signature or trailer is reported and
+not failed, since nothing in this repository makes either a requirement.
+
 ## Reporting
 
 This project handles no user data and holds no credentials, so the realistic

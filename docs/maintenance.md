@@ -16,4 +16,6 @@ Each pass is meant to leave the next one starting from a better position:
 
 [quality.md](quality.md) is honest about what the numbers do *not* prove — chiefly that no fixture-backed test can detect the failure mode that actually threatens this project.
 
+How several agents share this repository, and who decides what lands, is in [multi-agent.md](multi-agent.md).
+
 Learn more: [Hive](https://github.com/hivecommons/hive) · [the ACMM levels, L1 to L6](https://github.com/hivecommons/hive#acmm-levels) · [the full ACMM policy matrix](https://github.com/hivecommons/hive/blob/v4/src/docs/acmm-policy-matrix.md)
