@@ -38,9 +38,13 @@ of `live.log`.
 **How you notice.** The issue, or a red `Nightly compliance` run:
 
 ```bash
-gh issue list --state open --search "Nightly live check failing — Goodreads may have changed in:title"
+gh issue list --repo Danathar/goodreads-mcp --state open --limit 1000 --json number,title,author --jq '.[] | select(.title == "Nightly live check failing — Goodreads may have changed" and (.author.login == "app/github-actions" or .author.login == "github-actions[bot]" or .author.login == "github-actions")) | "#\(.number) \(.title)"'
 gh run list --workflow nightly-compliance.yml --limit 5
 ```
+
+The first command lists open issues and keeps only an exact title filed by
+GitHub Actions, so it does not depend on GitHub's search index. It prints
+nothing when none is open, which is also what you see on a healthy night.
 
 **Check first: which step failed, then what changed in the repository.** A red
 nightly is usually Goodreads changing something, not a commit. Do not blame a

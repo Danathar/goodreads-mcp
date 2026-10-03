@@ -24,4 +24,5 @@ def test_runbook_quotes_the_title_the_nightly_workflow_files():
 
     runbook = _RUNBOOK.read_text(encoding="utf-8")
     assert f"> Title: `{title}`" in runbook
-    assert f'--search "{title} in:title"' in runbook
+    commands = re.findall(r'select\(\.title == "([^"]+)"', runbook)
+    assert commands == [title]
