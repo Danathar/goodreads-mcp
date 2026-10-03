@@ -185,7 +185,7 @@ def test_the_hive_app_pull_request_is_selected_and_reported(tmp_path: Path):
         "Danathar",
         "agent=quality backend=claude model=claude-opus-5-5 effort=medium",
         "1",
-        "all",
+        "1 of 1",
         "none",
     ]
 
@@ -261,7 +261,7 @@ def test_commits_and_files_are_read_past_the_first_hundred(tmp_path: Path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert "| 150 | all | `.claude/hooks/x` |" in _rows(summary)[0], "the hook on file 121 was missed"
+    assert "| 150 | 150 of 150 | `.claude/hooks/x` |" in _rows(summary)[0], "the hook on file 121 was missed"
     assert "gh api --paginate repos/Danathar/goodreads-mcp/pulls/9/commits" in calls
     assert "gh api --paginate repos/Danathar/goodreads-mcp/pulls/9/files" in calls
     assert "gh pr view" not in calls
