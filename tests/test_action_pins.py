@@ -27,12 +27,14 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 _DEPENDABOT = _ROOT / ".github" / "dependabot.yml"
 
-# Workflows whose only job is a `gh` call on the runner's preinstalled CLI, so
-# they have nothing to pin. Every other workflow must still show up in the
-# scan: a workflow renamed or moved out of it would otherwise stop being checked.
-_RUNS_NO_ACTION = {"auto-issues.yml"}
-
 _USES = re.compile(r"^\s*(?:- )?uses:")
+# Workflows that call no action on purpose, and why. Each one is listed by name
+# so a workflow that merely lost its `uses:` lines still fails the scan below.
+_NO_ACTIONS = {
+    "agent-audit.yml": "reads pull requests with the runner's gh and jq; nothing is checked out, so no action runs",
+    "auto-issues.yml": "one gh call on the runner's preinstalled CLI; nothing is checked out, so no action runs",
+}
+
 _PINNED = re.compile(
     r"^\s*(?:- )?uses: (?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)"
     r"@(?P<sha>[0-9a-f]{40}) # (?P<tag>v\d+(?:\.\d+){0,2})\s*$"
@@ -64,12 +66,13 @@ def test_the_scan_reaches_every_workflow_and_finds_the_known_actions():
     names = {path.name for path in _workflow_files()}
     assert {"ci.yml", "release.yml", "nightly-compliance.yml", "ai-fix.yml", "labeler.yml"} <= names
     seen = {where.split(":")[0] for where, _ in _uses_lines()}
-    unexpected = names - seen - _RUNS_NO_ACTION
+    unexpected = names - seen - set(_NO_ACTIONS)
     assert not unexpected, f"workflows with no uses: line at all: {sorted(unexpected)}"
     # The exemption must not outlive the workflow, or a rename would leave a
     # stale name here and the renamed file would silently be exempt too.
-    assert _RUNS_NO_ACTION <= names, f"exempt workflows that no longer exist: {sorted(_RUNS_NO_ACTION - names)}"
-    assert not _RUNS_NO_ACTION & seen, "a workflow listed as running no action now has a uses: line; drop it from the set"
+    assert set(_NO_ACTIONS) <= names, f"exempt workflows that no longer exist: {sorted(set(_NO_ACTIONS) - names)}"
+    stale = sorted(set(_NO_ACTIONS) & seen)
+    assert not stale, f"listed in _NO_ACTIONS but now calls an action: {stale}"
     actions = {m.group("action") for _, line in _uses_lines() if (m := _PINNED.match(line))}
     assert {"actions/checkout", "actions/setup-python", "pypa/gh-action-pypi-publish"} <= actions
 

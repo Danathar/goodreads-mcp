@@ -1,0 +1,192 @@
+---
+name: Agent audit trail
+
+# Reads back, once a month, who wrote and who merged each agent pull request.
+#
+# Agent pull requests here are opened by the Hive GitHub App
+# (`app/danathar-atomic-hive`) and end with a signature line,
+# `— hive: agent=<role> backend=<backend> model=<model> ...`; their commits
+# carry a Signed-off-by trailer naming the role. Nothing reads that record
+# back after the merge. A maintainer-run agent may push under the maintainer's
+# own login, so the author alone cannot say which merged pull requests an agent
+# wrote; a signature line that names agent, backend and model is the other mark.
+# A bare `— hive:` prefix is not a signature, and "any bot" is not the Hive app
+# (Dependabot opens pull requests here too, and is not an agent in this sense).
+#
+# The job lists the pull requests merged in the window, picks out the agent
+# ones, and writes one row per pull request to the run summary: when it merged,
+# who opened it, who merged it, its signature, how many commits it has and how
+# many carry a Signed-off-by trailer, and which Tier 2 agent-boundary paths it
+# touched (`.claude/settings.json`, `.claude/hooks/**`; docs/risk-tiers.md).
+#
+# Exactly one finding fails the run, because it is the one rule this repository
+# states: CONTRIBUTING.md and docs/SECURITY-AI.md say a change to the agent
+# permission boundary is merged by a human whoever wrote it, so an agent pull
+# request that touches those paths and was merged by a bot, an app or an
+# unknown account fails. A missing or incomplete signature line, and a commit
+# with no Signed-off-by trailer, are reported in the table and not failed: no
+# document here makes either a rule, and a red run for an unwritten rule
+# would be this workflow inventing policy.
+#
+# It never writes: the token reads pull requests and nothing else, nothing is
+# checked out, and no action runs, so there is nothing to pin.
+on:
+  schedule:
+    - cron: '23 5 1 * *'  # monthly, the 1st at 05:23 UTC, covering the previous 31 days
+  workflow_dispatch:
+    inputs:
+      since:
+        description: Audit pull requests merged on or after this date (YYYY-MM-DD). Blank means the last 31 days.
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  audit:
+    name: Read back the record of every merged agent pull request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Audit merged agent pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SINCE: ${{ inputs.since }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$SINCE" ]; then
+            SINCE="$(date -u -d '31 days ago' +%F)"
+          fi
+          case "$SINCE" in
+            [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+            *)
+              echo "::error::since must be YYYY-MM-DD, got '$SINCE'"
+              exit 2
+              ;;
+          esac
+          if [ "$(date -u -d "$SINCE" +%F 2>/dev/null || true)" != "$SINCE" ]; then
+            echo "::error::since must be a real date, got '$SINCE'"
+            exit 2
+          fi
+
+          # `gh pr list` returns the newest N and says nothing about the rest,
+          # so a window that fills the cap is refused rather than audited in part.
+          limit=500
+          gh pr list --repo "$REPO" --state merged --limit "$limit" \
+            --search "merged:>=$SINCE" \
+            --json number,title,author,mergedAt,mergedBy,body,url > merged.json
+          total="$(jq length merged.json)"
+          if [ "$total" -ge "$limit" ]; then
+            echo "::error::$total pull requests merged since $SINCE reached the $limit cap; audit a narrower window"
+            exit 2
+          fi
+
+          # An agent pull request is one opened by the Hive app itself (not any
+          # bot) or one whose body has a signature line naming agent=, backend=
+          # and model=. `gh` spells the app's login `app/danathar-atomic-hive`;
+          # the REST and webhook spelling is `danathar-atomic-hive[bot]`.
+          jq -c '
+            def signature:
+              (.body // "") | split("\n")
+              | map(select(startswith("— hive:")
+                  and test("(^| )agent=[^ ]+")
+                  and test("(^| )backend=[^ ]+")
+                  and test("(^| )model=[^ ]+")))
+              | first;
+            [ .[]
+              | select(
+                  (.author.login | IN("app/danathar-atomic-hive", "danathar-atomic-hive[bot]"))
+                  or (signature != null)
+                ) ]' merged.json > agents.json
+
+          # Commits and files are read a page at a time. `gh pr view --json
+          # commits,files` stops at 100 of each without saying so. The REST
+          # lists hold at most 250 commits and 3000 files; a pull request that
+          # reaches either is refused instead of audited in part.
+          : > details.ndjson
+          while read -r number; do
+            commits="$(gh api --paginate "repos/$REPO/pulls/$number/commits" \
+              --jq '.[] | {sha: .sha, message: .commit.message}' | jq -s .)"
+            files="$(gh api --paginate "repos/$REPO/pulls/$number/files" \
+              --jq '.[] | .filename, (.previous_filename // empty)' | jq -R . | jq -s .)"
+            if [ "$(jq length <<<"$commits")" -ge 250 ] || [ "$(jq length <<<"$files")" -ge 3000 ]; then
+              echo "::error::#$number reached the REST list cap (250 commits or 3000 files); it cannot be audited in full"
+              exit 2
+            fi
+            jq -n -c --argjson number "$number" --argjson commits "$commits" --argjson files "$files" \
+              '{number: $number, commits: $commits, files: $files}' >> details.ndjson
+          done < <(jq -r '.[].number' agents.json)
+          jq -s 'map({(.number | tostring): .}) | add // {}' details.ndjson > details.json
+
+          jq --arg since "$SINCE" --arg total "$total" --slurpfile details details.json '
+            def signature:
+              (.body // "") | split("\n")
+              | map(select(startswith("— hive:")
+                  and test("(^| )agent=[^ ]+")
+                  and test("(^| )backend=[^ ]+")
+                  and test("(^| )model=[^ ]+")))
+              | first;
+            # The agent permission boundary in docs/risk-tiers.md, Tier 2:
+            # the permission table and the PreToolUse guard.
+            def boundary: test("^(\\.claude/settings\\.json$|\\.claude/hooks/)");
+            def human: (.mergedBy != null) and (.mergedBy.is_bot | not)
+              and (.mergedBy.login | (endswith("[bot]") or startswith("app/")) | not);
+            def row:
+              . as $pr
+              | ($details[0][$pr.number | tostring]) as $d
+              | if $d == null then error("no commits or files fetched for #\($pr.number)") else . end
+              | {
+                  number: $pr.number,
+                  url: $pr.url,
+                  title: $pr.title,
+                  merged: $pr.mergedAt[:10],
+                  author: $pr.author.login,
+                  merged_by: ($pr.mergedBy.login // "unknown"),
+                  merged_by_human: ($pr | human),
+                  signature: ($pr | signature | if . == null then null else ltrimstr("— hive: ") end),
+                  commits: ($d.commits | length),
+                  unsigned: [$d.commits[] | select(.message | test("(^|\n)Signed-off-by: ") | not) | .sha[:7]],
+                  boundary: ([$d.files[] | select(boundary)] | unique)
+                };
+            def findings:
+              [ .[]
+                | select((.boundary | length) > 0 and (.merged_by_human | not))
+                | "#\(.number): touches the agent permission boundary and was merged by \(.merged_by), not a human (CONTRIBUTING.md, docs/risk-tiers.md Tier 2)" ];
+            def cell: tostring | gsub("\\|"; "\\|");
+            map(row)
+            | . as $rows
+            | {
+                findings: ($rows | findings),
+                report: (
+                  [ "### Agent audit trail: pull requests merged since \($since)",
+                    "",
+                    "\($rows | length) of the \($total) pull requests merged in the window were written by an agent (opened by the Hive app, or carrying a `— hive:` line naming agent, backend and model).",
+                    ""
+                  ]
+                  + (if ($rows | length) == 0 then [] else
+                      [ "| PR | Merged | Author | Merged by | Signature | Commits | Signed-off | Tier 2 agent-boundary paths |",
+                        "| --- | --- | --- | --- | --- | --- | --- | --- |" ]
+                      + [ $rows[]
+                          | "| [#\(.number)](\(.url)) \(.title | cell) | \(.merged) | \(.author) | \(.merged_by) | \(.signature // "none" | cell) | \(.commits) | \("\(.commits - (.unsigned | length)) of \(.commits)") | \(if (.boundary | length) == 0 then "none" else (.boundary | map("`\(.)`") | join(", ")) end) |" ]
+                    end)
+                  + [ "",
+                      "Reported, not failed: \([$rows[] | select(.signature == null)] | length) without a complete signature line, \([$rows[] | select((.unsigned | length) > 0)] | length) with a commit lacking Signed-off-by.",
+                      "" ]
+                  + (if ($rows | findings | length) == 0
+                      then [ "No agent pull request that touched the agent permission boundary was merged by a bot." ]
+                      else [ "#### Findings", "" ] + ($rows | findings | map("- " + .))
+                    end)
+                  | join("\n")
+                )
+              }' agents.json > result.json
+
+          jq -r .report result.json | tee -a "$GITHUB_STEP_SUMMARY"
+          findings="$(jq '.findings | length' result.json)"
+          if [ "$findings" -gt 0 ]; then
+            echo "::error::$findings agent pull request(s) merged since $SINCE broke the human-merge rule for the agent permission boundary; see the run summary"
+            exit 1
+          fi
