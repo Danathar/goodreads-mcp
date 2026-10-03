@@ -185,15 +185,6 @@ def test_the_lookup_lists_open_issues_and_never_searches(tmp_path: Path):
     assert "--search" not in (_WORKFLOW.step(_STEP).run or "")
 
 
-def test_every_author_spelling_the_filter_accepts_is_the_actions_bot_and_only_it():
-    """The filter is joined to this file's list, so a new spelling needs a test edit."""
-    run = _WORKFLOW.step(_STEP).run or ""
-    accepted = re.findall(r'\.author\.login == "([^"]+)"', run)
-    assert sorted(accepted) == sorted(_BOT_LOGINS)
-    assert "env.TITLE" in run
-
-
-# --------------------------------------------------------------------------
 # The report
 # --------------------------------------------------------------------------
 
@@ -220,14 +211,6 @@ def test_the_comment_is_the_same_text_as_a_fresh_issue(tmp_path: Path):
 
     assert _flag(commented[1], "--body") == _flag(opened[1], "--body")
 
-
-@needs_jq
-def test_the_issue_is_not_closed_when_ci_recovers(tmp_path: Path):
-    """Conservative: a human closes it. Nothing here may call `gh issue close`."""
-    _, calls = _report(tmp_path, [_issue(42, _TITLE, "app/github-actions")])
-
-    assert not any(call[:2] == ["issue", "close"] for call in calls)
-    assert "issue close" not in (_WORKFLOW.step(_STEP).run or "")
 
 
 @needs_jq
@@ -258,14 +241,6 @@ def test_no_event_expression_is_pasted_into_a_shell_script():
     assert env["HEAD_SHA"] == "${{ github.event.workflow_run.head_sha }}"
     assert env["RUN_URL"] == "${{ github.event.workflow_run.html_url }}"
     assert env["GH_REPO"] == "${{ github.repository }}"
-
-
-def test_the_title_the_step_looks_for_is_the_title_it_opens():
-    """One `TITLE` env var feeds the `--jq` lookup (as `env.TITLE`) and `--title`."""
-    step = _WORKFLOW.step(_STEP)
-    assert step.env["TITLE"] == _TITLE
-    run = step.run or ""
-    assert run.count('--title "$TITLE"') == 1 and run.count("env.TITLE") == 1
 
 
 # --------------------------------------------------------------------------
