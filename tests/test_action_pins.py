@@ -32,6 +32,7 @@ _USES = re.compile(r"^\s*(?:- )?uses:")
 # so a workflow that merely lost its `uses:` lines still fails the scan below.
 _NO_ACTIONS = {
     "agent-audit.yml": "reads pull requests with the runner's gh and jq; nothing is checked out, so no action runs",
+    "auto-issues.yml": "one gh call on the runner's preinstalled CLI; nothing is checked out, so no action runs",
 }
 
 _PINNED = re.compile(
@@ -65,7 +66,11 @@ def test_the_scan_reaches_every_workflow_and_finds_the_known_actions():
     names = {path.name for path in _workflow_files()}
     assert {"ci.yml", "release.yml", "nightly-compliance.yml", "ai-fix.yml", "labeler.yml"} <= names
     seen = {where.split(":")[0] for where, _ in _uses_lines()}
-    assert seen == names - set(_NO_ACTIONS), f"workflows with no uses: line at all: {sorted(names - seen - set(_NO_ACTIONS))}"
+    unexpected = names - seen - set(_NO_ACTIONS)
+    assert not unexpected, f"workflows with no uses: line at all: {sorted(unexpected)}"
+    # The exemption must not outlive the workflow, or a rename would leave a
+    # stale name here and the renamed file would silently be exempt too.
+    assert set(_NO_ACTIONS) <= names, f"exempt workflows that no longer exist: {sorted(set(_NO_ACTIONS) - names)}"
     stale = sorted(set(_NO_ACTIONS) & seen)
     assert not stale, f"listed in _NO_ACTIONS but now calls an action: {stale}"
     actions = {m.group("action") for _, line in _uses_lines() if (m := _PINNED.match(line))}

@@ -14,7 +14,7 @@ Changes to how data is fetched or parsed. This is the dangerous tier, because
 the failure is invisible to CI: fixtures keep passing while the live site
 returns something else.
 
-Covers: `client.py` request construction, retry, or WAF detection; any parser
+Covers: `goodreads_mcp/client.py` request construction, retry, or WAF detection; any parser
 (`__NEXT_DATA__`/Apollo traversal, RSS, the `list_shelves` HTML regex); GraphQL
 queries or the config-discovery regexes.
 
@@ -67,6 +67,14 @@ Docs, comments, agent instruction files, prompts, skills, labels. The
 `.claude/` files that run are not instruction files: the permission table and
 the hooks are Tier 2 (see above).
 
+Covers: `docs/**`; `README.md`; `CONTRIBUTING.md`; `prompts/**`; `AGENTS.md`;
+`CLAUDE.md`; `.github/copilot-instructions.md`; `.cursor/rules/goodreads-mcp.mdc`;
+`.claude/README.md`; `.claude/session-summary.md`; `.claude/memory/**`;
+`.claude/skills/**`; `.github/ISSUE_TEMPLATE/**`;
+`.github/pull_request_template.md`; `.github/labeler.yml`;
+`.claude/risk-config.json` (a data file read by tests, not the permission
+table or a hook).
+
 **Required:**
 - Claims about the code checked against the code. Most findings on this repo's
   docs PRs have been documentation asserting something the source contradicts —
@@ -85,7 +93,11 @@ Not a risk tier — a scope boundary. Decline rather than classify:
 ## Applying this
 
 There's no automated classifier. It's a judgment call made in the PR
-description: say which tier and why, so a reviewer can disagree. The
+description: say which tier and why, so a reviewer can disagree.
+[`.claude/risk-config.json`](../.claude/risk-config.json) restates the tiers
+(paths, required commands, out-of-scope list) as data for tools to read; it is
+input, not a classifier, and where it and this page differ this page wins.
+`tests/test_risk_config.py` fails if the two drift. The
 [labeler](../.github/labeler.yml) applies path labels (`client`, `server`,
 `live-tests`, `ci`) that correlate with tier but don't determine it — a `docs`
 label on a PR that also edits a parser doesn't make it Tier 3.
