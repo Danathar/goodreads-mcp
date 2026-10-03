@@ -22,11 +22,12 @@ as it was read, are in [`docs/metrics/`](metrics/2026-09-24.md).
 | median time open | ~35 min |
 
 ```bash
-# scoped to the snapshot range so these stay reproducible as new PRs land
-gh pr list --repo Danathar/goodreads-mcp --state merged --limit 100 --json number \
-  --jq '[.[] | select(.number >= 31 and .number <= 40)] | length'
-gh pr list --repo Danathar/goodreads-mcp --state closed --limit 100 --json number,mergedAt \
-  --jq '[.[] | select(.number >= 31 and .number <= 40 and .mergedAt == null)] | length'
+# scoped to the snapshot range so these stay reproducible as new PRs land;
+# paginated, so the range stays complete however many PRs the repo has
+gh api --paginate --slurp 'repos/Danathar/goodreads-mcp/pulls?state=all&per_page=100' \
+  | jq '[.[][] | select(.number >= 31 and .number <= 40 and .merged_at != null)] | length'
+gh api --paginate --slurp 'repos/Danathar/goodreads-mcp/pulls?state=all&per_page=100' \
+  | jq '[.[][] | select(.number >= 31 and .number <= 40 and .state == "closed" and .merged_at == null)] | length'
 ```
 
 Note on numbering: GitHub shares one number space between issues and PRs, and
