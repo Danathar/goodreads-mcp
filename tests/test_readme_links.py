@@ -40,6 +40,8 @@ _BRANCH = "main"
 # purpose, each with the reason. Adding a page to `docs/` without either
 # listing it or naming it here fails `test_the_documentation_index_lists_every_docs_page`.
 _NOT_IN_INDEX = {
+    # Reached from docs/maintenance.md, which is listed.
+    "docs/multi-agent.md",
     # Reached from docs/maintenance.md and docs/SECURITY-AI.md, which are listed.
     "docs/branch-protection.md",
 }
