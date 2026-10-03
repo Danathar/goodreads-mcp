@@ -24,27 +24,31 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-09-30 — don't re-post a GraphQL key rediscovery returned unchanged (#247)
+## 2026-10-03 — the ACMM L6 gaps (#269–#276)
 
-**Done:** `graphql()` treated every 401/403 as a key rotation: it rediscovered
-(`/giveaway` plus the `_app` bundle) and posted again, even when rediscovery
-returned the pair AppSync had just refused. A refusal that is not a rotation
-cost 4 requests per call. Now `graphql()` passes the refused pair to
-`graphql_config(refused=...)` and re-raises the original error when the same
-pair comes back. Inside `_config_lock`, `graphql_config` skips the fetch when
-the cached pair already differs from the refused one, so calls refused
-together share one rediscovery. `force=True` is unchanged (the
-check-live-endpoints snippet uses it). Three tests that faked a "rotation"
-with a page serving the same key now rotate the key. Two new tests in
-`tests/test_client_failures.py`. Test count 1409 → 1411.
+**Done:** one pull request per gap, all merged: `merge-queue.yml` (#280,
+inert until an admin adds a `merge_queue` rule), `.claude/risk-config.json`
+(#281, joined to `docs/risk-tiers.md` by `tests/test_risk_config.py`),
+`docs/strategy.md` (#282), `auto-issues.yml` (#283, one `CI failing on main`
+issue per red push to `main`, found by exact title and Actions-bot author),
+`docs/agent-tasks/` (#284), `docs/multi-agent.md` (#285),
+`docs/ai-ops-runbook.md` (#286), `agent-audit.yml` (#287, monthly, fails only
+when an agent change to `.claude/settings.json` or `.claude/hooks/**` was
+merged by a bot). `tests/test_action_pins.py` now exempts named action-free
+workflows (`_NO_ACTIONS`).
 
-**In flight:** the pull request for #247.
+**In flight:** nothing.
 
-**Blocked on:** the maintainer's A/B/C choice on #247: whether a refused key
-that came back unchanged is remembered (a cool-down, or until restart). Until
-then a persisting refusal still costs 3 requests per call: the POST plus the
-two discovery GETs.
+**Blocked on:** #279, the nightly drift issue's fuzzy `--search` lookup, needs
+a person to land (workflow change). `auto-issues.yml` already uses the exact
+lookup #279 proposes. #247 is closed; whether its A/B/C choice (remembering a
+refused key that comes back unchanged) was made is not recorded here.
 
-**Watch:** `_graphql_client` in `tests/test_client_failures.py` replaces
-`graphql_config` with a stub that takes only `force`; a test that drives it
-into a 401 needs the stub to accept `refused` too.
+**Watch:**
+- Codex P2s left open: `auto-issues.yml`'s concurrency group keeps one pending
+  run, so a third red push while two are queued drops one comment (#283);
+  `risk-config.json` extraction gaps (#281); ledger and doc wording (#284, #285).
+- The `.mcpb` ships `.claude/` and `docs/` whole; `.mcpbignore` excludes
+  neither. Harmless public text today, but every new agent file ships too.
+- The 2026-10-01 scheduled `release.yml` run (36840547035) ended `failure`;
+  not investigated.
