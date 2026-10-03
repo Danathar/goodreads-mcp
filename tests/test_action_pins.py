@@ -28,6 +28,12 @@ _ROOT = Path(__file__).resolve().parents[1]
 _DEPENDABOT = _ROOT / ".github" / "dependabot.yml"
 
 _USES = re.compile(r"^\s*(?:- )?uses:")
+# Workflows that call no action on purpose, and why. Each one is listed by name
+# so a workflow that merely lost its `uses:` lines still fails the scan below.
+_NO_ACTIONS = {
+    "agent-audit.yml": "reads pull requests with the runner's gh and jq; nothing is checked out, so no action runs",
+}
+
 _PINNED = re.compile(
     r"^\s*(?:- )?uses: (?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)"
     r"@(?P<sha>[0-9a-f]{40}) # (?P<tag>v\d+(?:\.\d+){0,2})\s*$"
@@ -59,7 +65,9 @@ def test_the_scan_reaches_every_workflow_and_finds_the_known_actions():
     names = {path.name for path in _workflow_files()}
     assert {"ci.yml", "release.yml", "nightly-compliance.yml", "ai-fix.yml", "labeler.yml"} <= names
     seen = {where.split(":")[0] for where, _ in _uses_lines()}
-    assert seen == names, f"workflows with no uses: line at all: {sorted(names - seen)}"
+    assert seen == names - set(_NO_ACTIONS), f"workflows with no uses: line at all: {sorted(names - seen - set(_NO_ACTIONS))}"
+    stale = sorted(set(_NO_ACTIONS) & seen)
+    assert not stale, f"listed in _NO_ACTIONS but now calls an action: {stale}"
     actions = {m.group("action") for _, line in _uses_lines() if (m := _PINNED.match(line))}
     assert {"actions/checkout", "actions/setup-python", "pypa/gh-action-pypi-publish"} <= actions
 

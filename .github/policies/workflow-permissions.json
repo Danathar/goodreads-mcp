@@ -5,6 +5,10 @@
       "workflow": {"contents": "write", "issues": "write", "pull-requests": "write"},
       "jobs": {}
     },
+    "agent-audit.yml": {
+      "workflow": {"contents": "read", "pull-requests": "read"},
+      "jobs": {}
+    },
     "ci.yml": {
       "workflow": {"contents": "read"},
       "jobs": {}
