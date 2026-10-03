@@ -67,10 +67,13 @@ Docs, comments, agent instruction files, prompts, skills, labels. The
 `.claude/` files that run are not instruction files: the permission table and
 the hooks are Tier 2 (see above).
 
-Covers: `docs/**`; `prompts/**`; `AGENTS.md`; `.claude/README.md`;
-`.claude/session-summary.md`; `.claude/memory/**`; `.claude/skills/**`;
-`.github/labeler.yml`; `.claude/risk-config.json` (a data file read by tests,
-not the permission table or a hook).
+Covers: `docs/**`; `README.md`; `CONTRIBUTING.md`; `prompts/**`; `AGENTS.md`;
+`CLAUDE.md`; `.github/copilot-instructions.md`; `.cursor/rules/goodreads-mcp.mdc`;
+`.claude/README.md`; `.claude/session-summary.md`; `.claude/memory/**`;
+`.claude/skills/**`; `.github/ISSUE_TEMPLATE/**`;
+`.github/pull_request_template.md`; `.github/labeler.yml`;
+`.claude/risk-config.json` (a data file read by tests, not the permission
+table or a hook).
 
 **Required:**
 - Claims about the code checked against the code. Most findings on this repo's

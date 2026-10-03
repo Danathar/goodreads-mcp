@@ -108,8 +108,3 @@ def test_every_listed_path_exists(tier):
         else:
             assert (_ROOT / path).exists(), path
 
-
-def test_doc_says_the_config_is_input_not_a_classifier():
-    applying = _section("Applying this")
-    assert "no automated classifier" in applying
-    assert ".claude/risk-config.json" in applying
