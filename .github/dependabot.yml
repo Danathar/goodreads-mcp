@@ -6,8 +6,8 @@
 # was current the day it was pinned", security fixes included.
 #
 # Dependabot reads the `# vN` comment beside each SHA and moves both together,
-# so a bump stays readable in review. Until the pins land it still works on the
-# floating tags, offering the next major version as a pull request.
+# so a bump stays readable in review. tests/test_action_pins.py fails if a
+# `uses:` line loses its pin or its comment, or if this entry goes away.
 #
 # Only github-actions is configured. Python and Node dependencies are a
 # separate decision, not an oversight.
