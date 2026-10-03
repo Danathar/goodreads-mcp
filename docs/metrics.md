@@ -22,10 +22,11 @@ as it was read, are in [`docs/metrics/`](metrics/2026-09-24.md).
 | median time open | ~35 min |
 
 ```bash
-# scoped to the snapshot range so these stay reproducible as new PRs land
-gh pr list --repo Danathar/goodreads-mcp --state merged --limit 100 --json number \
+# scoped to the snapshot range so these stay reproducible as new PRs land;
+# --limit must exceed the repository's PR count, or the oldest PRs drop out
+gh pr list --repo Danathar/goodreads-mcp --state merged --limit 1000 --json number \
   --jq '[.[] | select(.number >= 31 and .number <= 40)] | length'
-gh pr list --repo Danathar/goodreads-mcp --state closed --limit 100 --json number,mergedAt \
+gh pr list --repo Danathar/goodreads-mcp --state closed --limit 1000 --json number,mergedAt \
   --jq '[.[] | select(.number >= 31 and .number <= 40 and .mergedAt == null)] | length'
 ```
 
