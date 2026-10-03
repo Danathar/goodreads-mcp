@@ -142,9 +142,11 @@ by reading, then settled by a person.
   and #260, which wait for a person.
 - **`ai-fix.yml` queues rather than cancels.** Its concurrency group is the
   issue number, so two requests on one issue run one after the other.
-- **Merge order.** This repository holds no merge queue or ordering rule. Where
-  two pull requests touch the same files, the person merging decides which
-  goes first.
+- **Merge order.** No merge queue is enabled, and there is no ordering rule.
+  [`merge-queue.yml`](../.github/workflows/merge-queue.yml) is ready for one
+  but runs only once an admin turns the queue on (see
+  [`branch-protection.md`](branch-protection.md#merge-queue)). Where two pull
+  requests touch the same files, the person merging decides which goes first.
 
 ## Who decides what lands
 
