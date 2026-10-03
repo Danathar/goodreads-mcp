@@ -13,6 +13,7 @@ what's known-weak, and where the real risk sits.
 | coverage floor, 55% | `ci.yml` (`--cov-fail-under`) | yes |
 | offline suite at the declared dependency floors (`uv pip install --resolution lowest-direct`) | `ci.yml` | yes |
 | MCPB manifest validation | `ci.yml` | yes |
+| every workflow `uses:` pinned to a full commit SHA with its tag as a comment, one pin per action, and a Dependabot `github-actions` entry to move them (`tests/test_action_pins.py`) | `ci.yml` | yes |
 | version sync (`pyproject` vs `manifest`) | `release.yml` | yes, at release |
 | bundle carries no compiled module (it declares three platforms) | `release.yml` | yes, at release |
 | packed bundle starts under the manifest's own `uv run` command | `release.yml` | yes, at release |
@@ -26,7 +27,7 @@ what's known-weak, and where the real risk sits.
 
 | | |
 |---|---|
-| offline tests | 1473 passing, 25 skipped (live, opt-in) |
+| offline tests | 1479 passing, 25 skipped (live, opt-in) |
 | coverage | 100% overall — `config.py` 100%, `client.py` 100%, `server.py` 100% |
 | CI, last 30 runs | 28 success |
 
