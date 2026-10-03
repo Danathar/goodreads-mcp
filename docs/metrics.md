@@ -12,6 +12,9 @@ parent: the first command below printed 0 instead of 10 that way.
 Later readings of the same numbers over the whole history, each dated and left
 as it was read, are in [`docs/metrics/`](metrics/2026-09-24.md).
 
+Which agent role and task produced a change, and how often the marks that say
+so are present, are read in [`docs/agent-tasks/`](agent-tasks/README.md).
+
 ## PR acceptance
 
 | metric | value |
