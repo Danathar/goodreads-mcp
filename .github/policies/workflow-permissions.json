@@ -13,6 +13,10 @@
       "workflow": {"contents": "read", "pull-requests": "write"},
       "jobs": {}
     },
+    "merge-queue.yml": {
+      "workflow": {"contents": "read"},
+      "jobs": {}
+    },
     "nightly-compliance.yml": {
       "workflow": {"contents": "read", "issues": "write"},
       "jobs": {}

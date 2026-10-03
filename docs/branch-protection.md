@@ -110,6 +110,45 @@ gh api --method PUT repos/Danathar/goodreads-mcp/rulesets/23955646 \
   --input .github/rulesets/main.json
 ```
 
+## Merge queue
+
+**The merge queue is not enabled.** The ruleset has no `merge_queue` rule, and
+nothing here turns one on.
+
+The gap it would close: `strict_required_status_checks_policy` is `false`, so
+a pull request that was green against an older `main` can merge without
+`test` ever running on the merged result (the #105 case above is the extreme
+one). A merge queue builds a temporary branch of the pull request on top of
+`main`'s current head and merges only if the required checks pass there.
+
+[`.github/workflows/merge-queue.yml`](../.github/workflows/merge-queue.yml) is
+the half that can live in the tree. It runs only on `merge_group`, an event
+GitHub sends only when a queue is on, so today it never runs. It has one job,
+`test`, with the same steps as `ci.yml`'s `test` job. That is what makes the
+queue's commit report the `test` context the ruleset requires; a queue enabled
+without such a workflow would wait for a check that never starts and block
+every merge.
+
+`release.yml` still works behind a queue. Its gate reads every check run named
+`test` on the commit, requires none to be red or unfinished and at least one
+to have succeeded. The queue's commit is the one that lands on `main`, so it
+carries the queue's `test` run and the one `ci.yml` starts on the push to
+`main`. A red run of either refuses the release, a green pair passes it.
+
+To enable it:
+
+1. In a pull request, add a `merge_queue` rule to
+   `.github/rulesets/main.json`. Pick its parameters (merge method, group
+   sizes, timeouts) in that review. Keep the required check as `test`.
+2. After it merges, an admin updates the live ruleset from the file with the
+   `gh api --method PUT .../rulesets/23955646` call under "Applying it".
+
+`merge-queue.yml` has to keep matching `ci.yml`, or the queue gates on
+something other than what pull requests gate on.
+`tests/test_merge_queue_workflow.py` compares the trigger, the job id and every
+step, so change both files together. Nothing has exercised the workflow on a
+real `merge_group` event; the first queued pull request will.
+
 ## When there is a second reviewer
 
 Set `required_approving_review_count` to 1. Consider
