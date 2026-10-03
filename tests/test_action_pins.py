@@ -27,6 +27,11 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 _DEPENDABOT = _ROOT / ".github" / "dependabot.yml"
 
+# Workflows whose only job is a `gh` call on the runner's preinstalled CLI, so
+# they have nothing to pin. Every other workflow must still show up in the
+# scan: a workflow renamed or moved out of it would otherwise stop being checked.
+_RUNS_NO_ACTION = {"auto-issues.yml"}
+
 _USES = re.compile(r"^\s*(?:- )?uses:")
 _PINNED = re.compile(
     r"^\s*(?:- )?uses: (?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)"
@@ -59,7 +64,12 @@ def test_the_scan_reaches_every_workflow_and_finds_the_known_actions():
     names = {path.name for path in _workflow_files()}
     assert {"ci.yml", "release.yml", "nightly-compliance.yml", "ai-fix.yml", "labeler.yml"} <= names
     seen = {where.split(":")[0] for where, _ in _uses_lines()}
-    assert seen == names, f"workflows with no uses: line at all: {sorted(names - seen)}"
+    unexpected = names - seen - _RUNS_NO_ACTION
+    assert not unexpected, f"workflows with no uses: line at all: {sorted(unexpected)}"
+    # The exemption must not outlive the workflow, or a rename would leave a
+    # stale name here and the renamed file would silently be exempt too.
+    assert _RUNS_NO_ACTION <= names, f"exempt workflows that no longer exist: {sorted(_RUNS_NO_ACTION - names)}"
+    assert not _RUNS_NO_ACTION & seen, "a workflow listed as running no action now has a uses: line; drop it from the set"
     actions = {m.group("action") for _, line in _uses_lines() if (m := _PINNED.match(line))}
     assert {"actions/checkout", "actions/setup-python", "pypa/gh-action-pypi-publish"} <= actions
 

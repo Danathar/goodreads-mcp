@@ -1,0 +1,74 @@
+{
+  "$comment": "docs/risk-tiers.md is the source; this file restates it as data. tests/test_risk_config.py joins the two: tier numbers and names match the doc's headings, each tier's paths are the path-like tokens in that tier's Covers text, required_commands are compared to the commands in the doc's Required list, and the out_of_scope list is compared to the doc's bullets. Tier 1 is the MOST dangerous tier here (the opposite of the sibling atomic-image-builder repo). Paths are input, not a classifier.",
+  "classification": "Tier is set by what a change can break, not by diff size or path. Tier 1 is partly about kinds of change inside files, so a path match is not enough. Where a change's paths and the kinds listed here disagree, docs/risk-tiers.md and the PR author's stated judgment win.",
+  "tiers": [
+    {
+      "tier": 1,
+      "name": "can break users silently",
+      "paths": [
+        "goodreads_mcp/client.py"
+      ],
+      "kinds_of_change": [
+        "request construction, retry, or WAF detection in client.py",
+        "any parser (__NEXT_DATA__/Apollo traversal, RSS, the list_shelves HTML regex)",
+        "GraphQL queries or the config-discovery regexes"
+      ],
+      "required_commands": [
+        "GOODREADS_LIVE=1 pytest tests/e2e -v"
+      ]
+    },
+    {
+      "tier": 2,
+      "name": "can break the build or the contract",
+      "paths": [
+        "pyproject.toml",
+        "manifest.json",
+        "server.json",
+        ".github/workflows/**",
+        ".github/policies/**",
+        ".github/rulesets/**",
+        ".claude/settings.json",
+        ".claude/hooks/**"
+      ],
+      "kinds_of_change": [
+        "new or changed @mcp.tool functions",
+        "_MAX_* / _PAGE_SIZE caps"
+      ],
+      "required_commands": [
+        "pytest -q"
+      ]
+    },
+    {
+      "tier": 3,
+      "name": "contained",
+      "paths": [
+        "docs/**",
+        "README.md",
+        "CONTRIBUTING.md",
+        "prompts/**",
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".github/copilot-instructions.md",
+        ".cursor/rules/goodreads-mcp.mdc",
+        ".claude/README.md",
+        ".claude/session-summary.md",
+        ".claude/memory/**",
+        ".claude/skills/**",
+        ".github/ISSUE_TEMPLATE/**",
+        ".github/pull_request_template.md",
+        ".github/labeler.yml",
+        ".claude/risk-config.json"
+      ],
+      "kinds_of_change": [
+        "docs, comments, agent instruction files, prompts, skills, labels"
+      ],
+      "required_commands": []
+    }
+  ],
+  "out_of_scope": [
+    "Anything requiring auth, cookies, or credentials",
+    "Any write operation against Goodreads",
+    "Anything raising request rate against these unofficial endpoints",
+    "Hardcoding the GraphQL key or endpoint"
+  ]
+}
