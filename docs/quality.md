@@ -20,6 +20,7 @@ what's known-weak, and where the real risk sits.
 | released `.mcpb` is the one `build-mcpb` packed (sha256 job output, checked after download) | `release.yml` | yes, at release |
 | published wheel and sdist are the ones `build-pypi` built (sha256 job output, checked after download) | `release.yml` | yes, at release |
 | release refused unless the run is on `main`, the commit is on `main`, `test` passed on it and no run of `test` is red or unfinished (no other check counts), and the version is CalVer, untagged and newer than the last release | `release.yml` | yes, at release |
+| one tracking issue opened, or commented on, when `CI` fails on a push to `main` (open issues listed, exact title and Actions-bot author; never closed automatically) | `auto-issues.yml` | no, notification only |
 | automated code review | Codex, every PR | advisory |
 | offline tests on source edit | `.claude/settings.json` hook | advisory, local |
 
@@ -27,7 +28,7 @@ what's known-weak, and where the real risk sits.
 
 | | |
 |---|---|
-| offline tests | 1488 passing, 25 skipped (live, opt-in) |
+| offline tests | 1513 passing, 25 skipped (live, opt-in) |
 | coverage | 100% overall — `config.py` 100%, `client.py` 100%, `server.py` 100% |
 | CI, last 30 runs | 28 success |
 

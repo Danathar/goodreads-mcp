@@ -1,0 +1,66 @@
+name: Auto issues
+
+# release.yml refuses to release a commit whose `test` check is not green, and
+# until this file nothing told anyone that main had gone red. When the `CI`
+# workflow fails on a push to main, this opens one tracking issue, or comments
+# on it if it is already open.
+#
+# Deliberately small:
+#   - It never checks out or runs repository code, and uses no third-party
+#     action. The only thing it runs is `gh`, which is preinstalled.
+#   - It never closes the issue. Recovery is a human's call.
+#   - `workflow_run` always runs the copy of this file on the default branch, so
+#     a pull request cannot change what it does.
+#
+# `workflows: [CI]` is the `name:` of ci.yml; renaming that workflow silently
+# disconnects this one, and tests/test_auto_issues_workflow.py pins the two.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+# Two failures arriving together must not both see "no issue yet" and each open
+# one. Queue, never cancel: a cancelled run is a failure nobody was told about.
+concurrency:
+  group: auto-issues
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+
+jobs:
+  main-red:
+    # Pull-request runs of CI also complete with a conclusion; only a push to
+    # main is a red main.
+    if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Open or update the CI-failure issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TITLE: "CI failing on main"
+          # Event fields are attacker-influenced (a commit message is whatever
+          # its author wrote), so they reach the shell only as env vars.
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          COMMIT_MESSAGE: ${{ github.event.workflow_run.head_commit.message }}
+        run: |
+          subject=${COMMIT_MESSAGE%%$'\n'*}
+          # Indented code block: whatever the subject contains stays text.
+          body=$(printf 'The `CI` workflow failed on a push to `main` on %s.\n\nCommit: %s\nRun: %s\n\nFirst line of the commit message:\n\n    %s\n\n`release.yml` will not release this commit while `test` is not green. This issue is not closed automatically; close it once `main` is green again.\n' \
+            "$(date -u +%Y-%m-%d)" "$HEAD_SHA" "$RUN_URL" "$subject")
+          # List rather than search: the search index lags, and `in:title` is a
+          # word match, not an exact one. Match the exact title AND the Actions
+          # bot as author, so an issue anyone else opens with this title is
+          # never the one a failure is reported into.
+          existing=$(gh issue list --state open --limit 1000 --json number,title,author \
+            --jq '[.[] | select(.title == env.TITLE and (.author.login == "app/github-actions" or .author.login == "github-actions[bot]" or .author.login == "github-actions"))][0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi
