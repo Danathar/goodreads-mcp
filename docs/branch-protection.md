@@ -129,11 +129,14 @@ queue's commit report the `test` context the ruleset requires; a queue enabled
 without such a workflow would wait for a check that never starts and block
 every merge.
 
-`release.yml` still works behind a queue. Its gate reads every check run named
-`test` on the commit, requires none to be red or unfinished and at least one
-to have succeeded. The queue's commit is the one that lands on `main`, so it
-carries the queue's `test` run and the one `ci.yml` starts on the push to
-`main`. A red run of either refuses the release, a green pair passes it.
+`release.yml` still works behind a queue, with one consequence to know. Its
+gate reads every check run named `test` on the commit. It refuses the release
+if any of them has a conclusion other than success, skipped or neutral (a
+failed, cancelled or still-pending run counts, even next to a green one), and
+it also refuses if none succeeded. The queue's commit is the one that lands
+on `main`, so it carries the queue's `test` run and the one `ci.yml` starts on
+the push to `main`. Both must be clean for the release to go ahead; a red or
+unfinished duplicate blocks it.
 
 To enable it:
 
