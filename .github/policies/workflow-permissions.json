@@ -5,6 +5,10 @@
       "workflow": {"contents": "write", "issues": "write", "pull-requests": "write"},
       "jobs": {}
     },
+    "auto-issues.yml": {
+      "workflow": {"issues": "write"},
+      "jobs": {}
+    },
     "ci.yml": {
       "workflow": {"contents": "read"},
       "jobs": {}
