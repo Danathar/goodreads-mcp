@@ -2,10 +2,13 @@
 
 This is for the maintainer. For each automated signal this repository has
 today, it says how you notice it, what to check first, and what to do. It
-covers only what is on `main` now: five workflows under
+covers only what is on `main` now: the workflows under
 [`.github/workflows/`](../.github/workflows/), the Dependabot config, the
 `PreToolUse` guard under [`.claude/hooks/`](../.claude/hooks/guard-bash.py), and
 the pull requests the Hive agents open (see [maintenance.md](maintenance.md)).
+[`merge-queue.yml`](../.github/workflows/merge-queue.yml) has no section: it
+runs only once an admin turns on a merge queue, and none is on
+([branch-protection.md](branch-protection.md#merge-queue)).
 
 Every `gh` command below takes `-R Danathar/goodreads-mcp` when you run it
 outside a checkout of this repository. Run the read-only ones as written; the
@@ -19,6 +22,7 @@ ones that change something say so.
 | A run of `AI fix requested` | [`ai-fix.yml` runs](#ai-fixyml-runs) |
 | An agent pull request that is wrong or unwanted | [An agent PR misbehaves](#an-agent-pr-misbehaves) |
 | A `guard-bash` denial in a Claude Code session | [`guard-bash` refusals](#guard-bash-refusals) |
+| A red `Agent audit trail` run | [Agent audit trail is red](#agent-audit-trail-is-red) |
 | A Dependabot pull request | [Dependabot action updates](#dependabot-action-updates) |
 | A scheduled run that never appeared | [A scheduled run did not fire](#a-scheduled-run-did-not-fire) |
 
@@ -113,6 +117,18 @@ push cancels the old one). A failure with no cause in the diff: `gh run rerun
 <run id> --failed`. Do not merge around it; the ruleset is the control.
 
 **On `main`.** Pushes to `main` get one run each, never cancelled.
+
+When that run fails, [`auto-issues.yml`](../.github/workflows/auto-issues.yml)
+opens an issue titled `CI failing on main`, or comments on the open one. It
+finds the open one by exact title and GitHub Actions as author, and never
+closes it:
+
+```bash
+gh issue list --repo Danathar/goodreads-mcp --state open --limit 1000 --json number,title,author --jq '.[] | select(.title == "CI failing on main" and (.author.login == "app/github-actions" or .author.login == "github-actions[bot]" or .author.login == "github-actions")) | "#\(.number) \(.title)"'
+```
+
+Close it yourself once `main` is green again. Each later red push to `main`
+adds a comment with that run's link.
 
 ```bash
 gh run list --workflow ci.yml --branch main --limit 5
@@ -256,6 +272,31 @@ spellings is in `tests/test_agent_permissions.py`:
 pytest tests/test_agent_permissions.py -q
 ```
 
+## Agent audit trail is red
+
+[`agent-audit.yml`](../.github/workflows/agent-audit.yml) runs monthly (05:23
+UTC on the 1st) or by hand, reads every pull request merged in the window, and
+writes one row per agent pull request to the run summary. It fails for one
+finding: an agent pull request that touched `.claude/settings.json` or
+`.claude/hooks/**` and was merged by a bot, an app or an unknown account.
+Missing signature lines and commits without `Signed-off-by` are listed in the
+summary but do not fail it. It also stops with exit 2 when `since` is not a
+real `YYYY-MM-DD` date, when the window holds 500 or more merged pull requests,
+or when one pull request reaches GitHub's 250-commit or 3000-file list cap.
+
+```bash
+gh run list --workflow agent-audit.yml --limit 3
+gh run view <run id> --log-failed
+```
+
+**What to do.** For a finding, open the named pull request and read the change
+to the permission boundary line by line, as if it were unmerged. If it should
+not have landed, revert it in a pull request you merge yourself, then find out
+how a bot merged it ([An agent PR misbehaves](#an-agent-pr-misbehaves), step 5).
+For the 500 cap, re-run with a later `since`. That run covers only the newer
+part, so also read the older part some other way before you call the window
+audited. The workflow takes no end date.
+
 ## Dependabot action updates
 
 [`.github/dependabot.yml`](../.github/dependabot.yml) asks for one grouped pull
@@ -279,12 +320,14 @@ the PR and pin the previous SHA; Dependabot will propose the next version.
 
 ## A scheduled run did not fire
 
-Two workflows are scheduled: `nightly-compliance.yml` (daily 07:00 UTC) and
-`release.yml` (09:00 UTC on the 1st). GitHub may start a scheduled run some
-minutes late. First tell "did not run" from "ran and did nothing":
+Three workflows are scheduled: `nightly-compliance.yml` (daily 07:00 UTC),
+`agent-audit.yml` (05:23 UTC on the 1st) and `release.yml` (09:00 UTC on the
+1st). GitHub may start a scheduled run some minutes late. First tell "did not
+run" from "ran and did nothing":
 
 ```bash
 gh run list --workflow nightly-compliance.yml --event schedule --limit 3
+gh run list --workflow agent-audit.yml --event schedule --limit 3
 gh run list --workflow release.yml --event schedule --limit 3
 gh workflow list --all
 ```
@@ -292,7 +335,7 @@ gh workflow list --all
 - **No run at all, or the workflow is not listed as `active`.** GitHub disables
   scheduled workflows in a repository with no activity for 60 days. Re-enable
   the one that stopped: `gh workflow enable nightly-compliance.yml` (or
-  `release.yml`). This changes the workflow's state.
+  `agent-audit.yml`, or `release.yml`). This changes the workflow's state.
 - **A green `Release MCPB` run that tagged nothing.** Not a missed run. See the
   `Check the schedule is enabled` and `Decide whether to release` rows in
   [A release run refused](#a-release-run-refused); `gh variable list` shows
@@ -302,6 +345,7 @@ To run the missed workflow now, dispatch that workflow by name from `main`:
 
 ```bash
 gh workflow run nightly-compliance.yml --ref main   # live suite; opens no drift issue
+gh workflow run agent-audit.yml --ref main -f since=<YYYY-MM-DD>   # read-only; blank since means the last 31 days
 gh workflow run release.yml --ref main -f dry_run=true   # checks everything, publishes nothing
 ```
 
