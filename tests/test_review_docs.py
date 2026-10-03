@@ -8,7 +8,7 @@ every one reads them as a *source*: `test_coverage_thresholds.py` takes the
 `test_release_workflow.py` takes the version-sync sentence,
 `test_ai_fix_workflow.py` and `test_agent_permissions.py` take one sentence
 each. None of them checked what the two pages say about the code — the caps
-they name, the two hand-paginating tools, the paging contract, the files that
+they name, the two tools that page outside the helper, the paging contract, the files that
 must never be committed, the labels, and the tool registry both pages tell a
 reviewer to keep in step.
 
@@ -228,15 +228,15 @@ def test_agents_md_counts_the_decorated_tools():
 
 def _hand_pagination_sentence() -> str:
     section = _section(_RUBRIC, "3.")
-    match = re.search(r"(\w+) tools legitimately paginate by hand.*?(?=`compare_books` likewise)", section)
-    assert match, "rubric §3 no longer names the tools that paginate by hand"
+    match = re.search(r"(\w+) tools legitimately paginate outside the helper.*?(?=`compare_books` likewise)", section)
+    assert match, "rubric §3 no longer names the tools that paginate outside the helper"
     return match.group(0)
 
 
-def test_the_rubric_names_exactly_the_tools_that_paginate_by_hand():
-    """"Two tools legitimately paginate by hand" — the number and the names.
+def test_the_rubric_names_exactly_the_tools_that_paginate_outside_the_helper():
+    """"Two tools legitimately paginate outside the helper" — the number and the names.
 
-    Hand-paginators are GraphQL tools with a paging loop that do not go
+    These are GraphQL tools that page but do not go
     through the helper; derived from the AST, compared both ways.
     """
     sentence = _hand_pagination_sentence()

@@ -31,9 +31,10 @@ tests in this repo pin theirs — **read out of the source, not restated**:
   entry's own prose ("has five call sites") as a number *word*, and compared
   against call sites counted from `server.py`'s AST. Add a sixth caller and
   the entry fails until its sentence is updated.
-* The two functions the entry names as legitimately hand-paginating are read
-  out of that same sentence, then checked both ways: they must not call the
-  helper, and they must walk page tokens themselves.
+* The two functions the entry names as legitimately paginating outside the
+  helper are read out of that same sentence, then checked both ways: they
+  must not call the helper, and they must still walk pages, through
+  `_walk_connection` (#267; before it they walked page tokens by hand).
 * `list_shelves` must still reach HTML with a regex, `.claude/settings.json`
   must still gate both `Edit` and `Write` on `.github/workflows/**` (the
   bullet's whole point is that gating one and not the other was the defect),
@@ -76,8 +77,9 @@ _DATE_FIELD = re.compile(r"^\*\*Date:\*\*\s*(?P<date>\d{4}-\d{2}-\d{2})\s*$", re
 _FROM_FIELD = re.compile(r"^\*\*From:\*\*\s*(?P<from>\S.*\S)\s*$", re.MULTILINE)
 # "has five call sites" — the count as the entry writes it.
 _CALL_SITES = re.compile(r"has (?P<count>[a-z]+) call sites")
-# "`get_reviews` and `popular_books` legitimately paginate by hand"
-_BY_HAND = re.compile(r"`(?P<first>\w+)` and `(?P<second>\w+)` legitimately paginate by hand")
+# "`get_reviews` and `popular_books` legitimately paginate outside it"
+_BY_HAND = re.compile(r"`(?P<first>\w+)` and `(?P<second>\w+)` legitimately paginate outside it")
+_WALKER = "_walk_connection"
 # "`client.py`'s docstring says \"four unofficial-but-stable read surfaces\""
 _DOCSTRING_QUOTE = re.compile(r"`client\.py`'s docstring (?P<verb>says|said) \"(?P<quote>[^\"]+)\"")
 # The module docstring's own numbered surface list: "  1. Shelf RSS feeds  — ..."
@@ -271,19 +273,18 @@ def test_the_functions_the_entry_calls_hand_paginators_do_not_use_the_helper(ent
         )
 
 
-def test_the_functions_the_entry_calls_hand_paginators_really_walk_page_tokens(entry, server_defs):
+def test_the_functions_the_entry_calls_hand_paginators_really_walk_pages(entry, server_defs):
     """Not calling the helper is half the claim; the other half is that they
     paginate at all. A function that stopped paginating would pass the first
-    check while making the entry's point about legitimate hand-rolling moot."""
+    check while making the entry's point about legitimate exceptions moot."""
     named = _BY_HAND.search(entry)
-    assert named, "the entry no longer names the functions that paginate by hand"
+    assert named, "the entry no longer names the functions that paginate outside the helper"
     for name in (named.group("first"), named.group("second")):
         node = server_defs.get(name)
         assert node is not None, f"the entry names `{name}`, which server.py does not define"
-        source = ast.get_source_segment(_read(_SERVER), node) or ""
-        assert "pageInfo" in source and "nextPageToken" in source, (
-            f"the entry says `{name}` paginates by hand, but its body walks no "
-            "pageInfo/nextPageToken"
+        assert _calls_named(node, _WALKER), (
+            f"the entry says `{name}` paginates outside the helper, but it no "
+            f"longer walks pages through `{_WALKER}`"
         )
 
 

@@ -40,12 +40,15 @@ This is where this project actually breaks, so it gets the most weight.
       and respects the caps (`_MAX_DISCOVERY`, `_DISCOVERY_PAGE_SIZE`).
       The helper only handles Goodreads' standard `PaginationInput`/`PageInfo`
       shape — don't demand it where it doesn't fit. Two tools legitimately
-      paginate by hand and should stay that way:
+      paginate outside the helper and should stay that way:
       `get_reviews` (client-side spoiler filtering changes the returned count,
-      so it needs its own loop, with its own `_MAX_REVIEWS` / `_MAX_REVIEW_PAGES`
+      so it needs its own loop body, with its own `_MAX_REVIEWS` / `_MAX_REVIEW_PAGES`
       caps) and `popular_books` (passes `after` and `limit`
       as top-level variables, with its own `_MAX_POPULAR` / `_POPULAR_PAGE_SIZE`
       caps). `compare_books` likewise has its own `_MAX_COMPARE` fan-out cap.
+- [ ] Every page walk, those two included, goes through `_walk_connection`,
+      the one function that decides when a walk stops (page cap, last page,
+      empty page, repeated cursor). Don't write another loop over cursors.
 
 ## 4. Tool contract
 
@@ -53,8 +56,8 @@ This is where this project actually breaks, so it gets the most weight.
 - [ ] Results carry a source `url` so the model can cite them; null is explicit,
       never fabricated.
 - [ ] `returned` / `has_more` present on results paged through
-      `_paginated_graphql_edges` and on the hand-paginated `popular_books` and
-      `get_reviews`.
+      `_paginated_graphql_edges` and on `popular_books` and `get_reviews`,
+      which page outside it.
 - [ ] Results shaped so tools chain — one tool's `book_id` feeds the next, as a
       string (`_book_id`), and the tool is listed in
       `tests/test_book_id_chaining.py`.

@@ -1086,6 +1086,43 @@ def test_popular_books_caps_the_request_at_the_maximum(monkeypatch):
     assert result["has_more"] is True
 
 
+
+def test_popular_books_reads_past_a_page_of_only_null_edges(monkeypatch):
+    """A page of nulls is not the end of the chart (#267); it used to stop
+    here and return nothing while saying `has_more`."""
+    entry = {"rank": 1, "count": 1, "node": _book_node(1, "x", 4.0)}
+    graphql = _Graphql(
+        {
+            server._Q_TOP_LIST: [
+                {"getTopList": _page([None, {"rank": 0, "node": None}], hasNextPage=True, nextPageToken="page-2")},
+                {"getTopList": _page([entry])},
+            ]
+        }
+    )
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    result = server.popular_books(2024, limit=5)
+
+    assert [b["book_id"] for b in result["books"]] == ["1"]
+    assert result["has_more"] is False
+
+
+def test_popular_books_stops_at_its_page_cap(monkeypatch):
+    """Pages that come back nearly empty used to cost up to `_MAX_POPULAR`
+    requests; the walk now stops at `_MAX_POPULAR_PAGES` (#267)."""
+    pages = [
+        {"getTopList": _page([None], hasNextPage=True, nextPageToken=f"page-{i + 2}")}
+        for i in range(server._MAX_POPULAR)
+    ]
+    graphql = _Graphql({server._Q_TOP_LIST: pages})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    result = server.popular_books(2024, limit=server._MAX_POPULAR)
+
+    assert len(graphql.variables_for(server._Q_TOP_LIST)) == server._MAX_POPULAR_PAGES
+    assert result["returned"] == 0
+    assert result["has_more"] is True
+
 # ------------------------------------------------------------ compare_books
 
 
