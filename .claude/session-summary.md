@@ -24,24 +24,20 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-10-03 — the ACMM L6 gaps (#269–#276)
+## 2026-10-04 — the nightly drift issue's exact lookup (#279)
 
-**Done:** one pull request per gap, all merged: `merge-queue.yml` (#280,
-inert until an admin adds a `merge_queue` rule), `.claude/risk-config.json`
-(#281, joined to `docs/risk-tiers.md` by `tests/test_risk_config.py`),
-`docs/strategy.md` (#282), `auto-issues.yml` (#283, one `CI failing on main`
-issue per red push to `main`, found by exact title and Actions-bot author),
-`docs/agent-tasks/` (#284), `docs/multi-agent.md` (#285),
-`docs/ai-ops-runbook.md` (#286), `agent-audit.yml` (#287, monthly, fails only
-when an agent change to `.claude/settings.json` or `.claude/hooks/**` was
-merged by a bot). `tests/test_action_pins.py` now exempts named action-free
-workflows (`_NO_ACTIONS`).
+**Done:** `nightly-compliance.yml` now finds its open drift issue the way
+`auto-issues.yml` does: list open issues (`--limit 1000`, no `--search`), keep
+the one with exactly `$TITLE` opened by the Actions bot. The `gh` stub that
+applies a step's `--jq` filter to a fixture now lives in
+`tests/_workflow_steps.py` (`GH_ISSUE_LIST`, `ACTIONS_BOT_LOGINS`, `issue`),
+shared by both workflow test files. Earlier (2026-10-03): the ACMM L6 gaps
+#280–#287, all merged.
 
-**In flight:** nothing.
+**In flight:** the #279 pull request. It changes `.github/workflows/`, so a
+person merges it.
 
-**Blocked on:** #279, the nightly drift issue's fuzzy `--search` lookup, needs
-a person to land (workflow change). `auto-issues.yml` already uses the exact
-lookup #279 proposes. #247 is closed; whether its A/B/C choice (remembering a
+**Blocked on:** #247 is closed; whether its A/B/C choice (remembering a
 refused key that comes back unchanged) was made is not recorded here.
 
 **Watch:**

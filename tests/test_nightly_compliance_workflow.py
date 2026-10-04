@@ -33,7 +33,12 @@ Four things were asserted by nothing and are asserted here:
   fallback and the shell's `${RETRIES:-1}` — are joined to each other.
 - **The drift issue.** It is the whole output of a failed run. It must go to an
   existing open issue when there is one and open a new one otherwise; the
-  reverse is a new issue every night until someone notices.
+  reverse is a new issue every night until someone notices. "There is one"
+  means an open issue with exactly this title that the Actions bot opened
+  (#279): `--search "<title> in:title"` is a word match against an index that
+  lags, so it would report into a lookalike or an issue anyone opened, or miss
+  yesterday's issue and file a duplicate. The `gh` stub applies the step's own
+  `--jq` filter to a fixture of open issues, so the filter is run, not read.
 
 A `run:` step that is not in `_EXECUTED` below fails the last test in the file,
 so a new step cannot be added without either running it or saying out loud that
@@ -86,7 +91,9 @@ _TITLE = "Nightly live check failing — Goodreads may have changed"
 # `jq -r '<path> // <default>'`, as the tuning step writes it.
 _JQ_FILTER = re.compile(r"jq -r '([^']+)'")
 
-needs_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="the tuning step shells out to jq")
+needs_jq = pytest.mark.skipif(
+    shutil.which("jq") is None, reason="the tuning step and the gh stub's `issue list` shell out to jq"
+)
 
 
 def _body(name: str, values: dict[str, str] | None = None) -> str:
@@ -462,23 +469,18 @@ _RUN_ENV = {
 }
 
 
-def _gh_stub(directory: Path, log: Path, existing: str) -> None:
-    _write_stub(
-        directory,
-        "gh",
-        _recorder(log) + f'case "$1 $2" in\n  "issue list") printf \'%s\' "{existing}" ;;\nesac\n',
-    )
-
-
-def _drift(tmp_path: Path, *, existing: str, log_text: str | None = "live output\n"):
+def _drift(tmp_path: Path, *, issues: list[dict], log_text: str | None = "live output\n"):
+    """Run the step with `issues` as the repo's open issues; return (result, gh calls)."""
     stubs = _bin(tmp_path)
     log = tmp_path / "argv"
-    _gh_stub(stubs, log, existing)
+    fixture = tmp_path / "issues.json"
+    fixture.write_text(json.dumps(issues), encoding="utf-8")
+    _write_stub(stubs, "gh", _recorder(log) + _workflow_steps.GH_ISSUE_LIST)
     _write_stub(stubs, "date", _recorder(tmp_path / "date-argv") + 'echo "2026-01-02"\n')
     if log_text is not None:
         (tmp_path / "live.log").write_text(log_text, encoding="utf-8")
 
-    result = _run(_body(_ISSUE_STEP), tmp_path, path_dirs=[stubs], env=dict(_RUN_ENV))
+    result = _run(_body(_ISSUE_STEP), tmp_path, path_dirs=[stubs], env={**_RUN_ENV, "FIXTURE": str(fixture)})
     return result, [record[1:] for record in _argv(log)]
 
 
@@ -486,35 +488,86 @@ def _flag(call: list[str], flag: str) -> str:
     return call[call.index(flag) + 1]
 
 
+_issue = _workflow_steps.issue
+_OURS = [_issue(42, _TITLE, "app/github-actions")]
+
+
+@needs_jq
 def test_a_first_failure_opens_one_issue_with_the_agreed_title(tmp_path: Path):
-    result, calls = _drift(tmp_path, existing="")
+    result, calls = _drift(tmp_path, issues=[])
 
     assert result.returncode == 0, result.stderr
     assert [call[:2] for call in calls] == [["issue", "list"], ["issue", "create"]]
     assert _flag(calls[1], "--title") == _TITLE
 
 
-def test_a_repeat_failure_comments_on_the_open_issue_instead_of_opening_another(tmp_path: Path):
-    """Otherwise a week of upstream breakage is seven identical issues."""
-    result, calls = _drift(tmp_path, existing="42")
+@needs_jq
+@pytest.mark.parametrize("login", _workflow_steps.ACTIONS_BOT_LOGINS)
+def test_a_repeat_failure_comments_on_the_issue_the_bot_opened_instead_of_opening_another(
+    tmp_path: Path, login: str
+):
+    """Otherwise a week of upstream breakage is seven identical issues.
+
+    GraphQL reports an app actor as `app/github-actions`; the REST spellings differ.
+    """
+    result, calls = _drift(tmp_path, issues=[_issue(42, _TITLE, login)])
 
     assert result.returncode == 0, result.stderr
     assert [call[:3] for call in calls] == [["issue", "list", "--state"], ["issue", "comment", "42"]]
-    assert not any(call[:2] == ["issue", "create"] for call in calls)
 
 
-def test_the_search_is_scoped_to_open_issues_with_that_exact_title(tmp_path: Path):
-    """A title-only search would match the issue text of anything quoting it."""
-    _, calls = _drift(tmp_path, existing="")
+@needs_jq
+def test_an_issue_with_the_same_title_by_a_user_is_ignored_and_a_new_one_is_opened(tmp_path: Path):
+    """The repo is public: anyone can open an issue with this title and capture the reports."""
+    result, calls = _drift(tmp_path, issues=[_issue(7, _TITLE, "some-user")])
 
-    search = calls[0]
-    assert _flag(search, "--state") == "open"
-    assert _flag(search, "--search") == f"{_TITLE} in:title"
-    assert _flag(search, "--jq") == ".[0].number // empty"
+    assert result.returncode == 0, result.stderr
+    assert [call[:2] for call in calls] == [["issue", "list"], ["issue", "create"]]
+    assert _flag(calls[1], "--title") == _TITLE
 
 
+@needs_jq
+def test_a_title_that_only_shares_words_is_ignored_even_from_the_bot(tmp_path: Path):
+    """`in:title` is a word match; these are the neighbours it would have matched."""
+    near = [
+        _issue(3, "Nightly live check failing", "app/github-actions"),
+        _issue(4, "[quality] Nightly live check failing — Goodreads may have changed", "app/github-actions"),
+        _issue(5, _TITLE.lower(), "app/github-actions"),
+    ]
+    result, calls = _drift(tmp_path, issues=near)
+
+    assert result.returncode == 0, result.stderr
+    assert [call[:2] for call in calls] == [["issue", "list"], ["issue", "create"]]
+
+
+@needs_jq
+def test_the_bots_exact_issue_is_found_among_lookalikes_listed_before_it(tmp_path: Path):
+    """The old lookup took `.[0]`; the first match in list order must not win by position."""
+    issues = [
+        _issue(1, _TITLE, "some-user"),
+        _issue(2, "Nightly live check failing", "app/github-actions"),
+        _issue(3, _TITLE, "app/github-actions"),
+    ]
+    _, calls = _drift(tmp_path, issues=issues)
+
+    assert [call[:3] for call in calls] == [["issue", "list", "--state"], ["issue", "comment", "3"]]
+
+
+@needs_jq
+def test_the_lookup_lists_open_issues_and_never_searches(tmp_path: Path):
+    """The search index lags, and a missed issue is a duplicate."""
+    _, calls = _drift(tmp_path, issues=[])
+
+    lookup = calls[0]
+    assert _flag(lookup, "--state") == "open"
+    assert int(_flag(lookup, "--limit")) >= 1000, "a small --limit silently drops the drift issue"
+    assert "--search" not in lookup
+    assert "--search" not in (_step(_ISSUE_STEP).run or "")
+
+
+@needs_jq
 def test_the_issue_body_carries_the_run_link_the_date_and_the_live_output(tmp_path: Path):
-    _, calls = _drift(tmp_path, existing="", log_text="".join(f"line {i}\n" for i in range(1, 41)))
+    _, calls = _drift(tmp_path, issues=[], log_text="".join(f"line {i}\n" for i in range(1, 41)))
 
     body = _flag(calls[1], "--body")
     assert "The nightly live suite failed on 2026-01-02." in body
@@ -525,32 +578,39 @@ def test_the_issue_body_carries_the_run_link_the_date_and_the_live_output(tmp_pa
     assert body.count("```") == 2
 
 
+@needs_jq
 def test_the_issue_is_dated_in_utc_to_the_day(tmp_path: Path):
     """The runner's clock is UTC and a bare year would not identify the run."""
-    _drift(tmp_path, existing="")
+    _drift(tmp_path, issues=[])
 
     assert [record[1:] for record in _argv(tmp_path / "date-argv")] == [["-u", "+%Y-%m-%d"]]
 
 
+@needs_jq
 def test_the_comment_body_is_the_same_text_as_a_fresh_issue_body(tmp_path: Path):
     """A follow-up comment that dropped the run link would be unactionable."""
-    _, opened = _drift(tmp_path, existing="")
-    _, commented = _drift(tmp_path, existing="42")
+    _, opened = _drift(tmp_path, issues=[])
+    second = tmp_path / "second"
+    second.mkdir()
+    _, commented = _drift(second, issues=_OURS)
 
+    assert [call[:2] for call in commented] == [["issue", "list"], ["issue", "comment"]]
     assert _flag(commented[1], "--body") == _flag(opened[1], "--body")
 
 
+@needs_jq
 def test_the_issue_survives_a_run_that_never_wrote_a_log(tmp_path: Path):
     """`live.log` is missing whenever the install step is what failed."""
-    result, calls = _drift(tmp_path, existing="", log_text=None)
+    result, calls = _drift(tmp_path, issues=[], log_text=None)
 
     assert result.returncode == 0, result.stderr
     assert "The nightly live suite failed on 2026-01-02." in _flag(calls[1], "--body")
 
 
+@needs_jq
 def test_the_issue_points_at_a_triage_skill_that_exists(tmp_path: Path):
     """The body's one instruction is to use that skill; a rename orphans it."""
-    _, calls = _drift(tmp_path, existing="")
+    _, calls = _drift(tmp_path, issues=[])
 
     body = _flag(calls[1], "--body")
     match = re.search(r"`([a-z-]+)` skill", body)
@@ -563,11 +623,12 @@ def test_the_drift_issue_is_only_opened_by_the_scheduled_run():
     assert _step(_ISSUE_STEP).if_ == "failure() && github.event_name == 'schedule'"
 
 
-def test_the_title_the_step_searches_for_is_the_title_it_opens():
+def test_the_title_the_step_looks_up_is_the_title_it_opens():
     """Both come from one `TITLE` env var; splitting them would defeat the dedupe."""
     step = _step(_ISSUE_STEP)
     assert step.env["TITLE"] == _TITLE
     body = step.run or ""
+    assert ".title == env.TITLE" in body
     assert body.count('"$TITLE"') == 1 and '--title "$TITLE"' in body
 
 
