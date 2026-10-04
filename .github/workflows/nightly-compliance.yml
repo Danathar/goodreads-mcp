@@ -86,7 +86,12 @@ jobs:
         run: |
           body=$(printf 'The nightly live suite failed on %s.\n\nThis usually means Goodreads changed something upstream, not that a commit broke.\nTriage with the `check-live-endpoints` skill, which maps each symptom to the surface that broke.\n\nRun: %s/%s/actions/runs/%s\n\nLast output:\n\n```\n%s\n```\n' \
             "$(date -u +%Y-%m-%d)" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$(tail -30 live.log 2>/dev/null)")
-          existing=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
+          # List rather than search: the search index lags, and `in:title` is a
+          # word match, not an exact one. Match the exact title AND the Actions
+          # bot as author, so an issue anyone else opens with this title is
+          # never the one the nightly reports into.
+          existing=$(gh issue list --state open --limit 1000 --json number,title,author \
+            --jq '[.[] | select(.title == env.TITLE and (.author.login == "app/github-actions" or .author.login == "github-actions[bot]" or .author.login == "github-actions"))][0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"
           else

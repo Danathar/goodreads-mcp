@@ -250,6 +250,30 @@ def argv(log: Path) -> list[list[str]]:
     return records
 
 
+# The rest of a `gh` stub (after `recorder(...)`) whose `issue list` answers from
+# the JSON array in `$FIXTURE` by applying the step's own `--jq` filter with
+# `jq`, so the filter is exercised and not just spelled. Needs `jq` on PATH.
+GH_ISSUE_LIST = r"""
+case "$1 $2" in
+  "issue list")
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "--jq" ]; then jq -r "$2" "$FIXTURE"; break; fi
+      shift
+    done
+    ;;
+esac
+"""
+
+# The authors an issue lookup accepts as the Actions bot. GraphQL reports an
+# app actor as `app/github-actions`; the REST spellings differ.
+ACTIONS_BOT_LOGINS = ("app/github-actions", "github-actions[bot]", "github-actions")
+
+
+def issue(number: int, title: str, login: str) -> dict:
+    """One open issue as `gh issue list --json number,title,author` reports it."""
+    return {"number": number, "title": title, "author": {"login": login}}
+
+
 def run(
     body: str,
     cwd: Path,

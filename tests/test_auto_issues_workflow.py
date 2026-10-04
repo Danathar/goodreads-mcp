@@ -14,7 +14,7 @@ coverage gate measures `goodreads_mcp` only:
   by *listing* open issues and matching the exact title and the Actions bot as
   author. `gh issue list --search "<title> in:title"` is a word match against an
   index that lags, so it would comment on an unrelated issue, or on one anyone
-  opened with the same title, or open duplicates (#279 is the same defect in the
+  opened with the same title, or open duplicates (#279, the same defect in the
   nightly). These tests run the step's shell against a `gh` stub whose `issue
   list` really applies the step's `--jq` filter to a fixture, so the filter is
   exercised and not just spelled.
@@ -51,7 +51,7 @@ _CI = _WORKFLOWS / "ci.yml"
 
 _STEP = "Open or update the CI-failure issue"
 _TITLE = "CI failing on main"
-_BOT_LOGINS = ["app/github-actions", "github-actions[bot]", "github-actions"]
+_BOT_LOGINS = _workflow_steps.ACTIONS_BOT_LOGINS
 
 _WORKFLOW = _workflow_steps.Workflow(_AUTO)
 _write_stub = _workflow_steps.write_stub
@@ -60,17 +60,6 @@ _argv = _workflow_steps.argv
 _run = _workflow_steps.run
 
 needs_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="the stub applies the step's --jq filter with jq")
-
-_GH_STUB = r"""
-case "$1 $2" in
-  "issue list")
-    while [ "$#" -gt 0 ]; do
-      if [ "$1" = "--jq" ]; then jq -r "$2" "$FIXTURE"; break; fi
-      shift
-    done
-    ;;
-esac
-"""
 
 _ENV = {
     "GH_TOKEN": "x",
@@ -81,9 +70,7 @@ _ENV = {
     "COMMIT_MESSAGE": "fix: a thing\n\nlonger explanation\non two lines",
 }
 
-
-def _issue(number: int, title: str, login: str) -> dict:
-    return {"number": number, "title": title, "author": {"login": login}}
+_issue = _workflow_steps.issue
 
 
 def _report(tmp_path: Path, issues: list[dict], **env: str):
@@ -93,7 +80,7 @@ def _report(tmp_path: Path, issues: list[dict], **env: str):
     log = tmp_path / "argv"
     fixture = tmp_path / "issues.json"
     fixture.write_text(json.dumps(issues), encoding="utf-8")
-    _write_stub(stubs, "gh", _recorder(log) + _GH_STUB)
+    _write_stub(stubs, "gh", _recorder(log) + _workflow_steps.GH_ISSUE_LIST)
     _write_stub(stubs, "date", 'echo "2026-01-02"\n')
 
     body = _WORKFLOW.body(_STEP)
