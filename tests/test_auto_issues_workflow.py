@@ -81,7 +81,7 @@ def _report(tmp_path: Path, issues: list[dict], **env: str):
     fixture = tmp_path / "issues.json"
     fixture.write_text(json.dumps(issues), encoding="utf-8")
     _write_stub(stubs, "gh", _recorder(log) + _workflow_steps.GH_ISSUE_LIST)
-    _write_stub(stubs, "date", 'echo "2026-01-02"\n')
+    _write_stub(stubs, "date", _recorder(tmp_path / "date-argv") + 'echo "2026-01-02"\n')
 
     body = _WORKFLOW.body(_STEP)
     result = _run(
@@ -159,6 +159,44 @@ def test_no_open_issues_opens_one(tmp_path: Path):
     assert [call[:2] for call in calls] == [["issue", "list"], ["issue", "create"]]
 
 
+@needs_jq
+def test_a_closed_issue_the_bot_filed_is_not_reported_into(tmp_path: Path):
+    """A closed tracking issue means someone saw main go green; a new failure is news."""
+    result, calls = _report(tmp_path, [_issue(42, _TITLE, "app/github-actions", state="CLOSED")])
+
+    assert result.returncode == 0, result.stderr
+    assert [call[:2] for call in calls] == [["issue", "list"], ["issue", "create"]]
+
+
+@needs_jq
+def test_the_lookup_reads_the_author_it_filters_on(tmp_path: Path):
+    """`gh` returns only the `--json` fields; drop `author` and every failure is a new issue."""
+    _, calls = _report(tmp_path, [_issue(42, _TITLE, "app/github-actions")])
+
+    assert set(_flag(calls[0], "--json").split(",")) >= {"number", "title", "author"}
+    assert calls[1][:3] == ["issue", "comment", "42"]
+
+
+@needs_jq
+def test_with_two_bot_issues_open_the_first_listed_gets_the_comment(tmp_path: Path):
+    """`gh issue list` lists newest first; one report lands in one issue, not both."""
+    issues = [_issue(9, _TITLE, "app/github-actions"), _issue(4, _TITLE, "github-actions[bot]")]
+    _, calls = _report(tmp_path, issues)
+
+    assert [call[:3] for call in calls] == [["issue", "list", "--state"], ["issue", "comment", "9"]]
+
+
+@needs_jq
+def test_a_failed_lookup_fails_the_step_and_opens_nothing(tmp_path: Path):
+    """An API error is not "no issue yet"; reading it as one files a duplicate on every outage."""
+    (tmp_path / "issues.json.fail").write_text("", encoding="utf-8")
+    result, calls = _report(tmp_path, [_issue(42, _TITLE, "app/github-actions")])
+
+    assert result.returncode != 0
+    assert "HTTP 502" in result.stderr, "the run log must say why the lookup failed"
+    assert [call[:2] for call in calls] == [["issue", "list"]]
+
+
 def test_the_lookup_lists_open_issues_and_never_searches(tmp_path: Path):
     """The search index lags, and a missed issue is a duplicate."""
     if shutil.which("jq") is None:
@@ -186,6 +224,30 @@ def test_the_issue_body_carries_the_date_the_commit_the_run_and_the_first_line(t
     assert f"Run: {_ENV['RUN_URL']}" in body
     assert "\n    fix: a thing\n" in body
     assert "longer explanation" not in body, "only the first line of the message belongs in the report"
+
+
+@needs_jq
+def test_the_issue_body_is_exactly_the_report(tmp_path: Path):
+    """The last paragraph is the only place that says release is blocked and who closes it."""
+    _, calls = _report(tmp_path, [])
+
+    assert _flag(calls[1], "--body") == (
+        "The `CI` workflow failed on a push to `main` on 2026-01-02.\n\n"
+        f"Commit: {_ENV['HEAD_SHA']}\n"
+        f"Run: {_ENV['RUN_URL']}\n\n"
+        "First line of the commit message:\n\n"
+        "    fix: a thing\n\n"
+        "`release.yml` will not release this commit while `test` is not green. "
+        "This issue is not closed automatically; close it once `main` is green again."
+    )
+
+
+@needs_jq
+def test_the_issue_is_dated_in_utc_to_the_day(tmp_path: Path):
+    """The runner's clock is UTC only by default; the date must not depend on it."""
+    _report(tmp_path, [])
+
+    assert [record[1:] for record in _argv(tmp_path / "date-argv")] == [["-u", "+%Y-%m-%d"]]
 
 
 @needs_jq
@@ -228,6 +290,19 @@ def test_no_event_expression_is_pasted_into_a_shell_script():
     assert env["HEAD_SHA"] == "${{ github.event.workflow_run.head_sha }}"
     assert env["RUN_URL"] == "${{ github.event.workflow_run.html_url }}"
     assert env["GH_REPO"] == "${{ github.repository }}"
+    assert env["GH_TOKEN"] == "${{ secrets.GITHUB_TOKEN }}"
+
+
+def test_the_title_the_step_looks_up_is_the_title_it_opens():
+    """The tests above supply `TITLE` themselves; this pins the one the workflow sets.
+
+    Changing it orphans the open tracking issue: the next failure opens a second one.
+    """
+    step = _WORKFLOW.step(_STEP)
+    assert step.env["TITLE"] == _TITLE
+    body = step.run or ""
+    assert ".title == env.TITLE" in body
+    assert body.count('"$TITLE"') == 1 and '--title "$TITLE"' in body
 
 
 # --------------------------------------------------------------------------
@@ -278,6 +353,11 @@ def test_the_workflow_may_write_issues_and_nothing_else():
 
 def test_two_failures_queue_rather_than_racing_into_two_issues():
     assert re.search(r"^concurrency:\n  group: \S+\n  cancel-in-progress: false$", _WORKFLOW.text, re.M)
+
+
+def test_the_job_runs_on_a_hosted_runner_where_gh_is_preinstalled():
+    """The step installs nothing; `gh` and `jq` come with GitHub's Ubuntu image."""
+    assert re.findall(r"^    runs-on: (.+)$", _WORKFLOW.text, re.M) == ["ubuntu-latest"]
 
 
 def test_the_workflow_runs_no_repository_code_and_no_third_party_action():

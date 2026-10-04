@@ -554,6 +554,44 @@ def test_the_bots_exact_issue_is_found_among_lookalikes_listed_before_it(tmp_pat
 
 
 @needs_jq
+def test_a_closed_drift_issue_is_not_reported_into(tmp_path: Path):
+    """A closed drift issue was triaged; a new failure is a new report."""
+    result, calls = _drift(tmp_path, issues=[_issue(42, _TITLE, "app/github-actions", state="CLOSED")])
+
+    assert result.returncode == 0, result.stderr
+    assert [call[:2] for call in calls] == [["issue", "list"], ["issue", "create"]]
+
+
+@needs_jq
+def test_the_lookup_reads_the_author_it_filters_on(tmp_path: Path):
+    """`gh` returns only the `--json` fields; drop `author` and every night is a new issue."""
+    _, calls = _drift(tmp_path, issues=_OURS)
+
+    assert set(_flag(calls[0], "--json").split(",")) >= {"number", "title", "author"}
+    assert calls[1][:3] == ["issue", "comment", "42"]
+
+
+@needs_jq
+def test_with_two_bot_issues_open_the_first_listed_gets_the_comment(tmp_path: Path):
+    """`gh issue list` lists newest first; one report lands in one issue, not both."""
+    issues = [_issue(9, _TITLE, "app/github-actions"), _issue(4, _TITLE, "github-actions[bot]")]
+    _, calls = _drift(tmp_path, issues=issues)
+
+    assert [call[:3] for call in calls] == [["issue", "list", "--state"], ["issue", "comment", "9"]]
+
+
+@needs_jq
+def test_a_failed_lookup_fails_the_step_and_opens_nothing(tmp_path: Path):
+    """An API error is not "no issue yet"; reading it as one files a duplicate on every outage."""
+    (tmp_path / "issues.json.fail").write_text("", encoding="utf-8")
+    result, calls = _drift(tmp_path, issues=_OURS)
+
+    assert result.returncode != 0
+    assert "HTTP 502" in result.stderr, "the run log must say why the lookup failed"
+    assert [call[:2] for call in calls] == [["issue", "list"]]
+
+
+@needs_jq
 def test_the_lookup_lists_open_issues_and_never_searches(tmp_path: Path):
     """The search index lags, and a missed issue is a duplicate."""
     _, calls = _drift(tmp_path, issues=[])
@@ -627,6 +665,7 @@ def test_the_title_the_step_looks_up_is_the_title_it_opens():
     """Both come from one `TITLE` env var; splitting them would defeat the dedupe."""
     step = _step(_ISSUE_STEP)
     assert step.env["TITLE"] == _TITLE
+    assert step.env["GH_TOKEN"] == "${{ secrets.GITHUB_TOKEN }}"
     body = step.run or ""
     assert ".title == env.TITLE" in body
     assert body.count('"$TITLE"') == 1 and '--title "$TITLE"' in body
