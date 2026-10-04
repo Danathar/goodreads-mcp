@@ -21,13 +21,27 @@ and `gh pr list`-shaped fixtures:
   document here makes either a rule.
 - **Refusals.** A window that fills the list cap, and a `since` that is not a
   real `YYYY-MM-DD`, stop the run with exit 2 rather than auditing part of it.
+  So does a `gh api` call that fails: an empty page read as "no commits, no
+  files" would pass a pull request nobody looked at.
+
+The `gh` stub answers `gh pr list` the way `gh` does, not the way the step
+hopes: open pull requests unless `--state merged`, the first 30 unless
+`--limit`, and only the fields named in `--json`. A stub that served every
+fixture whatever it was asked would keep passing after any of those flags was
+dropped. Each rule also has a near miss beside it (a path that only contains
+`.claude/hooks/`, a key that only ends in `agent=`, a commit that mentions
+Signed-off-by in prose), because a rule tested only on inputs that obviously
+match still passes when its anchor is deleted.
 
 The step is sliced out of the workflow by `tests/_workflow_steps.py` and run
-under `bash -e`, the shell GitHub uses (the step sets `pipefail` itself).
+under `bash -e`, the shell GitHub uses. The step has no `shell:` key, so it
+gets no `pipefail` from the runner and has to set it itself; the tests do not
+supply it.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import shutil
@@ -49,14 +63,40 @@ _SIGNATURE = "— hive: agent=quality backend=claude model=claude-opus-5-5 effor
 _HUMAN = {"login": "Danathar", "is_bot": False}
 _APP = {"login": "app/github-actions", "is_bot": True}
 
-# Serves what the step asks of `gh`. `gh pr list` returns the fixture list;
+# Serves what the step asks of `gh`. `gh pr list` returns the fixture list
+# (every fixture is a merged pull request) as `gh` would: nothing unless
+# `--state merged`, at most `--limit` (default 30), and only the `--json`
+# fields; without `--json` it prints a table, which is not JSON.
 # `gh api --paginate .../pulls/N/{commits,files}` returns every page file for
 # that pull request, as `--jq` would apply per page, and without `--paginate`
-# only the first. `gh pr view` is refused: it is the call that truncates.
+# only the first; a `N.<kind>.fail` fixture makes that call fail.
+# `gh pr view` is refused: it is the call that truncates.
 _GH = r"""
 echo "gh $*" >> "$FIXTURES/calls"
+if [ "$1 $2" = "pr list" ]; then
+  shift 2
+  state=open limit=30 fields=
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --state) state="$2" ;;
+      --limit) limit="$2" ;;
+      --json) fields="$2" ;;
+      --repo|--search) ;;
+      *) echo "gh pr list: unexpected argument $1" >&2; exit 64 ;;
+    esac
+    shift 2
+  done
+  if [ -z "$fields" ]; then
+    echo "Showing pull requests in Danathar/goodreads-mcp"
+    exit 0
+  fi
+  jq --arg state "$state" --argjson limit "$limit" --arg fields "$fields" '
+    if $state == "merged" then .[:$limit] else [] end
+    | map(with_entries(select(.key as $k | $fields | split(",") | index($k))))
+  ' "$FIXTURES/prs.json"
+  exit 0
+fi
 case "$1 $2" in
-  "pr list") cat "$FIXTURES/prs.json" ;;
   "api --paginate") pages=all ;;
   "pr view") echo "gh pr view truncates commits and files at 100" >&2; exit 9 ;;
   *) pages=first ;;
@@ -67,7 +107,11 @@ if [ "$1" = api ]; then
   kind="${path##*/}"; number="${path%/*}"; number="${number##*/}"
   filter=.
   [ "$3" = --jq ] && filter="$4"
-  for page in "$FIXTURES/$number.$kind".*; do
+  if [ -e "$FIXTURES/$number.$kind.fail" ]; then
+    echo "HTTP 502: Bad Gateway (https://api.github.com/$path)" >&2
+    exit 1
+  fi
+  for page in "$FIXTURES/$number.$kind".[0-9]*; do
     jq -r "$filter" "$page"
     [ "$pages" = all ] || break
   done
@@ -102,8 +146,16 @@ def _commit(i: int, *, signed: bool = True):
     return {"sha": f"{i:040x}", "commit": {"message": message}}
 
 
+def _file(name: str | tuple[str, str]) -> dict:
+    """A REST file entry; a `(new, old)` pair is a rename, as `previous_filename` reports it."""
+    if isinstance(name, tuple):
+        return {"filename": name[0], "previous_filename": name[1], "status": "renamed"}
+    return {"filename": name, "status": "modified"}
+
+
 def _fixtures(tmp_path: Path, prs: list[dict], commits: dict[int, list[list[dict]]] | None = None,
-              files: dict[int, list[list[str]]] | None = None) -> Path:
+              files: dict[int, list[list[str | tuple[str, str]]]] | None = None,
+              failing: tuple[int, str] | None = None) -> Path:
     directory = tmp_path / "fixtures"
     directory.mkdir()
     (directory / "prs.json").write_text(json.dumps(prs), encoding="utf-8")
@@ -115,8 +167,10 @@ def _fixtures(tmp_path: Path, prs: list[dict], commits: dict[int, list[list[dict
         ):
             pages = (source or {}).get(number, default)
             for index, page in enumerate(pages):
-                payload = page if kind == "commits" else [{"filename": name} for name in page]
+                payload = page if kind == "commits" else [_file(name) for name in page]
                 (directory / f"{number}.{kind}.{index}").write_text(json.dumps(payload), encoding="utf-8")
+    if failing:
+        (directory / "{}.{}.fail".format(*failing)).write_text("", encoding="utf-8")
     return directory
 
 
@@ -138,7 +192,6 @@ def _audit(tmp_path: Path, prs: list[dict], *, since: str = "2026-09-01", **kwar
             "FIXTURES": str(fixtures),
             "GITHUB_STEP_SUMMARY": str(summary),
         },
-        pipefail=True,
     )
     calls = (fixtures / "calls").read_text(encoding="utf-8") if (fixtures / "calls").exists() else ""
     return result, summary.read_text(encoding="utf-8"), calls
@@ -179,6 +232,7 @@ def test_the_hive_app_pull_request_is_selected_and_reported(tmp_path: Path):
     assert result.returncode == 0, result.stderr
     (row,) = _rows(summary)
     cells = [cell.strip() for cell in row.strip("|").split(" | ")]
+    assert cells[0] == "[#3](https://github.com/Danathar/goodreads-mcp/pull/3) t"
     assert cells[1:] == [
         "2026-09-20",
         _HIVE,
@@ -216,6 +270,8 @@ def test_a_maintainer_pull_request_with_a_valid_signature_is_selected(tmp_path: 
         "— hive: backend=claude model=x",
         "— hive: agent= backend=claude model=x",
         "see — hive: agent=quality backend=claude model=x",
+        "— hive: subagent=quality backend=claude model=x",
+        "— hive: agent=quality backend=claude supermodel=x",
     ],
 )
 def test_a_bare_or_partial_signature_does_not_select_a_maintainer_pull_request(tmp_path: Path, line: str):
@@ -243,6 +299,30 @@ def test_a_commit_without_signed_off_by_is_reported_and_not_failed(tmp_path: Pat
     assert result.returncode == 0, result.stderr
     assert "| 2 | 1 of 2 |" in _rows(summary)[0]
     assert "1 with a commit lacking Signed-off-by" in summary
+
+
+def test_a_commit_that_mentions_signed_off_by_in_prose_is_still_unsigned(tmp_path: Path):
+    """The trailer starts a line; a sentence that names it is not one."""
+    prose = {"sha": f"{1:040x}", "commit": {"message": "change\n\nNot Signed-off-by: anyone yet\n"}}
+
+    _, summary, _ = _audit(tmp_path, [_hive(18)], commits={18: [[prose]]})
+
+    assert "| 1 | 0 of 1 |" in _rows(summary)[0]
+
+
+def test_a_pipe_in_a_title_does_not_add_a_column(tmp_path: Path):
+    _, summary, _ = _audit(tmp_path, [_hive(19, title="guard | hooks")])
+
+    (row,) = _rows(summary)
+    assert "guard \\| hooks" in row
+    assert len(row.replace("\\|", "").strip("|").split("|")) == 8
+
+
+def test_the_report_goes_to_the_run_log_as_well_as_the_summary(tmp_path: Path):
+    result, summary, _ = _audit(tmp_path, [_hive(20)])
+
+    assert summary.startswith("### Agent audit trail")
+    assert summary.strip() in result.stdout
 
 
 # --------------------------------------------------------------------------
@@ -275,6 +355,28 @@ def test_a_pull_request_that_fills_the_rest_commit_cap_is_refused(tmp_path: Path
 
     assert result.returncode == 2
     assert "#10 reached the REST list cap" in result.stdout
+
+
+def test_a_pull_request_that_fills_the_rest_file_cap_is_refused(tmp_path: Path):
+    """GET /pulls/{n}/files holds at most 3000; a pull request at the cap is not fully read."""
+    names = [f"docs/f{i}.md" for i in range(3000)]
+
+    result, _, _ = _audit(tmp_path, [_hive(21)], files={21: [names[i:i + 100] for i in range(0, 3000, 100)]})
+
+    assert result.returncode == 2
+    assert "#21 reached the REST list cap" in result.stdout
+
+
+@pytest.mark.parametrize("kind", ["commits", "files"])
+def test_a_failed_api_call_stops_the_run_instead_of_reading_as_empty(tmp_path: Path, kind: str):
+    """Without `pipefail` the `jq -s` after it turns a failed fetch into `[]`, a clean row."""
+    result, summary, _ = _audit(
+        tmp_path, [_hive(22, merged_by=_APP)], files={22: [[".claude/hooks/x"]]}, failing=(22, kind)
+    )
+
+    assert result.returncode != 0
+    assert "HTTP 502" in result.stderr
+    assert summary == "", "a failed fetch was reported as a pull request with nothing in it"
 
 
 # --------------------------------------------------------------------------
@@ -321,6 +423,42 @@ def test_an_unknown_merger_is_not_taken_for_a_human(tmp_path: Path):
     assert "merged by unknown" in summary
 
 
+def test_a_rename_out_of_the_hooks_counts_as_touching_them(tmp_path: Path):
+    """Moving the guard away removes it; the old path is what was on the boundary."""
+    pr = _hive(23, merged_by=_APP)
+
+    result, summary, _ = _audit(tmp_path, [pr], files={23: [[("tools/guard-bash.py", ".claude/hooks/guard-bash.py")]]})
+
+    assert result.returncode == 1
+    assert "`.claude/hooks/guard-bash.py`" in summary
+
+
+def test_an_app_login_is_a_bot_even_without_the_flag(tmp_path: Path):
+    result, _, _ = _audit(
+        tmp_path, [_hive(24, merged_by={"login": "app/merge-bot", "is_bot": False})],
+        files={24: [[".claude/settings.json"]]},
+    )
+
+    assert result.returncode == 1
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "docs/.claude/hooks/x",
+        "tests/fixtures/.claude/settings.json",
+        ".claude/settings.json.orig",
+        ".claude/settings.local.json",
+        ".claude/hooks-old/x",
+    ],
+)
+def test_a_path_that_only_resembles_the_boundary_is_not_on_it(tmp_path: Path, path: str):
+    result, summary, _ = _audit(tmp_path, [_hive(25, merged_by=_APP)], files={25: [[path]]})
+
+    assert result.returncode == 0, (result.stderr, summary)
+    assert _rows(summary)[0].endswith("| none |")
+
+
 def test_a_bot_merge_that_touches_nothing_on_the_boundary_passes(tmp_path: Path):
     result, _, _ = _audit(tmp_path, [_hive(15, merged_by=_APP)], files={15: [["tests/x.py", ".claude/skills/a/SKILL.md"]]})
 
@@ -362,11 +500,25 @@ def test_a_since_that_is_not_a_real_date_is_refused_before_anything_is_fetched(t
 
 
 def test_a_blank_since_defaults_to_the_last_31_days_and_is_passed_to_the_search(tmp_path: Path):
+    before = datetime.now(timezone.utc)
     result, summary, calls = _audit(tmp_path, [], since="")
 
+    after = datetime.now(timezone.utc)
+
     assert result.returncode == 0, result.stderr
-    assert "--search merged:>=" in calls
-    assert "merged since 20" in summary
+    expected = {(moment - timedelta(days=31)).date().isoformat() for moment in (before, after)}
+    (searched,) = [line.split("--search merged:>=")[1].split()[0] for line in calls.splitlines() if "--search" in line]
+    assert searched in expected
+    assert f"merged since {searched}" in summary
+
+
+def test_the_list_asks_gh_for_merged_pull_requests_up_to_the_cap(tmp_path: Path):
+    """`gh pr list` lists open pull requests, 30 of them, unless told otherwise."""
+    _, _, calls = _audit(tmp_path, [_hive(26)])
+
+    (call,) = [line for line in calls.splitlines() if line.startswith("gh pr list")]
+    assert " --state merged " in call
+    assert " --limit 500 " in call
 
 
 # --------------------------------------------------------------------------
