@@ -266,15 +266,43 @@ def argv(log: Path) -> list[list[str]]:
 
 
 # The rest of a `gh` stub (after `recorder(...)`) whose `issue list` answers from
-# the JSON array in `$FIXTURE` by applying the step's own `--jq` filter with
-# `jq`, so the filter is exercised and not just spelled. Needs `jq` on PATH.
+# the JSON array in `$FIXTURE` the way `gh` would, then applies the step's own
+# `--jq` filter with `jq`, so the filter is exercised and not just spelled.
+# Needs `jq` on PATH.
+#
+# Like `gh`, it serves only what the flags ask for: issues in the `--state`
+# (default open), at most `--limit` (default 30), and only the `--json` fields,
+# so a lookup that stops asking for `author` sees no author. Without `--json`
+# it prints a table, which is not JSON. Any other flag exits 64. A
+# `$FIXTURE.fail` file makes the call fail, as an API outage would.
 GH_ISSUE_LIST = r"""
 case "$1 $2" in
   "issue list")
+    shift 2
+    state=open limit=30 fields= filter=
     while [ "$#" -gt 0 ]; do
-      if [ "$1" = "--jq" ]; then jq -r "$2" "$FIXTURE"; break; fi
-      shift
+      case "$1" in
+        --state) state="$2" ;;
+        --limit) limit="$2" ;;
+        --json) fields="$2" ;;
+        --jq) filter="$2" ;;
+        *) echo "gh issue list: unexpected argument $1" >&2; exit 64 ;;
+      esac
+      shift 2
     done
+    if [ -e "$FIXTURE.fail" ]; then
+      echo "HTTP 502: Bad Gateway (https://api.github.com/graphql)" >&2
+      exit 1
+    fi
+    if [ -z "$fields" ]; then
+      echo "Showing open issues in Danathar/goodreads-mcp"
+      exit 0
+    fi
+    jq --arg state "$state" --argjson limit "$limit" --arg fields "$fields" '
+      map(select($state == "all" or (.state | ascii_downcase) == $state))
+      | .[:$limit]
+      | map(with_entries(select(.key as $k | $fields | split(",") | index($k))))
+    ' "$FIXTURE" | jq -r "${filter:-.}"
     ;;
 esac
 """
@@ -284,9 +312,9 @@ esac
 ACTIONS_BOT_LOGINS = ("app/github-actions", "github-actions[bot]", "github-actions")
 
 
-def issue(number: int, title: str, login: str) -> dict:
-    """One open issue as `gh issue list --json number,title,author` reports it."""
-    return {"number": number, "title": title, "author": {"login": login}}
+def issue(number: int, title: str, login: str, state: str = "OPEN") -> dict:
+    """One issue as `gh issue list --json number,title,author,state` reports it."""
+    return {"number": number, "title": title, "author": {"login": login}, "state": state}
 
 
 def run(
