@@ -35,6 +35,8 @@ import re
 
 import pytest
 
+import _workflow_steps
+
 _ROOT = Path(__file__).resolve().parent.parent
 _WORKFLOWS = _ROOT / ".github" / "workflows"
 _POLICY_PATH = _ROOT / ".github" / "policies" / "workflow-permissions.json"
@@ -140,21 +142,15 @@ def _declared(text: str) -> dict[str, object]:
     return {"workflow": _block(lines, 0), "jobs": jobs}
 
 
-def _workflow_files() -> list[Path]:
-    paths = sorted(p for p in _WORKFLOWS.iterdir() if p.suffix in {".yml", ".yaml"})
-    assert paths, f"no workflow files under {_WORKFLOWS}"
-    return paths
-
-
 def test_every_workflow_is_in_the_policy_and_every_entry_is_a_workflow() -> None:
-    present = {p.name for p in _workflow_files()}
+    present = {p.name for p in _workflow_steps.workflow_files()}
     assert present == set(_POLICY), (
         f"not in the policy: {sorted(present - set(_POLICY))}; "
         f"in the policy but no such workflow: {sorted(set(_POLICY) - present)}"
     )
 
 
-@pytest.mark.parametrize("path", _workflow_files(), ids=lambda p: p.name)
+@pytest.mark.parametrize("path", _workflow_steps.workflow_files(), ids=lambda p: p.name)
 def test_the_workflow_declares_exactly_what_the_policy_allows(path: Path) -> None:
     declared = _declared(path.read_text(encoding="utf-8"))
     expected = _POLICY[path.name]

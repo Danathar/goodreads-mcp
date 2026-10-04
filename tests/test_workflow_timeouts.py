@@ -29,8 +29,9 @@ import re
 
 import pytest
 
+import _workflow_steps
+
 _ROOT = Path(__file__).resolve().parent.parent
-_WORKFLOWS = _ROOT / ".github" / "workflows"
 
 # Above this, a declared cap stops being a bound worth having. GitHub's own
 # default is 360; the slowest job here is the live suite, which is minutes.
@@ -76,14 +77,8 @@ def _jobs(path: Path) -> dict[str, list[str]]:
     return jobs
 
 
-def _workflow_files() -> list[Path]:
-    paths = sorted(p for p in _WORKFLOWS.glob("*.yml"))
-    assert paths, f"no workflow files under {_WORKFLOWS}"
-    return paths
-
-
 def _every_job() -> list[tuple[Path, str]]:
-    return [(path, job) for path in _workflow_files() for job in _jobs(path)]
+    return [(path, job) for path in _workflow_steps.workflow_files() for job in _jobs(path)]
 
 
 _ALL_JOBS = _every_job()

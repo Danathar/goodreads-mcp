@@ -76,3 +76,14 @@ def test_a_single_job_file_reads_the_same_with_or_without_the_name(two_jobs: Pat
     unnamed = [step.name for step in _workflow_steps.Workflow(single).steps]
     named = [step.name for step in _workflow_steps.Workflow(single, job="first").steps]
     assert unnamed == named == ["A", "B"]
+
+
+def test_the_workflow_list_takes_both_suffixes_and_only_top_level_files(tmp_path: Path):
+    # GitHub runs `.yml` and `.yaml` files directly under .github/workflows/,
+    # and nothing else; every "each workflow" test takes its list from here.
+    for name in ("b.yaml", "a.yml", "notes.md"):
+        (tmp_path / name).write_text("on: push\n", encoding="utf-8")
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "c.yml").write_text("on: push\n", encoding="utf-8")
+
+    assert [p.name for p in _workflow_steps.workflow_files(tmp_path)] == ["a.yml", "b.yaml"]
