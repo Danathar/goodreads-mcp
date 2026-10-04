@@ -23,6 +23,8 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+import _workflow_steps
+
 _ROOT = Path(__file__).resolve().parents[1]
 _WORKFLOWS = _ROOT / ".github" / "workflows"
 _REQUIRES = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["requires-python"]
@@ -106,7 +108,7 @@ def test_the_ci_test_job_runs_the_floor_exactly():
 
 def test_no_workflow_sets_up_a_python_below_the_floor_or_misnames_it():
     seen = 0
-    for path in sorted(_WORKFLOWS.glob("*.yml")):
+    for path in _workflow_steps.workflow_files():
         for name, version in _setup_python_steps(path):
             seen += 1
             assert _version(version) >= _floor(), f"{path.name}: python-version {version} is below {_REQUIRES!r}"

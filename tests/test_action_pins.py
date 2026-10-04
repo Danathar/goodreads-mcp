@@ -20,9 +20,10 @@ fails rather than slipping past.
 from __future__ import annotations
 
 import re
-import subprocess
 from collections import defaultdict
 from pathlib import Path
+
+import _workflow_steps
 
 _ROOT = Path(__file__).resolve().parents[1]
 _DEPENDABOT = _ROOT / ".github" / "dependabot.yml"
@@ -41,21 +42,10 @@ _PINNED = re.compile(
 )
 
 
-def _workflow_files() -> list[Path]:
-    out = subprocess.run(
-        ["git", "ls-files", "--", ".github/workflows/*.yml", ".github/workflows/*.yaml"],
-        cwd=_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    return [_ROOT / p for p in out.splitlines()]
-
-
 def _uses_lines() -> list[tuple[str, str]]:
     """(file:line, text) for every non-comment line that says `uses:`."""
     found = []
-    for path in _workflow_files():
+    for path in _workflow_steps.workflow_files():
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if _USES.match(line):
                 found.append((f"{path.name}:{number}", line))
@@ -63,7 +53,7 @@ def _uses_lines() -> list[tuple[str, str]]:
 
 
 def test_the_scan_reaches_every_workflow_and_finds_the_known_actions():
-    names = {path.name for path in _workflow_files()}
+    names = {path.name for path in _workflow_steps.workflow_files()}
     assert {"ci.yml", "release.yml", "nightly-compliance.yml", "ai-fix.yml", "labeler.yml"} <= names
     seen = {where.split(":")[0] for where, _ in _uses_lines()}
     unexpected = names - seen - set(_NO_ACTIONS)

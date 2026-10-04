@@ -63,7 +63,6 @@ import _workflow_steps
 
 _ROOT = Path(__file__).resolve().parent.parent
 _AI_FIX = _ROOT / ".github" / "workflows" / "ai-fix.yml"
-_WORKFLOW_DIR = _ROOT / ".github" / "workflows"
 _SECURITY = _ROOT / "docs" / "SECURITY-AI.md"
 _AGENTS = _ROOT / "AGENTS.md"
 _RUBRIC = _ROOT / "docs" / "review-rubric.md"
@@ -428,7 +427,7 @@ def test_a_write_capable_workflow_on_an_outsider_event_either_gates_or_runs_noth
     """
     outsider = ("issues", "issue_comment", "pull_request_target")
     checked = 0
-    for path in sorted(_WORKFLOW_DIR.glob("*.yml")):
+    for path in _workflow_steps.workflow_files():
         text = path.read_text(encoding="utf-8")
         triggers = re.search(r"^on:\n((?:[ \t].*\n|\n)+)", text, re.M)
         assert triggers, f"{path.name} has no on: block"
@@ -695,7 +694,7 @@ def test_the_summary_says_what_enabling_the_agent_takes(summary):
 
 def test_the_summary_is_telling_the_truth_about_no_agent_being_wired_up():
     """The moment a workflow `uses:` the action, this step's text is false."""
-    for path in sorted(_WORKFLOW_DIR.glob("*.yml")):
+    for path in _workflow_steps.workflow_files():
         text = path.read_text(encoding="utf-8")
         assert not re.search(r"^\s*(-\s*)?uses:\s*anthropics/", text, re.M), (
             f"{path.name} wires up an agent; ai-fix.yml's summary still says none is"

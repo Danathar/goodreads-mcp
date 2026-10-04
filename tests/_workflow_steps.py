@@ -33,6 +33,21 @@ OUTPUT_REF = re.compile(r"steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)")
 
 _BLOCK_SCALAR = {"|", "|-", "|+", ">", ">-", ">+"}
 
+WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+
+
+def workflow_files(directory: Path = WORKFLOWS) -> list[Path]:
+    """Every workflow GitHub would run, sorted by name.
+
+    GitHub runs each `.yml` and each `.yaml` file directly under
+    `.github/workflows/`, and nothing in a subdirectory. A test that checks a
+    rule over "every workflow" takes its list from here, so one that globbed
+    `*.yml` alone cannot quietly skip a file saved as `.yaml`.
+    """
+    paths = sorted(p for p in directory.iterdir() if p.is_file() and p.suffix in {".yml", ".yaml"})
+    assert paths, f"no workflow files under {directory}"
+    return paths
+
 
 class Step:
     """One entry of a `steps:` list, with only the keys these tests need."""
