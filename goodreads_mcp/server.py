@@ -46,7 +46,14 @@ import anyio  # mcp's own async layer (it requires anyio>=4.5), not a new depend
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-from .client import BASE, GoodreadsClient, GraphQLError, LoginRequired, ToolCall
+from .client import (
+    BASE,
+    GoodreadsClient,
+    GraphQLError,
+    LoginRequired,
+    ToolCall,
+    parse_rating,
+)
 from .config import load_user_id
 
 _READ_ONLY = ToolAnnotations(
@@ -650,7 +657,7 @@ def search_books(query: str, max_results: int = 10) -> list[dict[str, Any]]:
                 "book_id": b.get("bookId"),
                 "title": b.get("title"),
                 "author": (b.get("author") or {}).get("name"),
-                "average_rating": b.get("avgRating"),
+                "average_rating": parse_rating(b.get("avgRating")),
                 "ratings_count": b.get("ratingsCount"),
                 "pages": b.get("numPages"),
                 "cover": b.get("imageUrl"),

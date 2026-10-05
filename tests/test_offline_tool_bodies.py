@@ -157,7 +157,7 @@ def test_search_books_normalizes_the_autocomplete_payload(monkeypatch):
             "book_id": "54493401",
             "title": "Project Hail Mary",
             "author": "Andy Weir",
-            "average_rating": "4.51",
+            "average_rating": 4.51,
             "ratings_count": 1234,
             "pages": 476,
             "cover": "https://images.example/phm.jpg",

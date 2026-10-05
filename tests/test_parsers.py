@@ -15,6 +15,7 @@ from goodreads_mcp.client import (
     parse_appsync_config,
     parse_appsync_endpoint,
     parse_page_api_key,
+    parse_rating,
 )
 from goodreads_mcp.server import _clean_text, _legacy_id, _ms_to_iso
 
@@ -281,6 +282,7 @@ def test_parse_shelf_rss_full_item():
     assert first["author"] == "Frank Herbert"
     assert first["book_id"] == "234225"
     assert first["my_rating"] == "5"
+    assert first["average_rating"] == 4.27
     assert first["shelves"] == "sci-fi, favorites"
     assert first["year_published"] == "1965"
 
@@ -291,6 +293,27 @@ def test_parse_shelf_rss_missing_fields_default_empty():
     assert second["title"] == "Neuromancer"
     assert second["isbn"] == ""
     assert second["my_rating"] == ""
+    assert second["average_rating"] is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("4.29", 4.29),
+        (" 4.00 ", 4.0),
+        (4.36, 4.36),
+        (4, 4.0),
+        ("", None),
+        ("n/a", None),
+        ("nan", None),
+        ("inf", None),
+        (None, None),
+        (True, None),
+        ({}, None),
+    ],
+)
+def test_parse_rating(value, expected):
+    assert parse_rating(value) == expected
 
 
 # ----------------------------------------------------------------- next_data

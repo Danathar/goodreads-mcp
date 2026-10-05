@@ -35,7 +35,7 @@ A **read-only** MCP server for Goodreads — built without the Goodreads API, be
 
 Every tool is registered with MCP read-only annotations (read-only, non-destructive, idempotent).
 
-The discovery tools all take a `book_id` and return results carrying `book_id`/title/author/rating/url, so an agent can chain them — e.g. `similar_books` → `get_reviews` on a recommendation. `book_id` is a string on both sides (`"54493401"`, or the slug form `"54493401-title"` on input), so a value copied out of one result is accepted as-is by the next call. This is the structured book graph a general web search can't assemble.
+The discovery tools all take a `book_id` and return results carrying `book_id`/title/author/rating/url, so an agent can chain them — e.g. `similar_books` → `get_reviews` on a recommendation. `book_id` is a string on both sides (`"54493401"`, or the slug form `"54493401-title"` on input), so a value copied out of one result is accepted as-is by the next call. `average_rating` is a number (or null) in every tool, so results from different tools sort together. This is the structured book graph a general web search can't assemble.
 
 The five paginated discovery tools (`similar_books`, `author_books`, `series_books`, `get_editions`, `book_lists`) page in batches of 20 and accept a total `limit` up to 100; `popular_books` caps `limit` at 50. Responses include `returned` and `has_more`, keeping larger lookups useful without allowing unbounded traffic.
 
