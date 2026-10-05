@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+import math
 import random
 import re
 import threading
@@ -218,6 +219,24 @@ def parse_page_api_key(html: str) -> str | None:
         return None
     key = page_props.get("apiKey")
     return key if isinstance(key, str) and APPSYNC_KEY_RE.fullmatch(key) else None
+
+
+def parse_rating(value: Any) -> float | None:
+    """An average star rating as a float, or None when there is none.
+
+    The autocomplete JSON and the shelf RSS feed send the rating as text
+    ("4.29"); the GraphQL and Apollo surfaces send a number. Every tool
+    returns the number, so results from different tools sort and compare
+    together. Blank or non-numeric text is None, not an error: these
+    surfaces are unofficial and may send anything.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        rating = float(value)
+    except (TypeError, ValueError):
+        return None
+    return rating if math.isfinite(rating) else None
 
 
 class CallCancelled(BaseException):
@@ -496,7 +515,7 @@ class GoodreadsClient:
                     "author": t("author_name"),
                     "book_id": t("book_id"),
                     "isbn": t("isbn"),
-                    "average_rating": t("average_rating"),
+                    "average_rating": parse_rating(t("average_rating")),
                     "my_rating": t("user_rating"),
                     "shelves": t("user_shelves"),
                     "date_added": t("user_date_added"),
