@@ -11,8 +11,10 @@ So these tests **run the steps**. Each `run:` body is extracted from the
 workflow by indentation (the test extra is `pytest` + `pytest-cov`; there is no
 PyYAML here and CI installs none), the `${{ }}` expressions GitHub would have
 substituted are substituted with an explicit table that raises on anything
-unknown, and the body is handed to `bash --noprofile --norc -e -o pipefail`
-exactly as the runner hands it over — in a temp directory, against fixture
+unknown, and the body is handed to `bash --noprofile --norc -e` exactly as the
+runner hands it over — no step here sets `shell:`, so the runner adds no
+`pipefail`; each step that needs it sets it itself, and that line is under
+test like any other — in a temp directory, against fixture
 files and real throwaway git repositories, with recording stubs on `PATH` for
 the tools that would reach the network.
 
@@ -219,7 +221,6 @@ def _run(
         path_dirs=path_dirs,
         env={"CALVER_PATTERN": _CALVER, **(env or {})},
         github_output=github_output,
-        pipefail=True,
     )
 
 
@@ -2452,6 +2453,154 @@ def test_the_cleanup_step_succeeds_when_there_is_nothing_to_clean(tmp_path: Path
     result = _run(_body(_CLEANUP_STEP), tmp_path)
 
     assert result.returncode == 0, result.stderr
+
+
+# --------------------------------------------------------------------------
+# A failed stage fails the step
+#
+# No job or step in release.yml sets `shell:`, so the runner hands each body to
+# `bash -e` with no `pipefail`: a pipeline's status is its last stage's. Every
+# step that pipes says `set -euo pipefail` itself, and these tests run the
+# bodies under the runner's shell, so dropping that word turns one red. Where
+# the last stage would succeed on an empty input, the failure upstream would
+# otherwise be read as an answer: no files changed, an empty digest, a
+# replaced bundle.
+# --------------------------------------------------------------------------
+
+
+# Lines of shell that hold a pipe, comments and `||` aside.
+_PIPE = re.compile(r"(?<![|])\|(?![|])")
+
+
+def _real(tool: str) -> str:
+    path = shutil.which(tool)
+    if path is None:
+        pytest.skip(f"{tool} is not installed")
+    return path
+
+
+def _failing_sha256sum(directory: Path) -> Path:
+    """A `sha256sum` that cannot read any file it is named, as on a bad disk; stdin still works."""
+    real = _real("sha256sum")
+    stubs = directory / "sha-stub"
+    stubs.mkdir()
+    _write_stub(
+        stubs,
+        "sha256sum",
+        'for arg in "$@"; do\n'
+        '  case "$arg" in -|--) ;; *) echo "sha256sum: $arg: Input/output error" >&2; exit 1 ;; esac\n'
+        "done\n"
+        f'exec "{real}" "$@"\n',
+    )
+    return stubs
+
+
+def test_every_step_that_pipes_sets_pipefail_itself():
+    """The runner will not: a `shell:` anywhere would change that, so there is none."""
+    assert not re.search(r"^\s*shell:", _RELEASE_TEXT, re.M), "a shell: key changes what the runner sets"
+    jobs = re.findall(r"^  ([A-Za-z0-9_-]+):$", _RELEASE_TEXT.split("\njobs:\n", 1)[1], re.M)
+    assert {"prepare", "release", "publish-registry"} <= set(jobs)
+    for job in jobs:
+        for step in _workflow_steps.Workflow(_RELEASE, job=job).steps:
+            if step.run is None:
+                continue
+            code = [line for line in step.run.splitlines() if line.strip() and not line.strip().startswith("#")]
+            if any(_PIPE.search(line) for line in code):
+                assert code[0].strip() == "set -euo pipefail", f"{job}: {step.name!r} pipes without pipefail"
+
+
+def test_a_failed_diff_stops_the_decision_instead_of_finding_no_change(tmp_path: Path):
+    """`git diff | wc -l` counts 0 when git fails; that must not read as a quiet month."""
+    work = _repo_with_remote(tmp_path)
+    _git(work, "tag", "2026.9.0")
+    _commit(work, "goodreads_mcp/server.py", "changed\n")
+    real = _real("git")
+    stubs = tmp_path / "git-stub"
+    stubs.mkdir()
+    _write_stub(
+        stubs,
+        "git",
+        'if [ "$1" = diff ]; then echo "fatal: bad object 2026.9.0" >&2; exit 128; fi\n'
+        f'exec "{real}" "$@"\n',
+    )
+    pages = _published("2026.9.0")
+    result = _workflow_steps.run(
+        _body(_DECIDE_STEP),
+        work,
+        path_dirs=[stubs, _releases_gh(work.parent, pages)],
+        env={
+            "FORCE": "",
+            "GITHUB_STEP_SUMMARY": str(work / "summary"),
+            "GH_TOKEN": "x",
+            "GITHUB_REPOSITORY": "o/r",
+            "RELEASED_TAGS": _RELEASED_TAGS,
+        },
+        github_output=work / "github_output",
+    )
+
+    assert result.returncode != 0
+    assert "fatal: bad object" in result.stderr
+    assert _outputs(work / "github_output") == {}
+    assert not (work / "summary").exists()
+
+
+def test_a_failed_check_runs_call_is_reported_as_itself(tmp_path: Path):
+    """A failed `gh api` piped into `jq -s` is `[]`, which reads as "CI never ran"."""
+    _real("jq")
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    _write_stub(stubs, "gh", 'echo "gh: HTTP 502: Bad Gateway" >&2\nexit 1\n')
+
+    result = _run(
+        _body(_CHECKS_STEP),
+        tmp_path,
+        path_dirs=[stubs],
+        env={"GH_TOKEN": "x", "GITHUB_REPOSITORY": "o/r", "GITHUB_SHA": "a" * 40, "REQUIRED_CHECK": "test"},
+    )
+
+    assert result.returncode != 0
+    assert "HTTP 502" in result.stderr
+    assert "no successful" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("workflow", "step", "files"),
+    [
+        (_BUILD_MCPB, _DIGEST_STEP, {"goodreads-mcp.mcpb": b"PK"}),
+        (_BUILD_PYPI, _PYPI_DIGEST_STEP, None),
+    ],
+    ids=["bundle", "distributions"],
+)
+def test_an_unreadable_file_records_no_digest(tmp_path: Path, workflow, step, files):
+    """An empty or partial digest recorded here would be the one the publish job checks against."""
+    if files is None:
+        _dist(tmp_path)
+    else:
+        for name, data in files.items():
+            (tmp_path / name).write_bytes(data)
+    output = tmp_path / "github-output"
+
+    result = _run(workflow.body(step), tmp_path, path_dirs=[_failing_sha256sum(tmp_path)], github_output=output)
+
+    assert result.returncode != 0
+    assert "Input/output error" in result.stderr
+    assert _outputs(output) == {}
+
+
+def test_an_unreadable_bundle_is_not_reported_as_a_replaced_one(tmp_path: Path):
+    """An empty `actual` would print the tamper error for what is a read error."""
+    (tmp_path / "goodreads-mcp.mcpb").write_bytes(b"PK")
+
+    result = _run(
+        _body(_BUNDLE_CHECK_STEP),
+        tmp_path,
+        path_dirs=[_failing_sha256sum(tmp_path)],
+        env={"EXPECTED_SHA256": hashlib.sha256(b"PK").hexdigest()},
+    )
+
+    assert result.returncode != 0
+    assert "Input/output error" in result.stderr
+    assert "replaced" not in result.stderr
 
 
 # --------------------------------------------------------------------------
