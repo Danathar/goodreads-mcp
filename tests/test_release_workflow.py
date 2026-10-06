@@ -1619,7 +1619,7 @@ def test_a_run_is_only_ever_one_of_the_two_jobs():
 
 def _jobs() -> list[str]:
     """Every job in release.yml, by id, in file order."""
-    return re.findall(r"^  ([a-z-]+):\n", _RELEASE_TEXT.split("\njobs:\n", 1)[1], re.M)
+    return list(_workflow_steps.jobs(_RELEASE_TEXT)[0])
 
 
 # A job holding this can push tags and create or edit any release and its
@@ -2211,9 +2211,9 @@ def test_the_release_check_refuses_anything_but_exactly_one_bundle(tmp_path: Pat
 
 def _job_text(job: str) -> str:
     """One job's block of release.yml, from its key to the next job's."""
-    match = re.search(rf"^  {re.escape(job)}:\n(.*?)(?=^  [a-z-]+:\n|\Z)", _RELEASE_TEXT, re.M | re.S)
-    assert match, f"release.yml has no job named {job!r}"
-    return match.group(1)
+    blocks, _ = _workflow_steps.jobs(_RELEASE_TEXT)
+    assert job in blocks, f"release.yml has no job named {job!r}"
+    return "".join(f"{line}\n" for line in blocks[job])
 
 
 def test_the_pypi_build_writes_where_the_upload_reads(tmp_path: Path):
