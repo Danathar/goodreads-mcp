@@ -139,11 +139,15 @@ def _maintainer(number: int, body: str, **kwargs):
     return _pr(number, {"login": "Danathar", "is_bot": False}, body=body, **kwargs)
 
 
-def _commit(i: int, *, signed: bool = True):
-    message = f"change {i}\n\nwhy\n"
+def _commit(i: int, *, signed: bool = True, message: str | None = None, parents: int = 1):
+    message = message or f"change {i}\n\nwhy\n"
     if signed:
         message += "\nSigned-off-by: quality <quality@hive.kubestellar.io>"
-    return {"sha": f"{i:040x}", "commit": {"message": message}}
+    return {
+        "sha": f"{i:040x}",
+        "commit": {"message": message},
+        "parents": [{"sha": f"{i + p:040x}"} for p in range(parents)],
+    }
 
 
 def _file(name: str | tuple[str, str]) -> dict:
@@ -297,6 +301,32 @@ def test_a_commit_without_signed_off_by_is_reported_and_not_failed(tmp_path: Pat
     )
 
     assert result.returncode == 0, result.stderr
+    assert "| 2 | 1 of 2 |" in _rows(summary)[0]
+    assert "1 with a commit lacking Signed-off-by" in summary
+
+
+def test_a_merge_from_main_with_no_trailer_is_not_counted_as_unsigned(tmp_path: Path):
+    """Updating a branch from main writes a two-parent merge with no trailer.
+
+    docs/multi-agent.md and the "Update branch" button both produce one, and
+    what it brings in was counted when it merged to main.
+    """
+    merge = _commit(2, signed=False, parents=2,
+                    message="Merge remote-tracking branch 'origin/main' into docs/x\n")
+
+    result, summary, _ = _audit(tmp_path, [_hive(19)], commits={19: [[_commit(1), merge]]})
+
+    assert result.returncode == 0, result.stderr
+    assert "| 2 | 2 of 2 |" in _rows(summary)[0]
+    assert "0 with a commit lacking Signed-off-by" in summary
+
+
+def test_a_one_parent_commit_titled_like_a_merge_is_still_unsigned(tmp_path: Path):
+    """The parent count decides, not the headline."""
+    lookalike = _commit(2, signed=False, message="Merge branch 'main' into docs/x\n")
+
+    _, summary, _ = _audit(tmp_path, [_hive(20)], commits={20: [[_commit(1), lookalike]]})
+
     assert "| 2 | 1 of 2 |" in _rows(summary)[0]
     assert "1 with a commit lacking Signed-off-by" in summary
 

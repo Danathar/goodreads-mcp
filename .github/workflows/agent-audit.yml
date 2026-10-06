@@ -16,8 +16,9 @@ name: Agent audit trail
 # The job lists the pull requests merged in the window, picks out the agent
 # ones, and writes one row per pull request to the run summary: when it merged,
 # who opened it, who merged it, its signature, how many commits it has and how
-# many carry a Signed-off-by trailer, and which Tier 2 agent-boundary paths it
-# touched (`.claude/settings.json`, `.claude/hooks/**`; docs/risk-tiers.md).
+# many carry a Signed-off-by trailer (a merge commit, which has none, is not
+# counted against it), and which Tier 2 agent-boundary paths it touched
+# (`.claude/settings.json`, `.claude/hooks/**`; docs/risk-tiers.md).
 #
 # Exactly one finding fails the run, because it is the one rule this repository
 # states: CONTRIBUTING.md and docs/SECURITY-AI.md say a change to the agent
@@ -110,7 +111,7 @@ jobs:
           : > details.ndjson
           while read -r number; do
             commits="$(gh api --paginate "repos/$REPO/pulls/$number/commits" \
-              --jq '.[] | {sha: .sha, message: .commit.message}' | jq -s .)"
+              --jq '.[] | {sha: .sha, message: .commit.message, parents: (.parents | length)}' | jq -s .)"
             files="$(gh api --paginate "repos/$REPO/pulls/$number/files" \
               --jq '.[] | .filename, (.previous_filename // empty)' | jq -R . | jq -s .)"
             if [ "$(jq length <<<"$commits")" -ge 250 ] || [ "$(jq length <<<"$files")" -ge 3000 ]; then
@@ -149,7 +150,12 @@ jobs:
                   merged_by_human: ($pr | human),
                   signature: ($pr | signature | if . == null then null else ltrimstr("— hive: ") end),
                   commits: ($d.commits | length),
-                  unsigned: [$d.commits[] | select(.message | test("(^|\n)Signed-off-by: ") | not) | .sha[:7]],
+                  # A merge commit is left out: updating a branch from main
+                  # (the "Update branch" button, or git merge origin/main)
+                  # writes one with no trailer, and what it brings in was
+                  # counted when it merged to main. The parent count is the
+                  # test, not the headline, so a retitled merge is still one.
+                  unsigned: [$d.commits[] | select(.parents <= 1) | select(.message | test("(^|\n)Signed-off-by: ") | not) | .sha[:7]],
                   boundary: ([$d.files[] | select(boundary)] | unique)
                 };
             def findings:
