@@ -111,7 +111,7 @@ jobs:
           : > details.ndjson
           while read -r number; do
             commits="$(gh api --paginate "repos/$REPO/pulls/$number/commits" \
-              --jq '.[] | {sha: .sha, message: .commit.message, parents: (.parents | length)}' | jq -s .)"
+              --jq '.[] | {sha: .sha, message: .commit.message, parents: [(.parents // [])[].sha]}' | jq -s .)"
             files="$(gh api --paginate "repos/$REPO/pulls/$number/files" \
               --jq '.[] | .filename, (.previous_filename // empty)' | jq -R . | jq -s .)"
             if [ "$(jq length <<<"$commits")" -ge 250 ] || [ "$(jq length <<<"$files")" -ge 3000 ]; then
@@ -136,10 +136,22 @@ jobs:
             def boundary: test("^(\\.claude/settings\\.json$|\\.claude/hooks/)");
             def human: (.mergedBy != null) and (.mergedBy.is_bot | not)
               and (.mergedBy.login | (endswith("[bot]") or startswith("app/")) | not);
+            # A merge commit is left out: updating a branch from main
+            # (the "Update branch" button, or git merge origin/main)
+            # writes one with no trailer, and what it brings in was
+            # counted when it merged to main. The parents are the test, not
+            # the headline, so a retitled merge is still one. One parent must
+            # be outside the commits the pull request lists, so a merge of
+            # another unmerged branch still needs its trailer. Asking main
+            # would prove nothing: once the pull request merges, every
+            # parent is on main.
+            def merge($own):
+              (.parents | length) > 1 and any(.parents[]; IN($own[]) | not);
             def row:
               . as $pr
               | ($details[0][$pr.number | tostring]) as $d
               | if $d == null then error("no commits or files fetched for #\($pr.number)") else . end
+              | [$d.commits[].sha] as $own
               | {
                   number: $pr.number,
                   url: $pr.url,
@@ -150,13 +162,8 @@ jobs:
                   merged_by_human: ($pr | human),
                   signature: ($pr | signature | if . == null then null else ltrimstr("— hive: ") end),
                   commits: ($d.commits | length),
-                  authored: ([$d.commits[] | select(.parents <= 1)] | length),
-                  # A merge commit is left out: updating a branch from main
-                  # (the "Update branch" button, or git merge origin/main)
-                  # writes one with no trailer, and what it brings in was
-                  # counted when it merged to main. The parent count is the
-                  # test, not the headline, so a retitled merge is still one.
-                  unsigned: [$d.commits[] | select(.parents <= 1) | select(.message | test("(^|\n)Signed-off-by: ") | not) | .sha[:7]],
+                  authored: ([$d.commits[] | select(merge($own) | not)] | length),
+                  unsigned: [$d.commits[] | select(merge($own) | not) | select(.message | test("(^|\n)Signed-off-by: ") | not) | .sha[:7]],
                   boundary: ([$d.files[] | select(boundary)] | unique)
                 };
             def findings:

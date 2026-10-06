@@ -323,6 +323,21 @@ def test_a_merge_from_main_with_no_trailer_is_not_counted_as_unsigned(tmp_path: 
     assert "0 with a commit lacking Signed-off-by" in summary
 
 
+def test_a_merge_of_the_pull_requests_own_commits_is_still_unsigned(tmp_path: Path):
+    """A merge whose parents are both on the pull request did not come from main.
+
+    Merging another unmerged branch writes one; it is the author's own work,
+    whatever its headline says, so it still needs a trailer.
+    """
+    merge = _commit(3, signed=False, message="Merge branch 'main' into docs/x\n")
+    merge["parents"] = [{"sha": f"{1:040x}"}, {"sha": f"{2:040x}"}]
+
+    _, summary, _ = _audit(tmp_path, [_hive(21)], commits={21: [[_commit(1), _commit(2), merge]]})
+
+    assert "| 3 | 2 of 3 |" in _rows(summary)[0]
+    assert "1 with a commit lacking Signed-off-by" in summary
+
+
 def test_a_one_parent_commit_titled_like_a_merge_is_still_unsigned(tmp_path: Path):
     """The parent count decides, not the headline."""
     lookalike = _commit(2, signed=False, message="Merge branch 'main' into docs/x\n")

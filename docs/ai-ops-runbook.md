@@ -280,8 +280,10 @@ writes one row per agent pull request to the run summary. It fails for one
 finding: an agent pull request that touched `.claude/settings.json` or
 `.claude/hooks/**` and was merged by a bot, an app or an unknown account.
 Missing signature lines and commits without `Signed-off-by` are listed in the
-summary but do not fail it; a merge commit, such as one from updating a branch
-from `main`, is not counted as missing the trailer. It also stops with exit 2
+summary but do not fail it; a merge commit from updating a branch from `main`
+is not counted as missing the trailer. A merge is treated as one only when a
+parent is outside the pull request's own commits, so merging another unmerged
+branch in still needs the trailer. It also stops with exit 2
 when `since` is not a real `YYYY-MM-DD` date, when the window holds 500 or more
 merged pull requests, or when one pull request reaches GitHub's 250-commit or
 3000-file list cap.
