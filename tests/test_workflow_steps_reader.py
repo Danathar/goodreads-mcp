@@ -54,7 +54,7 @@ def test_a_multi_job_file_needs_a_job_name(two_jobs: Path):
         _workflow_steps.Workflow(two_jobs)
 
 
-def test_each_job_reads_only_its_own_steps(two_jobs: Path):
+def test_each_job_reads_only_its_own_steps(two_jobs: Path, tmp_path: Path):
     first = _workflow_steps.Workflow(two_jobs, job="first")
     second = _workflow_steps.Workflow(two_jobs, job="second")
 
@@ -62,6 +62,26 @@ def test_each_job_reads_only_its_own_steps(two_jobs: Path):
     assert first.step("B").run == "echo b\n"
     assert [step.name for step in second.steps] == ["C"]
     assert second.step("C").uses == "actions/checkout@v4"
+
+    # Every job id GitHub accepts is a job here, whatever its spelling. A
+    # pattern that skipped one folded its lines into the job above, so a
+    # timeout or permissions check never saw it.
+    odd_ids = tmp_path / "odd.yml"
+    odd_ids.write_text(
+        "on: push\n"
+        "jobs: # four-space indent\n"
+        "    build_2:\n        steps:\n            - name: D\n              run: echo d\n"
+        "    \"Quoted\":\n        timeout-minutes: 5\n        steps:\n            - name: E\n              run: echo e\n"
+        "    lint: # trailing comment\n        steps:\n            - name: F\n              run: echo f\n",
+        encoding="utf-8",
+    )
+    blocks, key_indent = _workflow_steps.jobs(odd_ids.read_text(encoding="utf-8"))
+    assert list(blocks) == ["build_2", "Quoted", "lint"]
+    assert key_indent == 8
+    assert "        timeout-minutes: 5" in blocks["Quoted"]
+    assert "        timeout-minutes: 5" not in blocks["build_2"]
+    for job, step in (("build_2", "D"), ("Quoted", "E"), ("lint", "F")):
+        assert [s.name for s in _workflow_steps.Workflow(odd_ids, job=job).steps] == [step]
 
 
 def test_an_unknown_job_is_refused(two_jobs: Path):

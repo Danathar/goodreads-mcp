@@ -22,7 +22,7 @@ edited too, and that second edit is the one a reviewer cannot miss.
 `.github/workflows/**`, for the same reason.
 
 No PyYAML: the test extra is `pytest` + `pytest-cov`, so the blocks are sliced
-out by indentation, the way `tests/test_workflow_timeouts.py` slices out jobs.
+out by indentation, with the jobs read by `tests/_workflow_steps.py`'s `jobs()`.
 The parser is checked against inline and block forms below, so a block it
 cannot read fails as a mismatch rather than passing as "no permissions".
 """
@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import re
 
 import pytest
 
@@ -65,13 +64,6 @@ _LEVELS = {"read", "write", "none"}
 # The inline values GitHub accepts in place of a mapping.
 _INLINE = {"read-all", "write-all", "{}"}
 
-# A mapping key, bare or quoted: YAML reads `"permissions":` and
-# `'permissions':` as the same key as `permissions:`, and so does Actions.
-_KEY = re.compile(
-    r"""^(?P<indent>\ *)(?P<q>["']?)(?P<key>[A-Za-z0-9_-]+)(?P=q):\s*(?P<value>[^#]*?)\s*(?:\#.*)?$""",
-    re.X,
-)
-
 
 def _block(lines: list[str], indent: int) -> dict[str, str] | str | None:
     """The `permissions:` value written at *indent* spaces in *lines*.
@@ -82,7 +74,7 @@ def _block(lines: list[str], indent: int) -> dict[str, str] | str | None:
     pass one job's lines at a time with that file's job-key indent.
     """
     for i, line in enumerate(lines):
-        match = _KEY.match(line)
+        match = _workflow_steps.KEY.match(line)
         if not match or len(match["indent"]) != indent or match["key"] != "permissions":
             continue
         if match["value"]:
@@ -91,7 +83,7 @@ def _block(lines: list[str], indent: int) -> dict[str, str] | str | None:
         for entry in lines[i + 1 :]:
             if not entry.strip() or entry.lstrip().startswith("#"):
                 continue
-            inner = _KEY.match(entry)
+            inner = _workflow_steps.KEY.match(entry)
             if not inner or len(inner["indent"]) <= indent:
                 break
             block[inner["key"]] = inner["value"]
@@ -99,41 +91,10 @@ def _block(lines: list[str], indent: int) -> dict[str, str] | str | None:
     return None
 
 
-def _job_lines(lines: list[str]) -> tuple[dict[str, list[str]], int]:
-    """Each job under the top-level `jobs:` key, and the indent of its keys.
-
-    The indent is read off the file rather than assumed: the first job id
-    sets the step, and a job's own keys sit one step further in. A workflow
-    indented by four spaces is as valid as one indented by two, and assuming
-    two would read none of its job blocks.
-    """
-    starts = [
-        i for i, line in enumerate(lines) if (m := _KEY.match(line)) and m["key"] == "jobs" and not m["indent"]
-    ]
-    assert len(starts) == 1, "expected exactly one top-level jobs: key"
-    body = lines[starts[0] + 1 :]
-    first = next((line for line in body if line.strip() and not line.lstrip().startswith("#")), "")
-    step = len(first) - len(first.lstrip(" "))
-    assert step, "jobs: has no indented job under it"
-    jobs: dict[str, list[str]] = {}
-    current: str | None = None
-    for line in body:
-        if line.strip() and not line.startswith(" "):
-            break
-        match = _KEY.match(line)
-        if match and len(match["indent"]) == step and not match["value"]:
-            current = match["key"]
-            jobs[current] = []
-            continue
-        if current is not None:
-            jobs[current].append(line)
-    return jobs, 2 * step
-
-
 def _declared(text: str) -> dict[str, object]:
     """What a workflow declares: its top-level block and each job's own block."""
     lines = text.splitlines()
-    bodies, key_indent = _job_lines(lines)
+    bodies, key_indent = _workflow_steps.jobs(text)
     jobs = {}
     for job, body in bodies.items():
         block = _block(body, key_indent)

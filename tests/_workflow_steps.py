@@ -49,6 +49,52 @@ def workflow_files(directory: Path = WORKFLOWS) -> list[Path]:
     return paths
 
 
+# A mapping key, bare or quoted: YAML reads `"permissions":` and
+# `'permissions':` as the same key as `permissions:`, and so does Actions.
+KEY = re.compile(
+    r"""^(?P<indent>\ *)(?P<q>["']?)(?P<key>[A-Za-z0-9_-]+)(?P=q):\s*(?P<value>[^#]*?)\s*(?:\#.*)?$""",
+    re.X,
+)
+
+
+def jobs(text: str) -> tuple[dict[str, list[str]], int]:
+    """Each job under the top-level `jobs:` key, and the indent of its keys.
+
+    Returns ``({job id: lines of its block}, key indent)``, jobs in file order.
+    A block runs from the line after the job's key to the next job's key, so a
+    key belonging to one job is never read as another's.
+
+    Every test that walks a workflow's jobs takes them from here, so a job id
+    GitHub accepts (digits, `_`, capitals, quoted, a trailing comment) cannot
+    be one that a single test's own pattern skips. The indent is read off the
+    file rather than assumed: the first job id sets the step, and a job's own
+    keys sit one step further in. A workflow indented by four spaces is as
+    valid as one indented by two.
+    """
+    lines = text.splitlines()
+    starts = [
+        i for i, line in enumerate(lines) if (m := KEY.match(line)) and m["key"] == "jobs" and not m["indent"]
+    ]
+    assert len(starts) == 1, "expected exactly one top-level jobs: key"
+    body = lines[starts[0] + 1 :]
+    first = next((line for line in body if line.strip() and not line.lstrip().startswith("#")), "")
+    step = len(first) - len(first.lstrip(" "))
+    assert step, "jobs: has no indented job under it"
+    blocks: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in body:
+        if line.strip() and not line.startswith(" "):
+            break
+        match = KEY.match(line)
+        if match and len(match["indent"]) == step and not match["value"]:
+            current = match["key"]
+            blocks[current] = []
+            continue
+        if current is not None:
+            blocks[current].append(line)
+    return blocks, 2 * step
+
+
 class Step:
     """One entry of a `steps:` list, with only the keys these tests need."""
 
@@ -149,27 +195,11 @@ class Workflow:
         self.steps = self._read_steps()
 
     def _job_lines(self) -> list[str]:
-        lines = self.text.splitlines()
         if self.job is None:
-            return lines
-        (jobs_at,) = [i for i, line in enumerate(lines) if line.rstrip() == "jobs:"]
-        job_indent: int | None = None
-        start: int | None = None
-        for i in range(jobs_at + 1, len(lines)):
-            line = lines[i]
-            if not line.strip() or line.lstrip().startswith("#"):
-                continue
-            indent = len(line) - len(line.lstrip())
-            if indent == 0:
-                break
-            if job_indent is None:
-                job_indent = indent
-            if start is not None and indent <= job_indent:
-                return lines[start:i]
-            if indent == job_indent and line.strip() == f"{self.job}:":
-                start = i
-        assert start is not None, f"{self.path.name} has no job named {self.job!r}"
-        return lines[start:]
+            return self.text.splitlines()
+        blocks, _ = jobs(self.text)
+        assert self.job in blocks, f"{self.path.name} has no job named {self.job!r}"
+        return blocks[self.job]
 
     def _read_steps(self) -> list[Step]:
         lines = self._job_lines()

@@ -18,8 +18,8 @@ edit; dropping one, or writing a cap so high it is the default wearing a hat,
 is the regression. `_CEILING` is what separates the two.
 
 No PyYAML: the test extra is `pytest` + `pytest-cov` and CI installs nothing
-else, so the job blocks are sliced out by indentation the way
-`tests/_workflow_steps.py` slices out steps.
+else, so the job blocks are sliced out by indentation, by
+`tests/_workflow_steps.py`'s `jobs()`.
 """
 
 from __future__ import annotations
@@ -43,38 +43,24 @@ _GITHUB_DEFAULT = 360
 # The one reviewer-facing statement of this rule. It quotes both numbers above.
 _RUBRIC = _ROOT / "docs" / "review-rubric.md"
 
-# `  <job-id>:` — a key indented exactly two spaces under `jobs:`.
-_JOB = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$")
-
-# `    timeout-minutes: <n>` at the job's own key level, not a step's.
-_TIMEOUT = re.compile(r"^    timeout-minutes:\s*(\d+)\s*(?:#.*)?$")
-
 
 def _jobs(path: Path) -> dict[str, list[str]]:
-    """Each job in a workflow file, as the lines of its block.
+    """Each job in a workflow file, as the lines of its block."""
+    blocks, _ = _workflow_steps.jobs(path.read_text(encoding="utf-8"))
+    assert blocks, f"{path.name}: no jobs found under jobs:"
+    return blocks
 
-    The block runs from the job's key to the next key at the same indent, so a
-    `timeout-minutes` belonging to one job can never be read as another's.
-    """
-    lines = path.read_text(encoding="utf-8").splitlines()
-    starts = [i for i, line in enumerate(lines) if line.rstrip() == "jobs:"]
-    assert len(starts) == 1, f"{path.name} no longer has exactly one top-level jobs: key"
 
-    jobs: dict[str, list[str]] = {}
-    current: str | None = None
-    for line in lines[starts[0] + 1 :]:
-        if line.strip() and not line.startswith(" "):
-            break  # a new top-level key; jobs: is over
-        match = _JOB.match(line)
-        if match:
-            current = match.group(1)
-            jobs[current] = []
-            continue
-        if current is not None:
-            jobs[current].append(line)
-
-    assert jobs, f"{path.name}: no jobs found under jobs:"
-    return jobs
+def _timeouts(path: Path, job: str) -> list[str]:
+    """The `timeout-minutes` values set at the job's own key level, not a step's."""
+    blocks, key_indent = _workflow_steps.jobs(path.read_text(encoding="utf-8"))
+    return [
+        match["value"]
+        for line in blocks[job]
+        if (match := _workflow_steps.KEY.match(line))
+        and len(match["indent"]) == key_indent
+        and match["key"] == "timeout-minutes"
+    ]
 
 
 def _every_job() -> list[tuple[Path, str]]:
@@ -91,14 +77,14 @@ _ALL_JOBS = _every_job()
 )
 def test_the_job_declares_a_timeout(path: Path, job: str):
     """A job with no cap runs to GitHub's 360-minute default before failing."""
-    declared = [_TIMEOUT.match(line) for line in _jobs(path)[job]]
-    found = [match.group(1) for match in declared if match]
+    found = _timeouts(path, job)
     assert found, (
         f"{path.name}: job {job!r} sets no timeout-minutes, so a hung step holds a "
         f"runner for GitHub's default {_GITHUB_DEFAULT} minutes. Add "
         "`timeout-minutes: <n>` next to its `runs-on:`."
     )
     assert len(found) == 1, f"{path.name}: job {job!r} sets timeout-minutes {len(found)} times"
+    assert found[0].isdigit(), f"{path.name}: job {job!r} sets timeout-minutes to {found[0]!r}, not a number"
 
     minutes = int(found[0])
     assert 0 < minutes <= _CEILING, (
