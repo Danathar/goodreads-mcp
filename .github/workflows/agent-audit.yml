@@ -79,7 +79,7 @@ jobs:
           limit=500
           gh pr list --repo "$REPO" --state merged --limit "$limit" \
             --search "merged:>=$SINCE" \
-            --json number,title,author,mergedAt,mergedBy,body,url > merged.json
+            --json number,title,author,mergedAt,mergedBy,body,url,baseRefName > merged.json
           total="$(jq length merged.json)"
           if [ "$total" -ge "$limit" ]; then
             echo "::error::$total pull requests merged since $SINCE reached the $limit cap; audit a narrower window"
@@ -140,13 +140,21 @@ jobs:
             # (the "Update branch" button, or git merge origin/main)
             # writes one with no trailer, and what it brings in was
             # counted when it merged to main. The parents are the test, not
-            # the headline, so a retitled merge is still one. One parent must
-            # be outside the commits the pull request lists, so a merge of
-            # another unmerged branch still needs its trailer. Asking main
+            # the headline, so a retitled merge is still one. The commits
+            # list is what the branch held and its base did not when the
+            # pull request merged, so a parent missing from it was on the
+            # base then. Every parent after the first, which is what the
+            # merge brought in, must be missing from it, and the base must be
+            # main. So a merge of another unmerged branch still needs its
+            # trailer, even when the branch had no commit of its own yet and
+            # main is the first parent, and so does any merge on a pull
+            # request into another branch, which nothing audits. Asking main
             # would prove nothing: once the pull request merges, every
             # parent is on main.
-            def merge($own):
-              (.parents | length) > 1 and any(.parents[]; IN($own[]) | not);
+            def merge($own; $base):
+              $base == "main"
+              and (.parents | length) > 1
+              and all(.parents[1:][]; IN($own[]) | not);
             def row:
               . as $pr
               | ($details[0][$pr.number | tostring]) as $d
@@ -162,8 +170,8 @@ jobs:
                   merged_by_human: ($pr | human),
                   signature: ($pr | signature | if . == null then null else ltrimstr("— hive: ") end),
                   commits: ($d.commits | length),
-                  authored: ([$d.commits[] | select(merge($own) | not)] | length),
-                  unsigned: [$d.commits[] | select(merge($own) | not) | select(.message | test("(^|\n)Signed-off-by: ") | not) | .sha[:7]],
+                  authored: ([$d.commits[] | select(merge($own; $pr.baseRefName) | not)] | length),
+                  unsigned: [$d.commits[] | select(merge($own; $pr.baseRefName) | not) | select(.message | test("(^|\n)Signed-off-by: ") | not) | .sha[:7]],
                   boundary: ([$d.files[] | select(boundary)] | unique)
                 };
             def findings:

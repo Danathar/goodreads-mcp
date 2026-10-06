@@ -119,7 +119,8 @@ fi
 """
 
 
-def _pr(number: int, author: dict, *, body: str = "", merged_by: dict | None = None, title: str = "t"):
+def _pr(number: int, author: dict, *, body: str = "", merged_by: dict | None = None, title: str = "t",
+        base: str = "main"):
     return {
         "number": number,
         "title": title or f"pull request {number}",
@@ -128,6 +129,7 @@ def _pr(number: int, author: dict, *, body: str = "", merged_by: dict | None = N
         "mergedBy": merged_by if merged_by is not None else _HUMAN,
         "body": body,
         "url": f"https://github.com/Danathar/goodreads-mcp/pull/{number}",
+        "baseRefName": base,
     }
 
 
@@ -335,6 +337,44 @@ def test_a_merge_of_the_pull_requests_own_commits_is_still_unsigned(tmp_path: Pa
     _, summary, _ = _audit(tmp_path, [_hive(21)], commits={21: [[_commit(1), _commit(2), merge]]})
 
     assert "| 3 | 2 of 3 |" in _rows(summary)[0]
+    assert "1 with a commit lacking Signed-off-by" in summary
+
+
+def test_a_merge_made_before_the_branch_had_a_commit_of_its_own_is_still_unsigned(tmp_path: Path):
+    """A branch whose first act is `git merge --no-ff` of another unmerged branch.
+
+    The first parent is the main commit the branch started from, so one
+    parent is outside the pull request, but what the merge brought in is the
+    other branch, whose commits are on the pull request.
+    """
+    merge = _commit(2, signed=False, message="Merge branch 'main' into docs/x\n")
+    merge["parents"] = [{"sha": f"{90:040x}"}, {"sha": f"{1:040x}"}]
+
+    _, summary, _ = _audit(tmp_path, [_hive(22)], commits={22: [[_commit(1), merge]]})
+
+    assert "| 2 | 1 of 2 |" in _rows(summary)[0]
+    assert "1 with a commit lacking Signed-off-by" in summary
+
+
+def test_a_merge_of_main_and_another_branch_at_once_is_still_unsigned(tmp_path: Path):
+    """An octopus merge brings in main and an unmerged branch together."""
+    merge = _commit(3, signed=False, message="Merge main into docs/x\n")
+    merge["parents"] = [{"sha": f"{2:040x}"}, {"sha": f"{90:040x}"}, {"sha": f"{1:040x}"}]
+
+    _, summary, _ = _audit(tmp_path, [_hive(23)], commits={23: [[_commit(1), _commit(2), merge]]})
+
+    assert "| 3 | 2 of 3 |" in _rows(summary)[0]
+    assert "1 with a commit lacking Signed-off-by" in summary
+
+
+def test_a_merge_on_a_pull_request_into_another_branch_is_still_unsigned(tmp_path: Path):
+    """Outside the pull request is then that branch, which nothing audits."""
+    merge = _commit(2, signed=False, message="Merge branch 'main' into docs/x\n")
+    merge["parents"] = [{"sha": f"{1:040x}"}, {"sha": f"{90:040x}"}]
+
+    _, summary, _ = _audit(tmp_path, [_hive(24, base="release")], commits={24: [[_commit(1), merge]]})
+
+    assert "| 2 | 1 of 2 |" in _rows(summary)[0]
     assert "1 with a commit lacking Signed-off-by" in summary
 
 

@@ -27,12 +27,14 @@ AGENTS.md and leave it out of here.
 ## 2026-10-06 — agent audit exempts only merges from outside the PR (#308)
 
 **Done:** `agent-audit.yml` now keeps each commit's parent hashes, not just the
-count. A commit is left out of `unsigned` only if it has two or more parents
-and at least one is not in the pull request's own commit list. A merge of
-another unmerged branch therefore still needs a trailer. Comparing a parent
+count. A commit is left out of `unsigned` only on a PR into `main`, with two
+or more parents, and with every parent after the first missing from the PR's
+own commit list. A merge of another unmerged branch therefore still needs a
+trailer, including one made before the branch had its own commit (main
+first, the other branch second; Codex review on the PR). Comparing a parent
 with `main` (the issue's suggestion) was not used: once a PR merges, every
-parent is on `main`. New test in `tests/test_agent_audit_workflow.py`;
-`docs/quality.md` test count moved to 1632; runbook sentence updated.
+parent is on `main`. Four tests in `tests/test_agent_audit_workflow.py`;
+`docs/quality.md` test count moved to 1635; runbook sentence updated.
 
 **In flight:** the #308 pull request. It changes `.github/workflows/`, so a
 person merges it. The #279 pull request from 2026-10-04 is in the same state
