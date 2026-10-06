@@ -24,23 +24,23 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-10-04 — the nightly drift issue's exact lookup (#279)
+## 2026-10-06 — agent audit stops counting merges as unsigned (#302)
 
-**Done:** `nightly-compliance.yml` now finds its open drift issue the way
-`auto-issues.yml` does: list open issues (`--limit 1000`, no `--search`), keep
-the one with exactly `$TITLE` opened by the Actions bot. The `gh` stub that
-applies a step's `--jq` filter to a fixture now lives in
-`tests/_workflow_steps.py` (`GH_ISSUE_LIST`, `ACTIONS_BOT_LOGINS`, `issue`),
-shared by both workflow test files. Earlier (2026-10-03): the ACMM L6 gaps
-#280–#287, all merged.
+**Done:** `agent-audit.yml` now reads each commit's parent count from the REST
+commits list and leaves any commit with more than one parent out of
+`unsigned`. Two tests in `tests/test_agent_audit_workflow.py` pin it: a
+two-parent merge is not counted, a one-parent commit titled like a merge is.
+`docs/quality.md` test count moved to 1623.
 
-**In flight:** the #279 pull request. It changes `.github/workflows/`, so a
-person merges it.
+**In flight:** the #302 pull request. It changes `.github/workflows/`, so a
+person merges it. The #279 pull request from 2026-10-04 is in the same state
+unless it has merged since.
 
-**Blocked on:** #247 is closed; whether its A/B/C choice (remembering a
-refused key that comes back unchanged) was made is not recorded here.
+**Blocked on:** #247's A/B/C choice is still not recorded here.
 
 **Watch:**
+- Commit 019dace on #292 is a real missing `Signed-off-by`; #302 left it to
+  the maintainer.
 - Codex P2s left open: `auto-issues.yml`'s concurrency group keeps one pending
   run, so a third red push while two are queued drops one comment (#283);
   `risk-config.json` extraction gaps (#281); ledger and doc wording (#284, #285).
