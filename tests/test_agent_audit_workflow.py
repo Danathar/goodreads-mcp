@@ -309,7 +309,9 @@ def test_a_merge_from_main_with_no_trailer_is_not_counted_as_unsigned(tmp_path: 
     """Updating a branch from main writes a two-parent merge with no trailer.
 
     docs/multi-agent.md and the "Update branch" button both produce one, and
-    what it brings in was counted when it merged to main.
+    what it brings in was counted when it merged to main. The Signed-off
+    cell counts only the commits that need a trailer, so the merge is in
+    neither side of it.
     """
     merge = _commit(2, signed=False, parents=2,
                     message="Merge remote-tracking branch 'origin/main' into docs/x\n")
@@ -317,7 +319,7 @@ def test_a_merge_from_main_with_no_trailer_is_not_counted_as_unsigned(tmp_path: 
     result, summary, _ = _audit(tmp_path, [_hive(19)], commits={19: [[_commit(1), merge]]})
 
     assert result.returncode == 0, result.stderr
-    assert "| 2 | 2 of 2 |" in _rows(summary)[0]
+    assert "| 2 | 1 of 1 |" in _rows(summary)[0]
     assert "0 with a commit lacking Signed-off-by" in summary
 
 

@@ -150,6 +150,7 @@ jobs:
                   merged_by_human: ($pr | human),
                   signature: ($pr | signature | if . == null then null else ltrimstr("— hive: ") end),
                   commits: ($d.commits | length),
+                  authored: ([$d.commits[] | select(.parents <= 1)] | length),
                   # A merge commit is left out: updating a branch from main
                   # (the "Update branch" button, or git merge origin/main)
                   # writes one with no trailer, and what it brings in was
@@ -177,7 +178,7 @@ jobs:
                       [ "| PR | Merged | Author | Merged by | Signature | Commits | Signed-off | Tier 2 agent-boundary paths |",
                         "| --- | --- | --- | --- | --- | --- | --- | --- |" ]
                       + [ $rows[]
-                          | "| [#\(.number)](\(.url)) \(.title | cell) | \(.merged) | \(.author) | \(.merged_by) | \(.signature // "none" | cell) | \(.commits) | \("\(.commits - (.unsigned | length)) of \(.commits)") | \(if (.boundary | length) == 0 then "none" else (.boundary | map("`\(.)`") | join(", ")) end) |" ]
+                          | "| [#\(.number)](\(.url)) \(.title | cell) | \(.merged) | \(.author) | \(.merged_by) | \(.signature // "none" | cell) | \(.commits) | \("\(.authored - (.unsigned | length)) of \(.authored)") | \(if (.boundary | length) == 0 then "none" else (.boundary | map("`\(.)`") | join(", ")) end) |" ]
                     end)
                   + [ "",
                       "Reported, not failed: \([$rows[] | select(.signature == null)] | length) without a complete signature line, \([$rows[] | select((.unsigned | length) > 0)] | length) with a commit lacking Signed-off-by.",
