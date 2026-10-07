@@ -77,6 +77,23 @@ def test_the_listing_describes_the_same_server_as_the_bundle():
     assert variables["GOODREADS_USER_ID"]["isRequired"] is False
 
 
+def test_every_optional_setting_the_bundle_passes_has_a_default():
+    """An unset `user_config` key with no `default` is not substituted (#315).
+
+    The mcpb reference implementation replaces `${user_config.<key>}` only when
+    the user saved a value or the manifest gives a default; otherwise the
+    server receives the placeholder text itself. For `GOODREADS_USER_ID` that
+    text is non-empty, so it overrides the config file and every shelf call
+    fails on a user id nobody typed. An empty default reads as unset.
+    """
+    env = _MANIFEST["server"]["mcp_config"]["env"]
+    referenced = {key for value in env.values() for key in re.findall(r"\$\{user_config\.([^}]+)\}", value)}
+    assert referenced, "found no user_config placeholders in mcp_config.env; the pattern is wrong"
+    settings = _MANIFEST["user_config"]
+    missing = sorted(key for key in referenced if not settings[key].get("required") and "default" not in settings[key])
+    assert missing == []
+
+
 def test_the_tree_carries_a_placeholder_version_and_the_job_writes_the_real_one():
     """pyproject.toml is the one definition of a release number; server.json copies it at publish time."""
     assert _SERVER["version"] == "0.0.0"
