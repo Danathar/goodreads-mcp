@@ -45,7 +45,8 @@
       "type": "string",
       "title": "Goodreads User ID",
       "description": "Numeric Goodreads profile ID (the number in goodreads.com/user/show/<ID>-name). Used as the default for shelf tools. Optional — can also be passed per tool call.",
-      "required": false
+      "required": false,
+      "default": ""
     }
   },
   "compatibility": {
