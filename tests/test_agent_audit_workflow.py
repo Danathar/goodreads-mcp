@@ -356,10 +356,20 @@ def test_a_merge_made_before_the_branch_had_a_commit_of_its_own_is_still_unsigne
     assert "1 with a commit lacking Signed-off-by" in summary
 
 
-def test_a_merge_of_main_and_another_branch_at_once_is_still_unsigned(tmp_path: Path):
-    """An octopus merge brings in main and an unmerged branch together."""
+@pytest.mark.parametrize(
+    "order",
+    [(2, 90, 1), (2, 1, 90)],
+    ids=["branch-last", "main-last"],
+)
+def test_a_merge_of_main_and_another_branch_at_once_is_still_unsigned(tmp_path: Path, order: tuple):
+    """An octopus merge brings in main and an unmerged branch together.
+
+    Git lists the merged-in heads in the order they were named, so main can
+    come last as easily as first. Every parent after the first is checked,
+    not just the last one.
+    """
     merge = _commit(3, signed=False, message="Merge main into docs/x\n")
-    merge["parents"] = [{"sha": f"{2:040x}"}, {"sha": f"{90:040x}"}, {"sha": f"{1:040x}"}]
+    merge["parents"] = [{"sha": f"{i:040x}"} for i in order]
 
     _, summary, _ = _audit(tmp_path, [_hive(23)], commits={23: [[_commit(1), _commit(2), merge]]})
 
@@ -367,12 +377,17 @@ def test_a_merge_of_main_and_another_branch_at_once_is_still_unsigned(tmp_path: 
     assert "1 with a commit lacking Signed-off-by" in summary
 
 
-def test_a_merge_on_a_pull_request_into_another_branch_is_still_unsigned(tmp_path: Path):
-    """Outside the pull request is then that branch, which nothing audits."""
+@pytest.mark.parametrize("base", ["release", "maintenance", "main-old"])
+def test_a_merge_on_a_pull_request_into_another_branch_is_still_unsigned(tmp_path: Path, base: str):
+    """Outside the pull request is then that branch, which nothing audits.
+
+    The base must be exactly main: a branch whose name only starts with or
+    contains "main" is still another branch.
+    """
     merge = _commit(2, signed=False, message="Merge branch 'main' into docs/x\n")
     merge["parents"] = [{"sha": f"{1:040x}"}, {"sha": f"{90:040x}"}]
 
-    _, summary, _ = _audit(tmp_path, [_hive(24, base="release")], commits={24: [[_commit(1), merge]]})
+    _, summary, _ = _audit(tmp_path, [_hive(24, base=base)], commits={24: [[_commit(1), merge]]})
 
     assert "| 2 | 1 of 2 |" in _rows(summary)[0]
     assert "1 with a commit lacking Signed-off-by" in summary
