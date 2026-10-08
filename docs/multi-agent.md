@@ -156,7 +156,9 @@ by reading, then settled by a person.
 
 ## Who decides what lands
 
-A person reviews and merges everything. Nothing auto-merges.
+No workflow in this repository merges a pull request. Hive's serialized
+lane (see *Merge order* above) merges pull requests that have passed review
+and their checks; anything carrying `hold` waits until a person removes it.
 
 - **`main` is protected.** An active ruleset requires a pull request and
   forbids deleting or rewriting `main`, with no bypass actors. See
