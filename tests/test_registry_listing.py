@@ -94,6 +94,35 @@ def test_every_optional_setting_the_bundle_passes_has_a_default():
     assert missing == []
 
 
+def test_every_optional_settings_default_reads_as_unset(tmp_path, monkeypatch):
+    """The default an unset setting is passed as must leave the server unconfigured (#315).
+
+    Having a `default` is not enough: `"0"`, `" "` or `null` is still a value
+    that overrides the config file. Each optional setting's default is set as
+    its env var and the server's own reader for that var must fall back to the
+    file. A new optional setting needs its reader added to `readers`.
+    """
+    from goodreads_mcp import config
+
+    readers = {"GOODREADS_USER_ID": config.load_user_id}
+    path = tmp_path / "config.json"
+    path.write_text('{"user_id": "12345678"}')
+    monkeypatch.setattr(config, "CONFIG_PATH", path)
+    settings = _MANIFEST["user_config"]
+    checked = []
+    for name, value in _MANIFEST["server"]["mcp_config"]["env"].items():
+        match = re.fullmatch(r"\$\{user_config\.([^}]+)\}", value)
+        if match is None or settings[match[1]].get("required"):
+            continue
+        default = settings[match[1]].get("default")
+        assert isinstance(default, str), f"{match[1]}: an env var is a string, the default is {default!r}"
+        assert name in readers, f"{name} is passed from an optional setting; add the server's reader for it"
+        monkeypatch.setenv(name, default)
+        assert readers[name]() == "12345678", f"{name}={default!r} overrides the config file"
+        checked.append(name)
+    assert checked == sorted(readers)
+
+
 def test_the_tree_carries_a_placeholder_version_and_the_job_writes_the_real_one():
     """pyproject.toml is the one definition of a release number; server.json copies it at publish time."""
     assert _SERVER["version"] == "0.0.0"

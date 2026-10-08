@@ -68,6 +68,25 @@ def test_env_var_wins_without_reading_the_file(config_path, monkeypatch):
     assert config.load_user_id() == "999"
 
 
+@pytest.mark.parametrize(
+    "body, expected",
+    [('{"user_id": "12345678"}', "12345678"), (None, None)],
+    ids=["file", "no-file"],
+)
+def test_empty_env_var_is_unset_and_the_file_is_read(config_path, monkeypatch, capsys, body, expected):
+    """The bundle passes an unset "Goodreads User ID" setting as "" (#315).
+
+    The manifest's empty default is only a fix because an empty
+    ``GOODREADS_USER_ID`` counts as unset here; were it returned as the id,
+    the config file would be ignored and every shelf call would fail again.
+    """
+    if body is not None:
+        config_path.write_text(body)
+    monkeypatch.setenv("GOODREADS_USER_ID", "")
+    assert config.load_user_id() == expected
+    assert capsys.readouterr().err == ""
+
+
 # ------------------------------------------- files that used to crash import
 
 
