@@ -5,9 +5,10 @@ name: Merge queue
 # `merge_group` event, which GitHub sends only to a repository whose queue is
 # on, so it does nothing on pull requests or pushes today.
 #
-# Why it exists: the ruleset sets `strict_required_status_checks_policy:
-# false`, so a pull request can merge green against a `main` that has moved on.
-# A merge queue tests the merged result before it lands. The queue needs a
+# Why it exists: a merge queue tests the merged result before it lands. Today
+# the ruleset's `strict_required_status_checks_policy: true` and Hive's
+# serialized merge lane do that job instead; GitHub offers merge queues only to
+# organization-owned repositories. The queue needs a
 # workflow that answers `merge_group`; a queue with none leaves the required
 # `test` check never reporting on the queue's commit and blocks every merge.
 #
