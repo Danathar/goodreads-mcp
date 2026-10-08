@@ -75,6 +75,14 @@ does:
   the conflict goes away, nothing starts one (#105 merged that way, with no
   CI run at all). Merge `main` into the branch, or close and reopen the pull
   request, and `test` runs.
+- **Branches must be up to date before merging**
+  (`strict_required_status_checks_policy: true`, applied to the live ruleset
+  on 2026-10-07). GitHub refuses to merge a pull request whose branch does not
+  contain `main`'s current head, so `test` has run on what will land. Hive
+  merges this repository through its serialized merge lane
+  (`merge_strategy: hive-serialized`): one pull request at a time is merged
+  with `main` and re-tested, so the rule costs one CI run per merge, not one
+  per open pull request.
 - **A push to `main` never has its `test` run cancelled or queued out.**
   `ci.yml` gives every push to `main` its own concurrency group, keyed on the
   commit's SHA, and only cancels a pull request's own in-progress run.
@@ -112,14 +120,15 @@ gh api --method PUT repos/Danathar/goodreads-mcp/rulesets/23955646 \
 
 ## Merge queue
 
-**The merge queue is not enabled.** The ruleset has no `merge_queue` rule, and
-nothing here turns one on.
+**The merge queue is not enabled, and cannot be.** GitHub offers merge queues
+only to repositories owned by an organization, and this one is under a
+personal account. The ruleset has no `merge_queue` rule.
 
-The gap it would close: `strict_required_status_checks_policy` is `false`, so
-a pull request that was green against an older `main` can merge without
-`test` ever running on the merged result (the #105 case above is the extreme
-one). A merge queue builds a temporary branch of the pull request on top of
-`main`'s current head and merges only if the required checks pass there.
+The gap it would close is closed another way: the up-to-date rule above makes
+every pull request carry `main`'s current head before it merges, and Hive's
+serialized merge lane merges one pull request at a time. A merge queue would
+do the same by building a temporary branch of the pull request on top of
+`main`'s current head and merging only if the required checks pass there.
 
 [`.github/workflows/merge-queue.yml`](../.github/workflows/merge-queue.yml) is
 the half that can live in the tree. It runs only on `merge_group`, an event
@@ -138,7 +147,7 @@ on `main`, so it carries the queue's `test` run and the one `ci.yml` starts on
 the push to `main`. Both must be clean for the release to go ahead; a red or
 unfinished duplicate blocks it.
 
-To enable it:
+If the repository ever moves to an organization, to enable it:
 
 1. In a pull request, add a `merge_queue` rule to
    `.github/rulesets/main.json`. Pick its parameters (merge method, group
