@@ -1,8 +1,9 @@
 """`merge-queue.yml` has to gate the queue on exactly what pull requests gate on.
 
-`.github/rulesets/main.json` sets `strict_required_status_checks_policy:
-false`, so a pull request can merge green against a `main` that has since
-moved. A GitHub merge queue tests the merged result instead, but it only sends
+A GitHub merge queue tests a pull request's merged result before it lands.
+Today `.github/rulesets/main.json` sets `strict_required_status_checks_policy:
+true` and Hive's serialized merge lane covers that instead, but the queue
+would only send
 the `merge_group` event, and a queue whose commit never gets the required
 `test` check blocks every merge. `merge-queue.yml` answers that event. Nothing
 in CI can fire it until an admin enables the queue, so these tests pin what a
