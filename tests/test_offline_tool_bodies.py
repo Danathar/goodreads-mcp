@@ -24,6 +24,7 @@ import pytest
 
 from goodreads_mcp import server
 from goodreads_mcp.client import BASE, GoodreadsClient
+from tests._graphql_selection import prune, selection
 
 
 class _Response:
@@ -55,6 +56,10 @@ class _Graphql:
     Keying on the query constant (rather than a fixed response order) lets the
     real ``_resolve_book_ids`` and ``_paginated_graphql_edges`` run, so these
     tests cover the tool body *and* the wiring between it and the helpers.
+
+    Each response is pruned to the fields its query selects, as the server
+    would answer, so a field dropped from a ``_Q_*`` document goes missing here
+    too instead of arriving from the fixture.
     """
 
     def __init__(self, pages: dict[str, list[dict[str, Any]]]):
@@ -66,7 +71,7 @@ class _Graphql:
         queued = self.pages.get(query)
         if not queued:
             raise AssertionError(f"unexpected graphql call for query: {query[:40]!r}")
-        return queued.pop(0)
+        return prune(queued.pop(0), selection(query))
 
     def variables_for(self, query: str) -> list[dict[str, Any]]:
         return [v for q, v in self.calls if q == query]
@@ -125,6 +130,29 @@ def _page(edges: list[dict[str, Any]], **page_info: Any) -> dict[str, Any]:
     if total is not None:
         page["totalCount"] = total
     return page
+
+
+def test_the_graphql_fake_answers_only_what_each_query_selects():
+    """`_Graphql` prunes fixtures to the query's selection set; check the reader
+    on every real query document and on known answers, so it cannot drift into
+    letting everything through."""
+    documents = [name for name in vars(server) if name.startswith("_Q_")]
+    assert len(documents) >= 9
+    for name in documents:
+        assert selection(getattr(server, name)).fields, name
+
+    sel = selection("query($id: ID!){ a(x: { y: $id }){ b ... on T { c } ... on U { d } } }")
+    response = {
+        "a": [
+            {"__typename": "T", "b": 1, "c": 2, "d": 3, "e": 4},
+            {"b": 1, "c": 2, "d": 3, "e": 4},
+        ],
+        "z": 0,
+    }
+    assert prune(response, sel) == {"a": [{"b": 1, "c": 2}, {"b": 1, "c": 2, "d": 3}]}
+    for unmodeled in ("{ a: b }", "{ ...F }", "{ a @skip(if: true) }", "{ a } { b }"):
+        with pytest.raises(ValueError):
+            selection(unmodeled)
 
 
 # ------------------------------------------------------------- search_books
@@ -309,6 +337,9 @@ def _review_edge(name: str, rating: int, spoiler: bool = False) -> dict[str, Any
             "rating": rating,
             "text": f"<p>{name} liked it.</p>",
             "spoilerStatus": spoiler,
+            "likeCount": len(name),
+            "commentCount": rating,
+            "createdAt": 1_700_000_000_000,
             "creator": {
                 "name": name,
                 "webUrl": f"https://www.goodreads.com/user/show/{name}",
@@ -502,6 +533,8 @@ def test_get_reviews_keeps_spoilers_by_default_and_flags_them(monkeypatch):
 
     assert review["spoiler"] is True
     assert review["text"] == "ann liked it."
+    assert (review["likes"], review["comments"]) == (3, 5)
+    assert review["date"] == "2023-11-14"
     assert review["url"] == "https://www.goodreads.com/review/ann"
     assert review["reviewer_url"] == "https://www.goodreads.com/user/show/ann"
 
@@ -659,9 +692,12 @@ def test_series_books_returns_reading_order_placements(monkeypatch):
     assert result["series_index"] == 0
     assert result["returned"] == 2
     assert result["has_more"] is False
-    assert [(b["title"], b["placement"], b["is_primary"]) for b in result["books"]] == [
-        ("Prequel", "0.5", False),
-        ("Book One", "1", True),
+    assert [
+        (b["title"], b["placement"], b["is_primary"], b["cover"], b["ratings_count"])
+        for b in result["books"]
+    ] == [
+        ("Prequel", "0.5", False, "https://images.example/4.jpg", 40),
+        ("Book One", "1", True, "https://images.example/5.jpg", 50),
     ]
     assert set(result) == {
         "book_id",
@@ -941,12 +977,17 @@ def test_popular_books_accepts_a_zero_limit(monkeypatch):
 
 
 def test_popular_books_carries_rank_and_count_onto_the_summary(monkeypatch):
-    node = _work_node(6, "A Popular Work", 4.0)
-    node["__typename"] = "Work"
+    work = _work_node(6, "A Popular Work", 4.0)
+    # The top list nests a Work's book under details.bestBook (see _Q_TOP_LIST).
+    node = {"__typename": "Work", "stats": work["stats"], "details": {"bestBook": work["bestBook"]}}
     graphql = _Graphql(
         {
             server._Q_TOP_LIST: [
-                {"getTopList": _page([{"rank": 1, "count": 9001, "node": node}])}
+                {
+                    "getTopList": _page(
+                        [{"__typename": "TopListWorkEdge", "rank": 1, "count": 9001, "node": node}]
+                    )
+                }
             ]
         }
     )
@@ -972,7 +1013,11 @@ def test_popular_books_reads_a_work_node_nested_under_details(monkeypatch):
     graphql = _Graphql(
         {
             server._Q_TOP_LIST: [
-                {"getTopList": _page([{"rank": 2, "count": 5, "node": node}])}
+                {
+                    "getTopList": _page(
+                        [{"__typename": "TopListWorkEdge", "rank": 2, "count": 5, "node": node}]
+                    )
+                }
             ]
         }
     )

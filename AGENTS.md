@@ -131,3 +131,8 @@ CI enforces `--cov-fail-under=55` on `goodreads_mcp`.
 **If you change parsing logic, run the live suite.** Offline tests use
 fixtures and by construction cannot catch a Goodreads markup change — which is
 this project's most common real failure.
+
+The offline GraphQL fake in `tests/test_offline_tool_bodies.py` answers with
+only the fields each `_Q_*` query selects (`tests/_graphql_selection.py`), so a
+field removed from a query, or never added to it, fails offline. A field that
+Goodreads stops serving still needs the live suite.
