@@ -75,9 +75,9 @@ does:
   the conflict goes away, nothing starts one (#105 merged that way, with no
   CI run at all). Merge `main` into the branch, or close and reopen the pull
   request, and `test` runs.
-- **Branches must be up to date before merging**
-  (`strict_required_status_checks_policy: true`, applied to the live ruleset
-  on 2026-10-07). GitHub refuses to merge a pull request whose branch does not
+- **A pull request merges only with `main`'s current head in it**
+  (`strict_required_status_checks_policy: true`, live since 2026-10-07).
+  GitHub refuses to merge a pull request whose branch does not
   contain `main`'s current head, so `test` has run on what will land. Hive
   merges this repository through its serialized merge lane
   (`merge_strategy: hive-serialized`): one pull request at a time is merged
