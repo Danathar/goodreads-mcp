@@ -146,15 +146,19 @@ by reading, then settled by a person.
   and #260, which wait for a person.
 - **`ai-fix.yml` queues rather than cancels.** Its concurrency group is the
   issue number, so two requests on one issue run one after the other.
-- **Merge order.** No merge queue is enabled, and there is no ordering rule.
-  [`merge-queue.yml`](../.github/workflows/merge-queue.yml) is ready for one
-  but runs only once an admin turns the queue on (see
-  [`branch-protection.md`](branch-protection.md#merge-queue)). Where two pull
-  requests touch the same files, the person merging decides which goes first.
+- **Merge order.** Hive merges this repository through its serialized merge
+  lane (`merge_strategy: hive-serialized`): one pull request at a time, oldest
+  eligible first, each brought up to date with `main` and re-tested before it
+  merges. GitHub's merge queue is not available to a personal-account
+  repository, so
+  [`merge-queue.yml`](../.github/workflows/merge-queue.yml) never runs (see
+  [`branch-protection.md`](branch-protection.md#merge-queue)).
 
 ## Who decides what lands
 
-A person reviews and merges everything. Nothing auto-merges.
+No workflow in this repository merges a pull request. Hive's serialized
+lane (see *Merge order* above) merges pull requests that have passed review
+and their checks; anything carrying `hold` waits until a person removes it.
 
 - **`main` is protected.** An active ruleset requires a pull request and
   forbids deleting or rewriting `main`, with no bypass actors. See
