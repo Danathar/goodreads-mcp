@@ -7,8 +7,9 @@ covers only what is on `main` now: the workflows under
 `PreToolUse` guard under [`.claude/hooks/`](../.claude/hooks/guard-bash.py), and
 the pull requests the Hive agents open (see [maintenance.md](maintenance.md)).
 [`merge-queue.yml`](../.github/workflows/merge-queue.yml) has no section: it
-runs only once an admin turns on a merge queue, and none is on
-([branch-protection.md](branch-protection.md#merge-queue)).
+runs only on a merge queue's `merge_group` event, GitHub offers merge queues
+only to organization-owned repositories, and this one is under a personal
+account ([branch-protection.md](branch-protection.md#merge-queue)).
 
 Every `gh` command below takes `-R Danathar/goodreads-mcp` when you run it
 outside a checkout of this repository. Run the read-only ones as written; the
