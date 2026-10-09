@@ -115,7 +115,7 @@ gh run view <run id> --log-failed
 
 Read the log, fix on the PR branch, and let the next push replace the run (a new
 push cancels the old one). A failure with no cause in the diff: `gh run rerun
-<run id> --failed`. Do not merge around it; the ruleset is the control.
+<run id> --failed`. Do not merge around it; the ruleset is the control, and at ACMM L6 agent pull requests auto-merge once it passes.
 
 **On `main`.** Pushes to `main` get one run each, never cancelled.
 
@@ -215,9 +215,10 @@ gh pr view <number> --json author,headRefName,labels --jq '{author: .author.logi
 
 Stop it, smallest step first:
 
-1. **Do not merge.** Nothing here merges for you. The `hold` label (applied to
-   agent PRs, see maintenance.md) is a marker; the ruleset on `main` requires
-   `test` and no approval, so the label alone does not block a merge.
+1. **Do not merge.** At ACMM L6 non-outreach agent PRs auto-merge when checks
+   pass, so act quickly. The `hold` label (applied to outreach PRs, see
+   maintenance.md) is a marker; the ruleset on `main` requires `test` and no
+   approval, so the label alone does not block a merge.
 2. **Close it:** `gh pr close <number> --comment "Closing: <reason>"`. This
    changes the PR. It does not delete the branch, and it does not stop the agent
    opening another.

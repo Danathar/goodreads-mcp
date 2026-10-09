@@ -131,8 +131,9 @@ by reading, then settled by a person.
 
   This is a habit of the agents that Hive runs, not a rule enforced here:
   nothing in this repository checks a pull request for it.
-- **The `hold` label.** Hive puts `hold` on pull requests it opens (not on
-  every one), and they wait for a person. No workflow in this repository
+- **The `hold` label.** Hive puts `hold` on outreach pull requests it
+  opens (not on every one), and they wait for a person; non-outreach pull
+  requests carry no level hold and auto-merge when checks pass. No workflow in this repository
   applies or reads `hold`; Hive does. List what is waiting now:
 
   ```bash
@@ -158,7 +159,7 @@ by reading, then settled by a person.
 
 No workflow in this repository merges a pull request. Hive's serialized
 lane (see *Merge order* above) merges pull requests that have passed review
-and their checks; anything carrying `hold` waits until a person removes it.
+and their checks; anything carrying `hold` (outreach pull requests) waits until a person removes it.
 
 - **`main` is protected.** An active ruleset requires a pull request and
   forbids deleting or rewriting `main`, with no bypass actors. See
