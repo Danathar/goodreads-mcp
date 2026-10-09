@@ -31,7 +31,7 @@ Two variants exist, so a bare `— hive:` prefix does not identify a Hive agent:
   `agent=`, so no role: these PRs cannot be attributed to a role from the PR
   alone.
 - **No signature.** Most of the maintainer's PRs, and one Hive-app PR (#200,
-  whose body instead ends `*Filed by scanner agent (ACMM L5 — hold-gated mode)…*`).
+  whose body instead ends `*Filed by scanner agent (ACMM L6)…*`).
 
 Who opened the PR is the other half of the mark. The Hive's PRs are opened by
 the GitHub App `danathar-atomic-hive`. `gh pr view` prints its login as

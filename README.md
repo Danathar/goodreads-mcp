@@ -2,7 +2,7 @@
 [![Nightly compliance](https://github.com/Danathar/goodreads-mcp/actions/workflows/nightly-compliance.yml/badge.svg?branch=main)](https://github.com/Danathar/goodreads-mcp/actions/workflows/nightly-compliance.yml)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Danathar/goodreads-mcp)
 [![Maintenance assisted by Hivecommons Hive](https://img.shields.io/badge/maintenance%20assisted%20by-Hivecommons%20Hive-1f6feb)](https://github.com/hivecommons/hive)
-[![ACMM L5 Semi-Autonomous](https://img.shields.io/badge/ACMM-L5%20Semi--Autonomous-2da44e)](https://github.com/Danathar/goodreads-mcp/blob/main/docs/maintenance.md)
+[![ACMM L6 Fully Autonomous](https://img.shields.io/badge/ACMM-L6%20Fully%20Autonomous-2da44e)](https://github.com/Danathar/goodreads-mcp/blob/main/docs/maintenance.md)
 [![AI assisted](https://img.shields.io/badge/AI-assisted-d29922)](https://github.com/Danathar/goodreads-mcp#about-this-project)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](https://github.com/Danathar/goodreads-mcp/blob/main/LICENSE)
 
@@ -126,7 +126,7 @@ The offline suite runs on fixtures; CI runs it with `pytest-cov` and enforces a 
 
 - [docs/design.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/design.md) — design notes: the data surfaces, WAF and login handling, politeness and concurrency
 - [docs/roadmap.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/roadmap.md) — ideas not built yet
-- [docs/maintenance.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/maintenance.md) — how this repository is maintained (Hive, ACMM L5, human review)
+- [docs/maintenance.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/maintenance.md) — how this repository is maintained (Hive, ACMM L6, outreach PRs held for human review)
 - [docs/ai-ops-runbook.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/ai-ops-runbook.md) — what to check and do for each automated signal
 - [docs/quality.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/quality.md) — what the tests and numbers do and do not prove
 - [docs/risk-tiers.md](https://github.com/Danathar/goodreads-mcp/blob/main/docs/risk-tiers.md) — the risk tier every pull request declares
