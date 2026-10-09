@@ -92,7 +92,7 @@ _BOOK_IDS_RESPONSE = {
             }
         },
         "bookSeries": [
-            {"userPosition": "1", "series": {"id": "kca://series/5", "title": "Arc"}}
+            {"series": {"id": "kca://series/5", "title": "Arc"}}
         ],
     }
 }
@@ -326,6 +326,7 @@ def _reviews_book_response() -> dict[str, Any]:
         "getBookByLegacyId": {
             "legacyId": 1,
             "title": "A Book",
+            "titleComplete": "A Book: Complete",
             "work": {"id": "kca://work/1"},
         }
     }
@@ -491,7 +492,8 @@ def test_get_reviews_pages_with_the_next_token(monkeypatch):
     assert [r["reviewer"] for r in result["reviews"]] == ["ann", "bob"]
     assert result["total_text_reviews"] == 2
     assert result["returned"] == 2
-    assert result["title"] == "A Book"
+    assert result["book_id"] == "1"
+    assert result["title"] == "A Book: Complete"
 
 
 def test_get_reviews_drops_spoilers_when_asked(monkeypatch):
@@ -532,6 +534,7 @@ def test_get_reviews_keeps_spoilers_by_default_and_flags_them(monkeypatch):
     (review,) = server.get_reviews("1", limit=10)["reviews"]
 
     assert review["spoiler"] is True
+    assert (review["reviewer"], review["rating"]) == ("ann", 5)
     assert review["text"] == "ann liked it."
     assert (review["likes"], review["comments"]) == (3, 5)
     assert review["date"] == "2023-11-14"
@@ -699,6 +702,17 @@ def test_series_books_returns_reading_order_placements(monkeypatch):
         ("Prequel", "0.5", False, "https://images.example/4.jpg", 40),
         ("Book One", "1", True, "https://images.example/5.jpg", 50),
     ]
+    assert result["books"][1] == {
+        "book_id": "5",
+        "title": "Book One",
+        "author": "Author 5",
+        "average_rating": 4.4,
+        "ratings_count": 50,
+        "cover": "https://images.example/5.jpg",
+        "url": "https://www.goodreads.com/book/show/5",
+        "placement": "1",
+        "is_primary": True,
+    }
     assert set(result) == {
         "book_id",
         "title",
@@ -884,6 +898,54 @@ def test_book_lists_skips_an_edge_with_no_node(monkeypatch):
     assert result["returned"] == 0
 
 
+# ------------------------------------- discovery tools read past page one
+
+
+def _list_node(legacy_id: int, title: str, _rating: float) -> dict[str, Any]:
+    return {"legacyId": legacy_id, "title": title}
+
+
+@pytest.mark.parametrize(
+    ("tool", "query", "connection", "make_node", "key", "id_key"),
+    [
+        (server.author_books, "_Q_AUTHOR", "getWorksByContributor", _work_node, "works", "book_id"),
+        (server.series_books, "_Q_SERIES", "getWorksForSeries", _work_node, "books", "book_id"),
+        (server.get_editions, "_Q_EDITIONS", "getEditions", _list_node, "editions", "book_id"),
+        (server.book_lists, "_Q_BOOK_LISTS", "getBookListsOfBook", _list_node, "lists", "list_id"),
+    ],
+    ids=["author_books", "series_books", "get_editions", "book_lists"],
+)
+def test_discovery_tools_follow_the_next_page_token(
+    tool, query, connection, make_node, key, id_key, monkeypatch
+):
+    """Only similar_books and popular_books fetched a second page offline, so
+    dropping `pageInfo`, `hasNextPage` or `nextPageToken` from these four
+    queries stopped each tool at page one with every test still green."""
+    first = _page(
+        [{"node": make_node(21, "First", 4.0)}],
+        hasNextPage=True,
+        nextPageToken="page-2",
+    )
+    second = _page([{"node": make_node(22, "Second", 3.0)}])
+    q = getattr(server, query)
+    graphql = _Graphql(
+        {
+            server._Q_BOOK_IDS: [_BOOK_IDS_RESPONSE],
+            q: [{connection: first}, {connection: second}],
+        }
+    )
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    result = tool("1", limit=5)
+
+    calls = graphql.variables_for(q)
+    assert [c["pagination"].get("after") for c in calls] == [None, "page-2"]
+    assert [str(entry[id_key]) for entry in result[key]] == ["21", "22"]
+    assert result["returned"] == 2
+    # The second page said hasNextPage=False, so the connection is exhausted.
+    assert result["has_more"] is False
+
+
 # ------------------------------------------------------------ popular_books
 
 
@@ -995,12 +1057,17 @@ def test_popular_books_carries_rank_and_count_onto_the_summary(monkeypatch):
 
     (entry,) = server.popular_books(2024, limit=5)["books"]
 
-    assert entry["rank"] == 1
-    assert entry["count"] == 9001
-    assert entry["book_id"] == "6"
-    assert entry["title"] == "A Popular Work"
-    assert entry["author"] == "Author 6"
-    assert entry["average_rating"] == 4.0
+    assert entry == {
+        "rank": 1,
+        "count": 9001,
+        "book_id": "6",
+        "title": "A Popular Work",
+        "author": "Author 6",
+        "average_rating": 4.0,
+        "ratings_count": 60,
+        "cover": "https://images.example/6.jpg",
+        "url": "https://www.goodreads.com/book/show/6",
+    }
 
 
 def test_popular_books_reads_a_work_node_nested_under_details(monkeypatch):
@@ -1030,13 +1097,24 @@ def test_popular_books_reads_a_work_node_nested_under_details(monkeypatch):
     assert entry["average_rating"] == 4.8
 
 
+def _top_list_book_edge(rank: int, count: int, node: dict[str, Any]) -> dict[str, Any]:
+    """A chart entry for a Book, typed so the fake answers it with the
+    `TopListBookEdge` fragment alone; untyped, it gets every fragment's fields."""
+    return {
+        "__typename": "TopListBookEdge",
+        "rank": rank,
+        "count": count,
+        "node": {"__typename": "Book", **node},
+    }
+
+
 def test_popular_books_follows_the_next_page_token(monkeypatch):
     first = _page(
-        [{"rank": 1, "count": 3, "node": _book_node(1, "One", 4.0)}],
+        [_top_list_book_edge(1, 3, _book_node(1, "One", 4.0))],
         hasNextPage=True,
         nextPageToken="page-2",
     )
-    second = _page([{"rank": 2, "count": 2, "node": _book_node(2, "Two", 3.0)}])
+    second = _page([_top_list_book_edge(2, 2, _book_node(2, "Two", 3.0))])
     graphql = _Graphql(
         {server._Q_TOP_LIST: [{"getTopList": first}, {"getTopList": second}]}
     )
@@ -1047,6 +1125,17 @@ def test_popular_books_follows_the_next_page_token(monkeypatch):
     calls = graphql.variables_for(server._Q_TOP_LIST)
     assert [c["after"] for c in calls] == [None, "page-2"]
     assert [b["rank"] for b in result["books"]] == [1, 2]
+    assert result["books"][0] == {
+        "rank": 1,
+        "count": 3,
+        "book_id": "1",
+        "title": "One",
+        "author": "Author 1",
+        "average_rating": 4.0,
+        "ratings_count": 10,
+        "cover": "https://images.example/1.jpg",
+        "url": "https://www.goodreads.com/book/show/1",
+    }
     assert result["returned"] == 2
     # The second page said hasNextPage=False, so the chart is exhausted.
     assert result["has_more"] is False
