@@ -188,8 +188,8 @@ def test_series_books_can_select_a_secondary_series(monkeypatch):
         "legacy_id": 1,
         "title": "A Book",
         "series_memberships": [
-            {"id": "series-1", "title": "Main Series", "position": "1"},
-            {"id": "series-2", "title": "Shared World", "position": "2"},
+            {"id": "series-1", "title": "Main Series"},
+            {"id": "series-2", "title": "Shared World"},
         ],
     }
     captured: dict[str, Any] = {}
@@ -213,7 +213,7 @@ def test_series_books_rejects_unknown_series_index(monkeypatch):
         "legacy_id": 1,
         "title": "A Book",
         "series_memberships": [
-            {"id": "series-1", "title": "Main Series", "position": "1"}
+            {"id": "series-1", "title": "Main Series"}
         ],
     }
     monkeypatch.setattr(server, "_resolve_book_ids", lambda book_id: resolved)
