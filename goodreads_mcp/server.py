@@ -340,7 +340,7 @@ _Q_BOOK_IDS = (
     " id legacyId titleComplete title"
     " work{ id }"
     " primaryContributorEdge{ node{ id name webUrl } }"
-    " bookSeries{ userPosition series{ id title } } } }"
+    " bookSeries{ series{ id title } } } }"
 )
 _Q_SIMILAR = """
 query($id: ID!, $pagination: PaginationInput){
@@ -548,8 +548,8 @@ def _book_by_legacy_id(query: str, book_id: str) -> dict[str, Any]:
 
 
 def _resolve_book_ids(book_id: str) -> dict[str, Any]:
-    """Resolve a book_id to its book/work/contributor/series identifiers,
-    legacyId, title, and every series membership in one GraphQL call."""
+    """Resolve a book_id to its book/work/contributor identifiers, legacyId,
+    title, and every series membership in one GraphQL call."""
     book = _book_by_legacy_id(_Q_BOOK_IDS, book_id)
     contributor = (book.get("primaryContributorEdge") or {}).get("node") or {}
     series_memberships = []
@@ -558,13 +558,8 @@ def _resolve_book_ids(book_id: str) -> dict[str, Any]:
             continue
         series = membership.get("series") or {}
         series_memberships.append(
-            {
-                "id": series.get("id"),
-                "title": series.get("title"),
-                "position": membership.get("userPosition"),
-            }
+            {"id": series.get("id"), "title": series.get("title")}
         )
-    first_series = series_memberships[0] if series_memberships else {}
     return {
         "legacy_id": _book_id(book.get("legacyId")),
         "title": book.get("titleComplete") or book.get("title"),
@@ -573,8 +568,6 @@ def _resolve_book_ids(book_id: str) -> dict[str, Any]:
         "contributor_kca": contributor.get("id"),
         "contributor_name": contributor.get("name"),
         "contributor_url": contributor.get("webUrl"),
-        "series_kca": first_series.get("id"),
-        "series_title": first_series.get("title"),
         "series_memberships": series_memberships,
     }
 
@@ -613,11 +606,11 @@ def _work_summary(node: dict[str, Any]) -> dict[str, Any]:
 def _node_summary(node: dict[str, Any]) -> dict[str, Any]:
     """Normalize a node that may be a Book or a Work to a compact summary.
 
-    Work nodes expose their representative book at details.bestBook (the
-    top-list shape) or directly at bestBook.
+    Work nodes expose their representative book at details.bestBook, the only
+    place _Q_TOP_LIST selects it.
     """
     if node.get("__typename") == "Work":
-        best = (node.get("details") or {}).get("bestBook") or node.get("bestBook") or {}
+        best = (node.get("details") or {}).get("bestBook") or {}
         stats = node.get("stats") or {}
         author = (best.get("primaryContributorEdge") or {}).get("node") or {}
         return {
