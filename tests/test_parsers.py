@@ -107,6 +107,9 @@ def test_parse_appsync_config_falls_back_to_first_pair():
     no_prod = BUNDLE.replace('"shortName":"Prod"', '"shortName":"Staging"')
     endpoint, key = parse_appsync_config(no_prod)
     assert key == "da2-devkey00000000000000000"
+    # Key and endpoint come from the same pair: a dev key sent to the prod
+    # endpoint (or the reverse) is refused, and the error would not say why.
+    assert endpoint == "https://dev.appsync-api.us-east-1.amazonaws.com/graphql"
 
 
 def test_parse_appsync_config_raises_when_absent():

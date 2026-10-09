@@ -16,8 +16,10 @@ five-second wait.
 from __future__ import annotations
 
 import inspect
+import re
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import anyio
@@ -493,6 +495,18 @@ def test_an_uncancelled_tool_call_behaves_like_a_plain_one(monkeypatch):
 def test_the_cap_is_a_semaphore_not_a_lock():
     assert MAX_IN_FLIGHT >= 2, "one slot would serialize parallel tool calls again"
     assert isinstance(GoodreadsClient()._in_flight, threading.BoundedSemaphore)
+
+
+def test_design_doc_states_the_cap_the_client_uses():
+    """docs/design.md gives the cap as a number, and docs/strategy.md says
+    raising it needs a reason. Tie the two together so a raise has to touch the
+    doc in the same diff, rather than leave it quoting the old figure."""
+    design = (Path(__file__).resolve().parent.parent / "docs" / "design.md").read_text(
+        encoding="utf-8"
+    )
+    stated = re.findall(r"`client\.MAX_IN_FLIGHT` \((\d+)\)", design)
+    assert stated, "docs/design.md no longer states MAX_IN_FLIGHT's value"
+    assert {int(n) for n in stated} == {MAX_IN_FLIGHT}
 
 
 def test_discovery_runs_once_when_calls_arrive_together():

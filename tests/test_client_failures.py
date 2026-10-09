@@ -70,6 +70,24 @@ def test_request_gives_up_after_max_retries_and_raises(monkeypatch):
     assert len(attempts) == client.max_retries + 1 == 4
 
 
+def test_a_default_client_gives_up_after_three_retries(monkeypatch):
+    """The production client is built with no arguments, so its default is the
+    retry budget Goodreads actually sees. Every other test here passes
+    max_retries explicitly; this one pins the default. Raising it is extra load
+    on a rate-limited site, which docs/strategy.md says needs a reason."""
+    monkeypatch.setattr("goodreads_mcp.client.time.sleep", lambda s: None)
+    attempts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(request.url.path)
+        return httpx.Response(429, text="slow down")
+
+    with pytest.raises(httpx.HTTPStatusError):
+        _client(handler).get("/anything")
+
+    assert len(attempts) == 4
+
+
 def test_request_backoff_delay_doubles(monkeypatch):
     slept: list[float] = []
     monkeypatch.setattr("goodreads_mcp.client.time.sleep", slept.append)
