@@ -95,6 +95,7 @@ _SETS_THE_VARIABLE = ("README.md",)
 _TABLE_SURFACES = {
     "HTML pages": "Scraped HTML",
     "AppSync GraphQL": "AppSync GraphQL",
+    "search autocomplete": "Search autocomplete",
     "page JSON": "Embedded page JSON",
     "page JSON / GraphQL": "Embedded page JSON",
     "shelf RSS": "Shelf RSS",
@@ -405,7 +406,7 @@ def test_a_bare_pytest_run_collects_the_offline_suite():
 def test_the_symptom_table_has_a_row_per_way_a_surface_can_break():
     rows = _table(_sections()["Read the failure by surface"])
     assert rows[0] == ["symptom", "surface", "what happened"]
-    assert len(rows) == 10, "header plus nine symptoms"
+    assert len(rows) == 11, "header plus ten symptoms"
     assert all(len(row) == 3 for row in rows)
 
 

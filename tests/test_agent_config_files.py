@@ -472,8 +472,19 @@ def test_the_list_shelves_scrape_claim_matches_list_shelves() -> None:
     # bullets away does not excuse a sentence handing the scrape to anything
     # else. The prohibition on extending it ("scraping", the verb) is a
     # separate sentence and is required separately.
-    scraper = {name for name, func in _tools().items() if "/user/show/{uid}" in _strings_in(func)}
+    # get_shelf also fetches the profile page, but only to tell a private
+    # profile from an empty shelf (#358): it looks for the marker and parses
+    # nothing. A tool that regexes shelf=/tag= out of the page is a scraper.
+    fetchers = {name for name, func in _tools().items() if "/user/show/{uid}" in _strings_in(func)}
+    assert fetchers == {"list_shelves", "get_shelf"}, f"the profile page has a new reader: {fetchers}"
+    scraper = {
+        name for name in fetchers
+        if any("shelf" in s and "tag" in s for s in _strings_in(_tools()[name]))
+    }
     assert scraper == {"list_shelves"}, f"more than one tool scrapes HTML now: {scraper}"
+    assert "_PRIVATE_PROFILE_MARKER" in ast.dump(_tools()["get_shelf"]), (
+        "get_shelf fetches the profile page for something other than the privacy marker"
+    )
     for rel in _DERIVED:
         squashed = _squashed(rel)
         attributions = [s for s in re.split(r"(?<=[.!?]) ", squashed) if re.search(r"\bscrape\b", s)]
