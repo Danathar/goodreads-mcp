@@ -333,6 +333,30 @@ def test_the_bundle_carries_what_uv_resolves_from_and_drops_what_git_refuses(
     )
 
 
+def test_the_bundle_holds_only_the_runtime_files():
+    """The packed tree is the runtime files, not the repository talking to itself (#362).
+
+    `mcpb pack` reads the working tree, so every tracked top-level entry that
+    `.mcpbignore` does not name ships. Pin the allow-list: the manifest,
+    `pyproject.toml`, the package, and the README and licences that hatchling
+    reads when `uv run` builds the project. A new top-level file or directory
+    must be named here (to ship) or in `.mcpbignore` (to stay out).
+    """
+    ignored = _ignore_patterns(".mcpbignore")
+    tracked = subprocess.run(
+        ["git", "-c", "core.fsmonitor=false", "-C", str(_ROOT), "ls-files"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    top_level = {path.split("/")[0] for path in tracked}
+    shipped = {name for name in top_level if name not in ignored}
+    runtime = {"goodreads_mcp", "manifest.json", "pyproject.toml", "README.md", "LICENSE", "LICENSE.MIT"}
+    assert shipped == runtime, (
+        f"the bundle would also carry {sorted(shipped - runtime)} and lack {sorted(runtime - shipped)}"
+    )
+
+
 def test_the_manifest_sets_no_python_path(mcp_config: dict):
     """`PYTHONPATH=${__dirname}:${__dirname}/vendor` read as one directory on Windows (#90).
 

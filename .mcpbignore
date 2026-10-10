@@ -12,6 +12,21 @@ venv
 *.mcpb
 tests/
 .github
+# Repository-facing files the server never reads (#362): agent configuration,
+# docs, prompts and contributor guidance. The bundle keeps manifest.json,
+# pyproject.toml, goodreads_mcp/, README.md and the licences (hatchling reads
+# README.md and both LICENSE files when `uv run` builds the project).
+.claude/
+.cursor/
+docs/
+prompts/
+AGENTS.md
+CLAUDE.md
+CONTRIBUTING.md
+.coverage-thresholds.json
+.editorconfig
+.gitignore
+.mcpbignore
 # The MCP registry listing (#180); the bundle is installed from the release
 # page, not the registry, so it has no use for the file.
 server.json
