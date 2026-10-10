@@ -193,7 +193,8 @@ writing a file still prompts.
 ## The test hook
 
 `PostToolUse` on `Write|Edit`: when a file under `goodreads_mcp/` changes,
-the offline suite runs (~0.5s) and **only speaks up if it fails**, feeding
+the offline suite runs (about half a minute at the time of writing;
+`pytest -q` prints the current figure) and **only speaks up if it fails**, feeding
 the failure back as context. Silence means green.
 
 It exits cleanly when `pytest` isn't on PATH, so a checkout without the dev

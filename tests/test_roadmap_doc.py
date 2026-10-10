@@ -7,7 +7,8 @@ notice by hand (6aa4bc5). Nothing read the page, so nothing could notice.
 Each item makes a checkable claim about the code: no tool returns author bio,
 photo or follower count, `author_books` points at the author page through
 `author_url` instead, and the only cache is the per-process GraphQL key and
-endpoint behind `client.graphql_config`. The checks below fail when the code
+endpoint behind `client.graphql_config`, and the server is pinned below
+`mcp` 2.x because it still imports `mcp.server.fastmcp`. The checks below fail when the code
 outgrows a claim, so whoever ships the feature also updates the page.
 docs/strategy.md names the same items in one sentence, so that sentence is
 joined to the page's bullets as well.
@@ -38,7 +39,7 @@ def _items():
 
 
 def _strategy_names():
-    sentence = re.search(r"\[`roadmap\.md`\]\(roadmap\.md\) lists ideas that are not built: ([^.]+)\.", STRATEGY)
+    sentence = re.search(r"\[`roadmap\.md`\]\(roadmap\.md\) lists ideas that are not built: ((?:[^.]|\.(?=\S))+)\.", STRATEGY)
     assert sentence, "docs/strategy.md no longer names the roadmap's ideas in its 'What is not decided' sentence"
     names = re.split(r",\s*(?:and\s+)?|\s+and\s+", " ".join(sentence.group(1).split()))
     return [re.sub(r"^(?:a|an|the)\s+", "", name.strip()).lower() for name in names if name.strip()]
@@ -54,7 +55,7 @@ def test_strategy_names_exactly_the_roadmap_items():
 
 def test_the_items_checked_below_are_still_on_the_page():
     # If an item is dropped because it shipped, delete its check below with it.
-    assert [item.split()[0] for item in _items()] == ["author", "caching"]
+    assert [item.split()[0] for item in _items()] == ["author", "caching", "`mcp`"]
 
 
 def test_no_tool_exposes_author_page_detail():
@@ -127,3 +128,15 @@ def test_no_dependency_brings_a_cache():
     names = {re.match(r"[A-Za-z0-9_.-]+", spec).group(0).lower().replace("_", "-") for spec in declared}
     assert not names & set(_CACHE_DISTRIBUTIONS), "a cache library is now a dependency: update docs/roadmap.md"
 
+
+
+def test_mcp_stays_below_2_while_the_server_imports_fastmcp():
+    assert "`mcp[cli]>=1.21.1,<2` in `pyproject.toml`" in ROADMAP
+    dependencies = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["dependencies"]
+    assert "mcp[cli]>=1.21.1,<2" in dependencies, f"the mcp pin moved ({dependencies}): update docs/roadmap.md"
+    imports = {
+        node.module
+        for node in ast.walk(ast.parse((PACKAGE / "server.py").read_text()))
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+    assert "mcp.server.fastmcp" in imports, "server.py no longer imports mcp.server.fastmcp: update docs/roadmap.md"
