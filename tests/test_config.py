@@ -36,6 +36,33 @@ def test_missing_file_is_silently_unset(config_path, capsys):
     assert capsys.readouterr().err == ""
 
 
+def test_no_home_directory_is_unset_with_a_warning(monkeypatch, capsys):
+    """``Path.home()`` raises on a host with no HOME and no passwd entry; it
+    ran at import and killed the server before the handshake (#361)."""
+    monkeypatch.setattr(config, "CONFIG_PATH", None)
+    monkeypatch.delenv("GOODREADS_USER_ID", raising=False)
+
+    def no_home() -> None:
+        raise RuntimeError("Could not determine home directory.")
+
+    monkeypatch.setattr(config.Path, "home", staticmethod(no_home))
+
+    assert config.load_user_id() is None
+    assert "Could not determine home directory" in capsys.readouterr().err
+
+
+def test_no_home_directory_still_honours_the_env_var(monkeypatch):
+    monkeypatch.setattr(config, "CONFIG_PATH", None)
+    monkeypatch.setenv("GOODREADS_USER_ID", "12345678")
+
+    def no_home() -> None:
+        raise RuntimeError("Could not determine home directory.")
+
+    monkeypatch.setattr(config.Path, "home", staticmethod(no_home))
+
+    assert config.load_user_id() == "12345678"
+
+
 def test_string_user_id_is_returned(config_path, capsys):
     config_path.write_text('{"user_id": "12345678"}')
     assert config.load_user_id() == "12345678"

@@ -18,15 +18,27 @@ import os
 import sys
 from pathlib import Path
 
-CONFIG_PATH = Path.home() / ".config" / "goodreads-mcp" / "config.json"
+# Resolved on first use, not at import: Path.home() raises RuntimeError on a
+# host with no HOME and no passwd entry (#361). Tests set this directly.
+CONFIG_PATH: Path | None = None
 
 _EXAMPLE = '{"user_id": "12345678"}'
+
+
+def _config_path() -> Path:
+    """Return ``CONFIG_PATH``, resolving it under the home directory on first
+    use. Raises ``RuntimeError`` if there is no home directory to resolve."""
+    global CONFIG_PATH
+    if CONFIG_PATH is None:
+        CONFIG_PATH = Path.home() / ".config" / "goodreads-mcp" / "config.json"
+    return CONFIG_PATH
 
 
 def _warn(problem: str) -> None:
     # stdout is the MCP transport; stderr is what the client shows as the
     # server log, so this is where a misconfiguration can actually be seen.
-    print(f"goodreads-mcp: ignoring {CONFIG_PATH}: {problem}", file=sys.stderr)
+    where = CONFIG_PATH or "~/.config/goodreads-mcp/config.json"
+    print(f"goodreads-mcp: ignoring {where}: {problem}", file=sys.stderr)
 
 
 def _load_config_file() -> dict:
@@ -37,7 +49,12 @@ def _load_config_file() -> dict:
     so per call) rather than kill the process before the MCP handshake.
     """
     try:
-        data = json.loads(CONFIG_PATH.read_bytes())  # bytes: json detects BOM/UTF-16/UTF-32
+        path = _config_path()
+    except RuntimeError as e:  # no home directory (#361)
+        _warn(str(e))
+        return {}
+    try:
+        data = json.loads(path.read_bytes())  # bytes: json detects BOM/UTF-16/UTF-32
     except FileNotFoundError:
         return {}
     except OSError as e:  # unreadable: permissions, a directory in its place, ...

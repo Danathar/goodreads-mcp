@@ -116,6 +116,48 @@ def test_get_book_orders_languages_by_count_and_a_missing_count_last(monkeypatch
     assert list(languages) == ["eng", "spa", "one"]
 
 
+def test_get_book_skips_a_null_genre_and_a_null_language_entry(monkeypatch):
+    """A null list item is skipped, as a null series membership already was
+    (#354); it used to surface as "'NoneType' object has no attribute 'get'"."""
+    apollo = _language_book([None, {"isoLanguageCode": "eng", "count": 3}])
+    apollo["Book:1"]["bookGenres"] = [None, {"genre": {"name": "Fantasy"}}]
+    monkeypatch.setattr(server, "_fetch_book_apollo", lambda book_id: apollo)
+
+    book = server.get_book("1")
+
+    assert book["genres"] == ["Fantasy"]
+    assert book["review_languages"] == {"eng": 3}
+
+
+# ------------------------------------------------------------ search_books
+
+
+class _AutocompleteBody:
+    def __init__(self, body: Any):
+        self.body = body
+
+    def json(self) -> Any:
+        if isinstance(self.body, Exception):
+            raise self.body
+        return self.body
+
+
+@pytest.mark.parametrize(
+    "body, shape",
+    [({"error": "nope"}, "dict"), (ValueError("Expecting value"), "not JSON")],
+    ids=["dict", "not-json"],
+)
+def test_search_books_names_the_surface_for_a_non_list_body(monkeypatch, body, shape):
+    """An object body used to reach the model as "slice(None, 10, None)" (#357)."""
+    monkeypatch.setattr(server.gr, "get", lambda *a, **k: _AutocompleteBody(body))
+
+    with pytest.raises(ValueError, match="Autocomplete") as excinfo:
+        server.search_books("dune")
+
+    assert shape in str(excinfo.value)
+    assert "endpoint may have changed" in str(excinfo.value)
+
+
 # ------------------------------------------------------------- get_reviews
 
 

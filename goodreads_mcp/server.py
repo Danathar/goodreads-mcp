@@ -651,8 +651,20 @@ def search_books(query: str, max_results: int = 10) -> list[dict[str, Any]]:
     if max_results < 0:
         raise ValueError("max_results must be zero or greater.")
     resp = gr.get("/book/auto_complete", params={"format": "json", "q": query})
+    try:
+        payload = resp.json()
+    except ValueError as e:
+        raise ValueError(
+            f"Autocomplete answered with a body that is not JSON ({e}); "
+            "the endpoint may have changed."
+        ) from e
+    if not isinstance(payload, list):
+        raise ValueError(
+            f"Autocomplete answered with a {type(payload).__name__}, not a list "
+            "of books; the endpoint may have changed."
+        )
     results = []
-    for b in resp.json()[:max_results]:
+    for b in payload[:max_results]:
         book_url = b.get("bookUrl")
         results.append(
             {
@@ -708,6 +720,7 @@ def get_book(book_id: str, review_language_limit: int = 5) -> dict[str, Any]:
     genres = [
         (deref(g.get("genre")) or g.get("genre") or {}).get("name")
         for g in (book.get("bookGenres") or [])
+        if g  # a null genre edge is skipped, as a null series membership is
     ]
 
     # Ratings histogram: ratingsCountDist is [1-star, 2-star, ... 5-star].
@@ -737,7 +750,7 @@ def get_book(book_id: str, review_language_limit: int = 5) -> dict[str, Any]:
 
     language_limit = min(review_language_limit, 25)
     # Review-language breakdown, ordered by text-review count.
-    langs = stats.get("textReviewsLanguageCounts") or []
+    langs = [lang for lang in (stats.get("textReviewsLanguageCounts") or []) if lang]
     review_languages = {
         lang.get("isoLanguageCode"): lang.get("count")
         for lang in sorted(langs, key=lambda x: -(x.get("count") or 0))[:language_limit]
@@ -1183,11 +1196,16 @@ def compare_books(book_ids: list[str]) -> dict[str, Any]:
     Fetches each book and returns them ranked best-to-worst by average rating,
     with the ratings_histogram plus 'pct_positive' (share of 4-5 star) and
     'pct_critical' (share of 1-2 star) so you can judge not just the average
-    but how divisive each book is. Pass 2-10 book ids (from search_books etc.);
-    more than 10 is refused rather than silently trimmed, so split the call.
+    but how divisive each book is. Pass up to 10 distinct book ids (from
+    search_books etc.); one id returns that book alone. A repeated id is
+    fetched once. More than 10 is refused rather than silently trimmed, so
+    split the call.
     """
     if not book_ids:
         raise ValueError("Provide at least one book_id to compare.")
+    # Order-preserving dedupe before the cap, so the cap counts distinct ids
+    # and a repeated id costs Goodreads one request, not one per occurrence.
+    book_ids = list(dict.fromkeys(book_ids))
     if len(book_ids) > _MAX_COMPARE:
         raise ValueError(
             f"compare_books takes at most {_MAX_COMPARE} book ids; "
@@ -1245,6 +1263,7 @@ def get_shelf(
     (list_shelves gives them); any other name raises ValueError. An empty
     name lists every shelf. RSS pages hold ~100 items; pass page=2,3,... for
     more (pages start at 1). Defaults to the configured GOODREADS_USER_ID.
+    Raises LoginRequired for a private profile, whose feed is empty.
 
     When you cite a book from a shelf, link it to its 'link' field.
     """
@@ -1261,6 +1280,15 @@ def get_shelf(
             f"User {uid} has no shelf named {shelf!r}. Shelf names are "
             "case-sensitive; call list_shelves for this user's valid names."
         )
+    # A private profile's feed is empty, like an empty public shelf (#358).
+    # Only then, and only on page 1 (a later empty page is just the end),
+    # spend one profile fetch to tell the two apart, as list_shelves does.
+    if not items and page == 1:
+        if _PRIVATE_PROFILE_MARKER in gr.get(f"/user/show/{uid}").text:
+            raise LoginRequired(
+                f"Goodreads profile {uid!r} is private: its shelves are shown "
+                "only to signed-in friends, which this read-only server does not do."
+            )
     return items
 
 
@@ -1288,7 +1316,8 @@ def list_shelves(user_id: str | None = None) -> list[str]:
             f"Goodreads profile {uid!r} is private: its shelves are shown only "
             "to signed-in friends, which this read-only server does not do."
         )
-    names = re.findall(r'[?&](?:shelf|tag)=([A-Za-z0-9_%\-]+)', page)
+    # An href spells its separator "&amp;" (#359), so match that form too.
+    names = re.findall(r'(?:[?&]|&amp;)(?:shelf|tag)=([A-Za-z0-9_%\-]+)', page)
     seen: dict[str, None] = {}
     for n in names:
         seen.setdefault(unquote(html_mod.unescape(n)), None)

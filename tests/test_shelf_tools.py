@@ -113,6 +113,18 @@ def test_list_shelves_collects_first_and_later_query_positions(monkeypatch):
     assert _run_list_shelves(html, monkeypatch)[0] == ["read", "to-read"]
 
 
+def test_list_shelves_collects_names_after_an_html_escaped_ampersand(monkeypatch):
+    """In an href the separator is spelled ``&amp;``; reading only ``?``/``&``
+    lost every shelf whose parameter was not first (#359)."""
+    monkeypatch.setattr(server, "DEFAULT_USER_ID", "9")
+    html = (
+        '<a href="/review/list/9?page=1&amp;shelf=read">read</a>'
+        '<a href="/review/list/9?shelf=to-read">to-read</a>'
+        '<a href="/review/list/9?per_page=20&amp;tag=sci-fi">sci-fi</a>'
+    )
+    assert _run_list_shelves(html, monkeypatch)[0] == ["read", "to-read", "sci-fi"]
+
+
 def test_list_shelves_collects_custom_shelves_linked_as_tags(monkeypatch):
     """The profile's bookshelves module links the exclusive shelves as
     `?shelf=` and every custom shelf as `?tag=`. Both are shelves to the RSS
@@ -226,6 +238,48 @@ def test_list_shelves_raises_when_the_page_redirects_to_sign_in(monkeypatch):
         server.list_shelves()
     assert "/user/show/9" in str(excinfo.value)
     assert "sign-in" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------- get_shelf
+
+_EMPTY_FEED = "<rss><channel><title>Otis's bookshelf: read</title></channel></rss>"
+_PRIVATE_PAGE = '<div id="privateProfile">This Profile is Private.</div>'
+
+
+def _run_get_shelf(profile: str, monkeypatch, page: int = 1) -> tuple[list, list[str]]:
+    """Run get_shelf against an empty feed and a canned profile page.
+
+    Returns (items, paths requested).
+    """
+    paths: list[str] = []
+
+    def get(url: str, **kw) -> httpx.Response:
+        paths.append(url)
+        return httpx.Response(200, text=_EMPTY_FEED if "list_rss" in url else profile)
+
+    monkeypatch.setattr(server.gr, "get", get)
+    return server.get_shelf("read", user_id="9", page=page), paths
+
+
+def test_get_shelf_raises_for_an_empty_feed_from_a_private_profile(monkeypatch):
+    """A private profile's feed is empty, which read as an empty shelf (#358)."""
+    with pytest.raises(LoginRequired) as excinfo:
+        _run_get_shelf(_PRIVATE_PAGE, monkeypatch)
+    assert "private" in str(excinfo.value)
+    assert "9" in str(excinfo.value)
+
+
+def test_get_shelf_returns_empty_for_an_empty_public_shelf(monkeypatch):
+    items, paths = _run_get_shelf("<html>public profile</html>", monkeypatch)
+    assert items == []
+    assert paths == ["/review/list_rss/9", "/user/show/9"]
+
+
+def test_get_shelf_does_not_check_the_profile_past_page_one(monkeypatch):
+    """An empty later page is the end of the shelf, not a privacy signal."""
+    items, paths = _run_get_shelf(_PRIVATE_PAGE, monkeypatch, page=2)
+    assert items == []
+    assert paths == ["/review/list_rss/9"]
 
 
 # --------------------------------------------------------------------- main
