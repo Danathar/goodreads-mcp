@@ -56,8 +56,11 @@ Expect an `appsync-api` endpoint ending in `/graphql` and a key starting
 `APPSYNC_PAIR_RE`, plus the `parse_page_api_key`, `parse_appsync_endpoint` and
 `parse_appsync_config` parsers around them. Start with `parse_appsync_endpoint`
 — it is on the primary path, while `parse_appsync_config` and its paired
-`APPSYNC_PAIR_RE` only run as the legacy fallback. Never respond by hardcoding
-a key or endpoint.
+`APPSYNC_PAIR_RE` only run as the legacy fallback. The error says the same:
+it reads `GraphQL config discovery failed: <primary failure> Legacy pair
+fallback: <fallback failure>`, primary first. Discovery tries each page in
+`CONFIG_DISCOVERY_PATHS` in turn, so a message naming every page means all of
+them failed. Never respond by hardcoding a key or endpoint.
 
 ## After fixing
 

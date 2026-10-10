@@ -9,14 +9,20 @@ the live tier covers *less* of this module than the offline one.
 
 from __future__ import annotations
 
+import email.utils
 import json
 import threading
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
 
 from goodreads_mcp.client import (
+    CONFIG_DISCOVERY_FALLBACK_PATH,
+    CONFIG_DISCOVERY_PATH,
+    MAX_RETRY_AFTER,
     SIGN_IN_PATH,
+    WAF_MARKERS,
     GoodreadsClient,
     GraphQLError,
     LoginRequired,
@@ -127,6 +133,87 @@ def test_request_guard_fires_if_the_retry_loop_never_runs():
 
     with pytest.raises(RuntimeError, match="unreachable"):
         _client(handler, max_retries=-1).get("/anything")
+
+
+# ------------------------------------------------------------ Retry-After
+
+
+def _http_date(seconds_from_now: float) -> str:
+    when = datetime.now(timezone.utc) + timedelta(seconds=seconds_from_now)
+    return email.utils.format_datetime(when, usegmt=True)
+
+
+def _retry_after_attempts(monkeypatch, status: int, retry_after: str):
+    """One `status` carrying `retry_after`, then a 200. Returns (attempts, slept)."""
+    slept: list[float] = []
+    monkeypatch.setattr("goodreads_mcp.client.time.sleep", slept.append)
+    statuses = iter((status, 200))
+    attempts: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        code = next(statuses)
+        attempts.append(code)
+        return httpx.Response(code, headers={"Retry-After": retry_after}, text="")
+
+    return _client(handler, max_retries=1), attempts, slept
+
+
+@pytest.mark.parametrize(
+    "status, retry_after, at_least",
+    [
+        (429, "10", 10.0),  # longer than the 1 s backoff: the header wins
+        (503, "0", 1.0),  # shorter than the backoff: the backoff still applies
+    ],
+)
+def test_request_waits_at_least_the_retry_after_seconds(
+    monkeypatch, status, retry_after, at_least
+):
+    client, attempts, slept = _retry_after_attempts(monkeypatch, status, retry_after)
+
+    assert client.get("/anything").status_code == 200
+    assert attempts == [status, 200]
+    assert len(slept) == 1 and at_least <= slept[0] < at_least + 0.5
+
+
+def test_request_honours_a_retry_after_http_date(monkeypatch):
+    client, attempts, slept = _retry_after_attempts(monkeypatch, 429, _http_date(20))
+
+    assert client.get("/anything").status_code == 200
+    # Whole seconds on the wire and a little test time: 18 s is a safe floor.
+    assert len(slept) == 1 and 18.0 <= slept[0] < 20.5
+
+
+@pytest.mark.parametrize(
+    "retry_after",
+    [str(int(MAX_RETRY_AFTER) + 1), _http_date(MAX_RETRY_AFTER + 600)],
+    ids=["seconds", "http-date"],
+)
+def test_request_gives_up_at_once_when_retry_after_is_above_the_cap(
+    monkeypatch, retry_after
+):
+    # Retrying early would be ruder than not retrying; waiting minutes is no
+    # use to a tool call. One request, no sleep, and the 429 surfaces.
+    client, attempts, slept = _retry_after_attempts(monkeypatch, 429, retry_after)
+
+    with pytest.raises(httpx.HTTPStatusError) as excinfo:
+        client.get("/anything")
+
+    assert excinfo.value.response.status_code == 429
+    assert attempts == [429] and slept == []
+
+
+@pytest.mark.parametrize(
+    "retry_after",
+    ["soon", "Wed, 21 Oct 2015 07:28:00 GMT"],
+    ids=["unreadable", "date-in-the-past"],
+)
+def test_request_falls_back_to_plain_backoff_for_a_useless_retry_after(
+    monkeypatch, retry_after
+):
+    client, attempts, slept = _retry_after_attempts(monkeypatch, 429, retry_after)
+
+    assert client.get("/anything").status_code == 200
+    assert len(slept) == 1 and 1.0 <= slept[0] < 1.5
 
 
 # ------------------------------------------------------- sign-in redirects
@@ -298,6 +385,125 @@ def test_graphql_config_falls_back_to_the_bundle_pair_when_the_page_key_is_absen
     endpoint, key = _client(handler).graphql_config()
 
     assert (endpoint, key) == (ENDPOINT_PROD, "da2-legacykey00000000000000")
+
+
+def test_graphql_config_names_the_missing_page_key_before_the_legacy_failure():
+    """#355: the primary path broke, so its error comes first. Reporting only the
+    legacy fallback's message sent the reader to the wrong parser."""
+    bundle = f'"endpoint":"{ENDPOINT_DEV}","shortName":"Dev","endpoint":"{ENDPOINT_PROD}"'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/_next/"):
+            return httpx.Response(200, text=bundle)
+        return httpx.Response(200, text=_discovery_page(None))
+
+    with pytest.raises(ValueError) as excinfo:
+        _client(handler).graphql_config()
+
+    message = str(excinfo.value)
+    assert message.startswith(
+        "GraphQL config discovery failed: No page-provided AppSync key"
+    )
+    assert message.endswith(
+        "Legacy pair fallback: No AppSync (key, endpoint) pair found in bundle."
+    )
+    assert f"{CONFIG_DISCOVERY_PATH}: no AppSync key" in message
+    assert isinstance(excinfo.value.__cause__, ValueError)
+
+
+def test_graphql_config_names_the_unidentified_endpoint_before_the_legacy_failure():
+    bundle = (
+        f'{{"Dev":{{"endpoint":"{ENDPOINT_DEV}"}},"shortName":"Dev",'
+        f'"Staging":{{"endpoint":"{ENDPOINT_PROD}"}},"shortName":"Staging"}}'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/_next/"):
+            return httpx.Response(200, text=bundle)
+        return httpx.Response(200, text=_discovery_page("da2-pagekey0000000000000000"))
+
+    with pytest.raises(ValueError) as excinfo:
+        _client(handler).graphql_config()
+
+    assert str(excinfo.value) == (
+        "GraphQL config discovery failed: Could not identify the production "
+        "AppSync endpoint. Legacy pair fallback: No AppSync (key, endpoint) "
+        "pair found in bundle."
+    )
+
+
+FALLBACK_KEY = "da2-fallbackkey00000000000"
+FALLBACK_CHUNK = "/_next/static/chunks/pages/_app-feedface.js"
+PROD_BUNDLE = f'"endpoint":"{ENDPOINT_PROD}","shortName":"Prod"'
+
+
+def _fallback_site(first_page: httpx.Response, seen: list[str]):
+    """`/giveaway` answers `first_page`; the fallback book page works."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == CONFIG_DISCOVERY_PATH:
+            return first_page
+        if request.url.path == CONFIG_DISCOVERY_FALLBACK_PATH:
+            page = _discovery_page(FALLBACK_KEY).replace("_app-deadbeef", "_app-feedface")
+            return httpx.Response(200, text=page)
+        if request.url.path == FALLBACK_CHUNK:
+            return httpx.Response(200, text=PROD_BUNDLE)
+        return httpx.Response(404)
+
+    return handler
+
+
+@pytest.mark.parametrize(
+    "first_page",
+    [
+        httpx.Response(200, text=_discovery_page("da2-pagekey0000000000000000", with_bundle=False)),
+        httpx.Response(200, text=_discovery_page(None)),
+        httpx.Response(
+            202,
+            headers={"content-type": "text/html"},
+            text=f"<html>{WAF_MARKERS[0]}</html>",
+        ),
+        httpx.Response(404, text="gone"),
+    ],
+    ids=["no-app-bundle", "no-page-key", "waf-challenge", "http-404"],
+)
+def test_graphql_config_falls_through_to_the_fallback_page(first_page):
+    """#370: one page moving is not an outage for every GraphQL tool."""
+    seen: list[str] = []
+
+    config = _client(_fallback_site(first_page, seen)).graphql_config()
+
+    assert config == (ENDPOINT_PROD, FALLBACK_KEY)
+    assert seen == [CONFIG_DISCOVERY_PATH, CONFIG_DISCOVERY_FALLBACK_PATH, FALLBACK_CHUNK]
+
+
+def test_graphql_config_does_not_try_another_page_when_rate_limited(monkeypatch):
+    # Being told to slow down is not the page moving; a second page is more load.
+    monkeypatch.setattr("goodreads_mcp.client.time.sleep", lambda s: None)
+    seen: list[str] = []
+    handler = _fallback_site(httpx.Response(429, text="slow down"), seen)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        _client(handler, max_retries=0).graphql_config()
+
+    assert seen == [CONFIG_DISCOVERY_PATH]
+
+
+def test_graphql_config_names_every_discovery_page_when_all_fail():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == CONFIG_DISCOVERY_PATH:
+            return httpx.Response(200, text="<html></html>")
+        return httpx.Response(404)
+
+    with pytest.raises(ValueError) as excinfo:
+        _client(handler).graphql_config()
+
+    assert str(excinfo.value) == (
+        "Could not locate _app JS bundle for config on any discovery page "
+        f"({CONFIG_DISCOVERY_PATH}: no _app JS bundle reference; "
+        f"{CONFIG_DISCOVERY_FALLBACK_PATH}: HTTP 404)."
+    )
 
 
 # --------------------------------------------------------------- graphql

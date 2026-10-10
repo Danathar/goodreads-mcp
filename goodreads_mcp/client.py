@@ -19,7 +19,8 @@ No auth, no cookies, no writes — this server only reads public data.
 
 House rules (these endpoints are unofficial; be a polite guest):
   * single client, persistent session
-  * exponential backoff on 429/503
+  * exponential backoff on 429/503, never shorter than the response's
+    Retry-After; a Retry-After above MAX_RETRY_AFTER is raised, not retried
   * at most MAX_IN_FLIGHT requests on the wire at once: tool calls run in
     worker threads so the server stays responsive (#92), and this cap is
     what keeps that from turning into a burst of parallel requests
@@ -35,6 +36,7 @@ House rules (these endpoints are unofficial; be a polite guest):
 from __future__ import annotations
 
 import contextvars
+import email.utils
 import json
 import math
 import random
@@ -43,6 +45,7 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 import httpx
@@ -59,6 +62,11 @@ MAX_IN_FLIGHT = 2
 # How often a cancellable call waiting for an in-flight slot looks at its
 # cancel flag, in seconds. The wait itself still ends as soon as a slot frees.
 _CANCEL_POLL = 0.1
+
+# The longest Retry-After a 429/503 can ask for and still be retried, in
+# seconds. A tool call cannot usefully wait minutes, so a response asking for
+# more is raised at once: giving up is politer than retrying early (#356).
+MAX_RETRY_AFTER = 30.0
 
 HEADERS = {
     "User-Agent": (
@@ -79,8 +87,14 @@ NEXT_DATA_RE = re.compile(
 # __NEXT_DATA__, while its _app bundle carries the environment endpoints.
 # Resolve both at runtime so key and endpoint rotations self-heal.
 
-# An id-free Next.js page carrying the anonymous key and _app bundle reference.
+# Next.js pages carrying the anonymous key and _app bundle reference, tried in
+# order. The first is id-free. The fallback is the `.xml` book page `get_book`
+# already reads, which sits outside the WAF; a fixed public book id is neither
+# a key nor an endpoint. With a second source, one page moving or turning
+# WAF-gated is not an outage for every GraphQL tool (#370).
 CONFIG_DISCOVERY_PATH = "/giveaway"
+CONFIG_DISCOVERY_FALLBACK_PATH = "/book/show/54493401.xml"
+CONFIG_DISCOVERY_PATHS = (CONFIG_DISCOVERY_PATH, CONFIG_DISCOVERY_FALLBACK_PATH)
 APP_CHUNK_RE = re.compile(r'src="(/_next/static/chunks/pages/_app-[0-9a-f]+\.js)"')
 # pattern in the bundle: "<api-key>","endpoint":"https://...appsync-api.../graphql"
 APPSYNC_PAIR_RE = re.compile(
@@ -134,6 +148,25 @@ SIGN_IN_PATH = "/user/sign_in"
 
 def _is_sign_in_page(resp: httpx.Response) -> bool:
     return resp.url.path == SIGN_IN_PATH
+
+
+def _retry_after(resp: httpx.Response) -> float:
+    """Seconds the response's `Retry-After` asks the client to wait, or 0.0.
+
+    Accepts both forms RFC 9110 allows: delta-seconds ("30") and an HTTP-date.
+    A date in the past, a missing header and an unreadable one are all 0.0,
+    which leaves the plain exponential backoff in charge.
+    """
+    value = resp.headers.get("retry-after", "").strip()
+    if value.isascii() and value.isdigit():
+        return float(value)
+    try:
+        when = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError):
+        return 0.0
+    if when.tzinfo is None:  # "-0000" parses naive; HTTP-dates are GMT
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
 
 
 def _describe_graphql_error(error: dict[str, Any]) -> str:
@@ -346,7 +379,11 @@ class GoodreadsClient:
             return self._client
 
     def _request(self, method: str, url: str, **kw) -> httpx.Response:
-        """GET with backoff on 429/503; nothing is sent for a cancelled call."""
+        """GET with backoff on 429/503; nothing is sent for a cancelled call.
+
+        Each backoff waits at least what the response's `Retry-After` asks for.
+        One asking for more than MAX_RETRY_AFTER is raised without a retry.
+        """
         call = _current_call.get()
         delay = 1.0
         for attempt in range(self.max_retries + 1):
@@ -358,7 +395,12 @@ class GoodreadsClient:
                 resp = self.client.request(method, url, **kw)
             finally:
                 self._in_flight.release()
-            if resp.status_code not in (429, 503) or attempt == self.max_retries:
+            retry_after = _retry_after(resp)
+            if (
+                resp.status_code not in (429, 503)
+                or attempt == self.max_retries
+                or retry_after > MAX_RETRY_AFTER
+            ):
                 resp.raise_for_status()
                 if _is_waf_challenge(resp):
                     raise WAFChallenge(
@@ -374,7 +416,7 @@ class GoodreadsClient:
                         "server does not do; try an alternate public endpoint."
                     )
                 return resp
-            pause = delay + random.uniform(0, 0.5)
+            pause = max(delay, retry_after) + random.uniform(0, 0.5)
             if call is None:
                 time.sleep(pause)
             else:
@@ -394,7 +436,12 @@ class GoodreadsClient:
 
         Reads the anonymous key from page-level Next data and the production
         endpoint from the page's _app JS bundle, then caches them per process.
-        Legacy bundles that contain a paired key and endpoint remain supported.
+        The pages in CONFIG_DISCOVERY_PATHS are tried in order until one gives
+        both the key and the bundle reference; a page that fails to load (WAF
+        challenge, sign-in redirect, HTTP error other than rate limiting) is
+        skipped. Legacy bundles that contain a paired key and endpoint remain
+        supported. When both paths fail, the error names the primary path's
+        failure first and the legacy fallback's second.
 
         Discovery runs under a lock: when several tool calls arrive together
         on a fresh process, the first one discovers and the rest wait for its
@@ -410,18 +457,55 @@ class GoodreadsClient:
         with self._config_lock:
             if (cached := self._cached_config(force, refused)) is not None:
                 return cached
-            page = self.get(CONFIG_DISCOVERY_PATH).text
-            app_chunk = APP_CHUNK_RE.search(page)
-            if not app_chunk:
-                raise ValueError("Could not locate _app JS bundle for config.")
-            bundle = self.get(app_chunk.group(1)).text
-            page_key = parse_page_api_key(page)
+            app_chunk: str | None = None
+            page_key: str | None = None
+            misses: list[str] = []
+            for path in CONFIG_DISCOVERY_PATHS:
+                try:
+                    page = self.get(path).text
+                except (WAFChallenge, LoginRequired, httpx.HTTPStatusError) as e:
+                    if isinstance(e, httpx.HTTPStatusError):
+                        if e.response.status_code in (429, 503):
+                            raise  # rate limited: another page is more load
+                        misses.append(f"{path}: HTTP {e.response.status_code}")
+                    else:
+                        misses.append(f"{path}: {type(e).__name__}")
+                    continue
+                chunk = APP_CHUNK_RE.search(page)
+                key = parse_page_api_key(page)
+                if chunk and key:
+                    app_chunk, page_key = chunk.group(1), key
+                    break
+                if chunk and app_chunk is None:
+                    app_chunk = chunk.group(1)
+                misses.append(
+                    f"{path}: no AppSync key in __NEXT_DATA__"
+                    if chunk
+                    else f"{path}: no _app JS bundle reference"
+                )
+            if app_chunk is None:
+                raise ValueError(
+                    "Could not locate _app JS bundle for config on any "
+                    f"discovery page ({'; '.join(misses)})."
+                )
+            bundle = self.get(app_chunk).text
             try:
                 if page_key is None:
-                    raise ValueError("No page-provided AppSync key.")
+                    raise ValueError(
+                        "No page-provided AppSync key on any discovery page "
+                        f"({'; '.join(misses)})."
+                    )
                 self._graphql_config = (parse_appsync_endpoint(bundle), page_key)
-            except ValueError:
-                self._graphql_config = parse_appsync_config(bundle)
+            except ValueError as primary:
+                try:
+                    self._graphql_config = parse_appsync_config(bundle)
+                except ValueError as fallback:
+                    # Name the primary failure first: it is the path that is
+                    # supposed to work, and the one a fix should start from.
+                    raise ValueError(
+                        f"GraphQL config discovery failed: {primary} "
+                        f"Legacy pair fallback: {fallback}"
+                    ) from fallback
             return self._graphql_config
 
     def _cached_config(

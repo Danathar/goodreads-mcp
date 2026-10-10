@@ -13,6 +13,7 @@ import os
 
 import pytest
 
+from goodreads_mcp import client as client_mod
 from goodreads_mcp import server
 from goodreads_mcp.client import GoodreadsClient
 
@@ -66,11 +67,17 @@ def test_get_book_series_position_live():
     assert book["publication_date"]
 
 
-def test_graphql_config_resolves_live():
+def test_graphql_config_resolves_live(monkeypatch):
     client = GoodreadsClient()
     endpoint, key = client.graphql_config(force=True)
     assert "appsync-api" in endpoint and endpoint.endswith("/graphql")
     assert key.startswith("da2-")
+    # The fallback discovery page must resolve on its own too (#370): it is
+    # only tried when the first page fails, so nothing else exercises it live.
+    monkeypatch.setattr(
+        client_mod, "CONFIG_DISCOVERY_PATHS", (client_mod.CONFIG_DISCOVERY_FALLBACK_PATH,)
+    )
+    assert client.graphql_config(force=True) == (endpoint, key)
     data = client.graphql(
         "query($id: Int!){ getBookByLegacyId(legacyId:$id){ legacyId } }",
         {"id": 54493401},

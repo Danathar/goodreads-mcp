@@ -36,8 +36,9 @@ that add write operations or require credentials are out of scope — say so
 rather than implementing them.
 
 **Be a polite guest.** These endpoints are unofficial. Keep the single shared
-client and its session, keep exponential backoff on 429/503, keep the
-browser-faithful headers. Don't add concurrency that multiplies request rate.
+client and its session, keep exponential backoff on 429/503 (never shorter
+than the response's `Retry-After`, and no retry when it asks for more than
+`client.MAX_RETRY_AFTER`), keep the browser-faithful headers. Don't add concurrency that multiplies request rate.
 Tool calls run in worker threads so the server can answer pings mid-call
 (`OffLoopFastMCP` in `server.py`, #92); `client.MAX_IN_FLIGHT` is what keeps
 parallel calls from becoming parallel load. Raise it only with a reason.
@@ -70,6 +71,8 @@ challenge markup to a parser; keep it that way.
 **GraphQL config is resolved at runtime, deliberately.** The anonymous API key
 comes from page-level `__NEXT_DATA__` and the endpoint from the `_app` JS
 bundle (`client.graphql_config`), so key and endpoint rotations self-heal.
+The page is the first of `CONFIG_DISCOVERY_PATHS` that yields both; the
+`.xml` book page is the fallback when `/giveaway` fails.
 Never hardcode either. A 401/403 triggers one forced re-discovery and retry.
 
 ## Conventions

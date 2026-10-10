@@ -25,10 +25,12 @@ A goodreads-mcp tool is returning wrong or empty data. Diagnose it.
    - `WAFChallenge` raised → the path is now WAF-gated. Find an alternate
      endpoint (`.xml` book page, RSS, JSON autocomplete). Do not try to solve
      the challenge.
-   - `ValueError` from `graphql_config` (such as "No AppSync (key,
-     endpoint) pair found in bundle.") → config discovery broke: the
-     discovery page or its `_app` bundle changed shape, so the discovery
-     regexes in `client.py` need updating.
+   - `ValueError` from `graphql_config` (such as "GraphQL config discovery
+     failed: No AppSync endpoint found in bundle. Legacy pair fallback: No
+     AppSync (key, endpoint) pair found in bundle.") → config discovery
+     broke: the discovery pages or their `_app` bundle changed shape, so the
+     discovery regexes in `client.py` need updating. The message names the
+     primary path's failure first; start there, not with the legacy pair.
    - `httpx.HTTPStatusError` with 401/403 from a GraphQL call → key/endpoint
      rotation that re-discovery did not fix. `graphql` already re-discovers
      once on a 401/403, so a fresh `graphql_config` still found a stale or
