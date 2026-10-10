@@ -173,7 +173,7 @@ def _contains(haystack: tuple[str, ...], needle: tuple[str, ...]) -> bool:
 
 @pytest.fixture(scope="module")
 def ci() -> _workflow_steps.Workflow:
-    return _workflow_steps.Workflow(_CI)
+    return _workflow_steps.Workflow(_CI, job="test")
 
 
 @pytest.fixture(scope="module")
