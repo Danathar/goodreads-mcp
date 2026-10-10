@@ -53,9 +53,9 @@ From [`metrics.md`](metrics.md), what it deliberately does not measure:
 
 ## What is not decided
 
-[`roadmap.md`](roadmap.md) lists ideas that are not built: author page detail
-and a caching layer. Whether and when to build either is a maintainer
-decision, and this page does not make it. The same goes for raising the
+[`roadmap.md`](roadmap.md) lists ideas that are not built: author page detail,
+a caching layer, and the `mcp` 2.x migration. Whether and when to build any of
+them is a maintainer decision, and this page does not make it. The same goes for raising the
 coverage floor: [`.github/auto-qa-tuning.json`](../.github/auto-qa-tuning.json)
 records when a raise is warranted, and nothing applies it automatically.
 
