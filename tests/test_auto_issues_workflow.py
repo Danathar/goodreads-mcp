@@ -50,6 +50,7 @@ _AUTO = _WORKFLOWS / "auto-issues.yml"
 _CI = _WORKFLOWS / "ci.yml"
 
 _STEP = "Open or update the CI-failure issue"
+_SCHEDULED_STEP = "Open or update the scheduled-failure issue"
 _TITLE = "CI failing on main"
 _BOT_LOGINS = _workflow_steps.ACTIONS_BOT_LOGINS
 
@@ -310,12 +311,39 @@ def test_the_title_the_step_looks_up_is_the_title_it_opens():
 # --------------------------------------------------------------------------
 
 
-def test_the_trigger_names_the_workflow_ci_yml_declares():
-    """Rename `name: CI` and this workflow never fires again, with nothing failing."""
-    ci_name = re.search(r"^name: (.+)$", _text_of(_CI), re.M).group(1).strip()
+def _watched() -> list[str]:
     trigger = re.search(r"^on:\n  workflow_run:\n    workflows: \[(.+)\]$", _WORKFLOW.text, re.M)
     assert trigger, "auto-issues.yml no longer triggers on workflow_run"
-    assert [name.strip() for name in trigger.group(1).split(",")] == [ci_name]
+    return [name.strip() for name in trigger.group(1).split(",")]
+
+
+def _name_of(path: Path) -> str:
+    return re.search(r"^name: (.+)$", _text_of(path), re.M).group(1).strip()
+
+
+def test_the_trigger_names_the_workflows_it_watches_as_they_declare_themselves():
+    """Rename a watched workflow and this one never fires for it again, with nothing failing."""
+    assert _watched() == [
+        _name_of(_CI),
+        _name_of(_WORKFLOWS / "release.yml"),
+        _name_of(_WORKFLOWS / "agent-audit.yml"),
+    ]
+
+
+# Scheduled workflows that open their own issue when a scheduled run fails.
+_SELF_REPORTING = {"nightly-compliance.yml"}
+
+
+def test_every_scheduled_workflow_is_watched_or_reports_for_itself():
+    """A scheduled run is the one nobody watches; its failure must reach an issue."""
+    watched = set(_watched())
+    for path in _workflow_steps.workflow_files():
+        if not re.search(r"^  schedule:$", _text_of(path), re.M):
+            continue
+        if path.name in _SELF_REPORTING:
+            assert "gh issue create" in _text_of(path), f"{path.name} no longer opens its own issue"
+            continue
+        assert _name_of(path) in watched, f"{path.name} runs on a schedule and nothing reports its failure"
 
 
 def test_the_trigger_is_completed_runs_on_main_and_nothing_else():
@@ -323,7 +351,7 @@ def test_the_trigger_is_completed_runs_on_main_and_nothing_else():
     assert on
     assert on.group(1).splitlines() == [
         "  workflow_run:",
-        "    workflows: [CI]",
+        "    workflows: [CI, Release MCPB, Agent audit trail]",
         "    types: [completed]",
         "    branches: [main]",
     ]
@@ -334,14 +362,23 @@ def test_ci_itself_still_runs_on_pushes_to_main():
     assert re.search(r"^  push:\n    branches: \[main\]$", _text_of(_CI), re.M)
 
 
-def test_only_a_failed_push_run_gets_a_job():
+def test_only_a_failed_push_or_scheduled_run_gets_a_job():
     """`completed` also covers success, cancellation, and pull-request runs."""
     condition = re.search(r"^    if: (.+)$", _WORKFLOW.text, re.M)
     assert condition
     assert condition.group(1).split(" && ") == [
         "github.event.workflow_run.conclusion == 'failure'",
-        "github.event.workflow_run.event == 'push'",
+        "(github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'schedule')",
     ]
+
+
+def test_each_step_reports_one_kind_of_run():
+    """A push to main is only CI's; a run started by hand files nothing."""
+    assert _WORKFLOW.step(_STEP).if_.split(" && ") == [
+        "github.event.workflow_run.event == 'push'",
+        "github.event.workflow_run.name == 'CI'",
+    ]
+    assert _WORKFLOW.step(_SCHEDULED_STEP).if_ == "github.event.workflow_run.event == 'schedule'"
 
 
 def test_the_workflow_may_write_issues_and_nothing_else():
@@ -352,7 +389,7 @@ def test_the_workflow_may_write_issues_and_nothing_else():
 
 
 def test_two_failures_queue_rather_than_racing_into_two_issues():
-    assert re.search(r"^concurrency:\n  group: \S+\n  cancel-in-progress: false$", _WORKFLOW.text, re.M)
+    assert re.search(r"^concurrency:\n  group: \S+\n  cancel-in-progress: false\n  queue: max$", _WORKFLOW.text, re.M)
 
 
 def test_the_job_runs_on_a_hosted_runner_where_gh_is_preinstalled():
@@ -362,4 +399,71 @@ def test_the_job_runs_on_a_hosted_runner_where_gh_is_preinstalled():
 
 def test_the_workflow_runs_no_repository_code_and_no_third_party_action():
     assert not re.search(r"^\s*(?:- )?uses:", _WORKFLOW.text, re.M)
-    assert _WORKFLOW.run_step_names() == {_STEP}
+    assert _WORKFLOW.run_step_names() == {_STEP, _SCHEDULED_STEP}
+
+
+# --------------------------------------------------------------------------
+# A failed scheduled run
+# --------------------------------------------------------------------------
+
+_SCHEDULED_ENV = {
+    "GH_TOKEN": "x",
+    "GH_REPO": "Danathar/goodreads-mcp",
+    "HEAD_SHA": "0123456789abcdef0123456789abcdef01234567",
+    "RUN_URL": "https://github.com/Danathar/goodreads-mcp/actions/runs/777",
+}
+
+
+def _report_scheduled(tmp_path: Path, issues: list[dict], workflow: str):
+    stubs = tmp_path / "bin"
+    stubs.mkdir(exist_ok=True)
+    log = tmp_path / "argv"
+    fixture = tmp_path / "issues.json"
+    fixture.write_text(json.dumps(issues), encoding="utf-8")
+    _write_stub(stubs, "gh", _recorder(log) + _workflow_steps.GH_ISSUE_LIST)
+    _write_stub(stubs, "date", 'echo "2026-10-01"\n')
+    result = _run(
+        _WORKFLOW.body(_SCHEDULED_STEP),
+        tmp_path,
+        path_dirs=[stubs],
+        env={**_SCHEDULED_ENV, "WORKFLOW_NAME": workflow, "FIXTURE": str(fixture)},
+    )
+    return result, [record[1:] for record in _argv(log)]
+
+
+@needs_jq
+@pytest.mark.parametrize("workflow", ["Release MCPB", "Agent audit trail"])
+def test_a_failed_scheduled_run_opens_an_issue_named_for_its_workflow(tmp_path: Path, workflow: str):
+    result, calls = _report_scheduled(tmp_path, [], workflow)
+    assert result.returncode == 0, result.stderr
+    create = calls[-1]
+    assert create[:2] == ["issue", "create"]
+    assert _flag(create, "--title") == f"Scheduled run failing: {workflow}"
+    body = _flag(create, "--body")
+    assert f"The scheduled `{workflow}` run failed on 2026-10-01." in body
+    assert "Run: https://github.com/Danathar/goodreads-mcp/actions/runs/777" in body
+
+
+@needs_jq
+def test_a_failed_release_says_how_to_bump_the_version(tmp_path: Path):
+    _, calls = _report_scheduled(tmp_path, [], "Release MCPB")
+    assert "with `prepare` ticked" in _flag(calls[-1], "--body")
+
+
+@needs_jq
+def test_a_second_scheduled_failure_comments_on_the_bot_issue(tmp_path: Path):
+    issues = [
+        _issue(4, "Scheduled run failing: Release MCPB", "someone"),
+        _issue(9, "Scheduled run failing: Release MCPB", "app/github-actions"),
+        _issue(11, "Scheduled run failing: Agent audit trail", "app/github-actions"),
+    ]
+    _, calls = _report_scheduled(tmp_path, issues, "Release MCPB")
+    assert calls[-1][:3] == ["issue", "comment", "9"]
+
+
+def test_the_scheduled_step_reads_every_event_field_from_env():
+    step = _WORKFLOW.step(_SCHEDULED_STEP)
+    assert not _workflow_steps.EXPR.search(step.run or "")
+    assert step.env["WORKFLOW_NAME"] == "${{ github.event.workflow_run.name }}"
+    assert step.env["HEAD_SHA"] == "${{ github.event.workflow_run.head_sha }}"
+    assert step.env["RUN_URL"] == "${{ github.event.workflow_run.html_url }}"

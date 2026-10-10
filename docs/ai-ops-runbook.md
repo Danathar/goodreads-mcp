@@ -128,6 +128,13 @@ closes it:
 gh issue list --repo Danathar/goodreads-mcp --state open --limit 1000 --json number,title,author --jq '.[] | select(.title == "CI failing on main" and (.author.login == "app/github-actions" or .author.login == "github-actions[bot]" or .author.login == "github-actions")) | "#\(.number) \(.title)"'
 ```
 
+The same workflow opens `Scheduled run failing: Release MCPB` or
+`Scheduled run failing: Agent audit trail` when a scheduled run of either
+monthly workflow fails, and comments on that issue while it is open. A failed
+monthly release most often means main still carries the last release's
+version: run `Release MCPB` with `prepare`, merge the version-bump pull
+request, then run it again. `Nightly compliance` opens its own drift issue.
+
 Close it yourself once `main` is green again. Each later red push to `main`
 adds a comment with that run's link.
 
