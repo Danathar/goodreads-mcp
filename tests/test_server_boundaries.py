@@ -53,6 +53,7 @@ _DEFAULTS = [
     ("search_books", "max_results", 10),
     ("get_book", "review_language_limit", 5),
     ("get_reviews", "limit", 10),
+    ("get_reviews", "sort", "relevance"),
     ("similar_books", "limit", 10),
     ("author_books", "limit", 20),
     ("series_books", "limit", 20),

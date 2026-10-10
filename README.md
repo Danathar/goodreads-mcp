@@ -21,8 +21,8 @@ A **read-only** MCP server for Goodreads — built without the Goodreads API, be
 | tool | source / what it returns |
 |---|---|
 | `search_books` | JSON autocomplete endpoint (stable) — book_id, title, author, rating, cover; `max_results` defaults to 10, but the endpoint returns about 5 matches at most |
-| `get_book` | `__NEXT_DATA__` via the `.xml` page (stable) — details, cover, ratings histogram, every series membership, review-language breakdown (`review_language_limit`, default 5, max 25) |
-| `get_reviews` | GraphQL — paginated reader reviews (text, rating, likes, date, spoiler flag, permalink); `limit` default 10, capped at 100; server-side `min_rating` / `max_rating` (1–5, min ≤ max) and `exclude_spoilers`; reports `has_more` |
+| `get_book` | `__NEXT_DATA__` via the `.xml` page (stable) — details, cover, ratings histogram, every series membership, review-language breakdown (`review_language_limit`, default 5, max 25); edition `publication_date` and the work's `first_published`, `original_title`, `language`, `isbn` / `isbn13` / `asin`, `author_url` (each null when absent) |
+| `get_reviews` | GraphQL — paginated reader reviews (text, rating, likes, date, spoiler flag, permalink); `limit` default 10, capped at 100; server-side `min_rating` / `max_rating` (1–5, min ≤ max), `sort` (`relevance` default, `newest`, `oldest`), `language` (two-letter code, as in `get_book`'s `review_languages`) and `search` over review text; `exclude_spoilers`; reports `has_more` |
 | `similar_books` | GraphQL — paginated "readers also enjoyed" recommendations; `limit` up to 100 |
 | `author_books` | GraphQL — paginated author bibliography, ranked by popularity, from any of their books, plus `author_url`; `limit` up to 100 |
 | `series_books` | GraphQL — paginated series books with reading-order placement; `series_index` (zero-based, in `get_book`'s `series_memberships` order) picks the series; `limit` up to 100 |
