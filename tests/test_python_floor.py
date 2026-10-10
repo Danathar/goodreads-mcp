@@ -95,7 +95,7 @@ def test_the_bundle_manifest_declares_the_same_floor():
 def test_the_ci_test_job_runs_the_floor_exactly():
     """The dependency-floor step uses this interpreter, so CI tests the floor only if it is the floor."""
     steps = _setup_python_steps(_WORKFLOWS / "ci.yml")
-    assert len(steps) == 1, steps
+    assert len(steps) == 2, steps  # the floor job, then the newest-Python job (#363)
     body = (_WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
     assert 'uv venv --python "$(command -v python)"' in body, (
         "ci.yml's dependency-floor venv no longer takes setup-python's interpreter; "
@@ -104,6 +104,14 @@ def test_the_ci_test_job_runs_the_floor_exactly():
     assert _version(steps[0][1]) == _floor(), (
         f"ci.yml sets up Python {steps[0][1]}, requires-python is {_REQUIRES!r}: no CI job runs the floor"
     )
+
+
+def test_ci_also_runs_the_offline_suite_on_a_newer_python():
+    """The floor job cannot see a break on the Python a bundle user's uv picks (#363)."""
+    steps = _setup_python_steps(_WORKFLOWS / "ci.yml")
+    assert _version(steps[1][1]) > _floor(), f"ci.yml's second setup-python is {steps[1][1]}, not above the floor"
+    body = (_WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    assert re.search(r"^  test-newest-python:\s*$", body, re.M)
 
 
 def test_no_workflow_sets_up_a_python_below_the_floor_or_misnames_it():

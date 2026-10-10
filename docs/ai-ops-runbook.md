@@ -318,6 +318,13 @@ request a week, covering every GitHub Action the workflows `uses:`, with commit
 prefix `ci`. Every `uses:` is pinned to a 40-character SHA with a `# vN`
 comment, and Dependabot moves both together.
 
+**No pull request ever appears?** This repository is a fork, and GitHub does not
+run Dependabot version updates on a fork until they are enabled in the fork
+itself: Insights, Dependency graph, Dependabot in the web UI (repository admin;
+the API does not expose it). Committing `dependabot.yml` is not enough. That
+page also shows the log of the last run, which says why a run opened nothing.
+Until the switch is on, bump the pinned actions by hand (#365).
+
 ```bash
 gh pr list --author app/dependabot --state open
 gh pr diff <number>
