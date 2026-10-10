@@ -318,6 +318,70 @@ def test_get_book_follows_apollo_references(monkeypatch):
     assert book["series"] == "Arc"
 
 
+def test_get_book_returns_first_publication_language_and_identifiers(monkeypatch):
+    """A reprint: the edition's date and the work's first publication differ.
+    The Work and the language arrive as ``__ref`` pointers, as on a live page."""
+    apollo = {
+        "Book:1": {
+            "legacyId": 1,
+            "title": "Le Livre",
+            "primaryContributorEdge": {"node": {"__ref": "Contributor:9"}},
+            "work": {"__ref": "Work:1"},
+            "details": {
+                "publicationTime": 1_600_000_000_000,
+                "isbn": "0316769177",
+                "isbn13": "9780316769174",
+                "asin": "B00EXAMPLE",
+                "language": {"__ref": "Language:fr"},
+            },
+        },
+        "Contributor:9": {
+            "name": "An Author",
+            "webUrl": "https://www.goodreads.com/author/show/9.An_Author",
+        },
+        "Work:1": {
+            "details": {
+                "publicationTime": -582_656_400_000,
+                "originalTitle": "The Book",
+            },
+            "stats": {"averageRating": 4.2},
+        },
+        "Language:fr": {"name": "French"},
+    }
+    monkeypatch.setattr(server, "_fetch_book_apollo", lambda book_id: apollo)
+
+    book = server.get_book("1")
+
+    assert book["publication_date"] == "2020-09-13"
+    assert book["first_published"] == "1951-07-16"
+    assert book["original_title"] == "The Book"
+    assert book["language"] == "French"
+    assert (book["isbn"], book["isbn13"], book["asin"]) == (
+        "0316769177",
+        "9780316769174",
+        "B00EXAMPLE",
+    )
+    assert book["author_url"] == "https://www.goodreads.com/author/show/9.An_Author"
+    assert book["average_rating"] == 4.2
+
+
+def test_get_book_leaves_the_newer_fields_null_when_the_page_lacks_them(monkeypatch):
+    apollo = {"Book:1": {"legacyId": 1, "title": "A Book", "details": {}}}
+    monkeypatch.setattr(server, "_fetch_book_apollo", lambda book_id: apollo)
+
+    book = server.get_book("1")
+
+    for field in (
+        "first_published",
+        "original_title",
+        "language",
+        "isbn",
+        "asin",
+        "author_url",
+    ):
+        assert book[field] is None, field
+
+
 # -------------------------------------------------------------- get_reviews
 
 
@@ -384,6 +448,73 @@ def test_get_reviews_omits_star_filters_that_were_not_asked_for(monkeypatch):
     (variables,) = graphql.variables_for(server._Q_REVIEWS)
     assert "ratingMin" not in variables["filters"]
     assert "ratingMax" not in variables["filters"]
+
+
+@pytest.mark.parametrize(("sort", "sent"), [("newest", "NEWEST"), ("oldest", "OLDEST")])
+def test_get_reviews_sends_the_sort_language_and_search_filters(sort, sent, monkeypatch):
+    graphql = _Graphql(
+        {
+            server._Q_BOOK_BY_LEGACY: [_reviews_book_response()],
+            server._Q_REVIEWS: [{"getReviews": _page([])}],
+        }
+    )
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    server.get_reviews("1", limit=5, sort=sort, language="es", search="  ending  ")
+
+    (variables,) = graphql.variables_for(server._Q_REVIEWS)
+    assert variables["filters"] == {
+        "resourceType": "WORK",
+        "resourceId": "kca://work/1",
+        "sort": sent,
+        "languageCode": "es",
+        "searchText": "ending",
+    }
+
+
+def test_get_reviews_sends_no_sort_for_relevance_and_no_blank_search(monkeypatch):
+    """Relevance is what Goodreads does unasked, so the default request is
+    the one get_reviews always sent; an empty search box sends nothing."""
+    graphql = _Graphql(
+        {
+            server._Q_BOOK_BY_LEGACY: [_reviews_book_response()],
+            server._Q_REVIEWS: [{"getReviews": _page([])}],
+        }
+    )
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    server.get_reviews("1", limit=5, sort="relevance", search="   ")
+
+    (variables,) = graphql.variables_for(server._Q_REVIEWS)
+    assert variables["filters"] == {
+        "resourceType": "WORK",
+        "resourceId": "kca://work/1",
+    }
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"sort": "NEWEST"}, "sort must be one of"),
+        ({"sort": "popular"}, "sort must be one of"),
+        ({"language": "ES"}, "language must be a two-letter lowercase code"),
+        ({"language": "spa"}, "language must be a two-letter lowercase code"),
+        ({"language": ""}, "language must be a two-letter lowercase code"),
+    ],
+)
+def test_get_reviews_rejects_a_sort_or_language_goodreads_cannot_use(
+    kwargs, message, monkeypatch
+):
+    """Goodreads errors on an unknown sort and answers a misspelled language
+    with no reviews, which would read as a book nobody reviewed in it. Both
+    are refused before any request is made."""
+    graphql = _Graphql({})
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+
+    with pytest.raises(ValueError, match=message):
+        server.get_reviews("1", **kwargs)
+
+    assert graphql.calls == []
 
 
 @pytest.mark.parametrize(

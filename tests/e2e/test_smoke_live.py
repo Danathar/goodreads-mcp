@@ -39,6 +39,17 @@ def test_get_book_live_bypasses_waf():
     assert book["genres"]
 
 
+def test_get_book_first_published_and_identifiers_live():
+    """A 2001 paperback of a 1951 novel: edition date and first publication differ."""
+    book = server.get_book("5107")  # The Catcher in the Rye
+    assert book["publication_date"] > book["first_published"]
+    assert book["first_published"].startswith("1951")
+    assert book["original_title"] == "The Catcher in the Rye"
+    assert book["language"] == "English"
+    assert book["isbn"] and book["asin"]
+    assert book["author_url"].startswith("https://www.goodreads.com/author/show/")
+
+
 def test_get_book_accepts_slug_form_live():
     book = server.get_book("11870085-the-fault-in-our-stars")
     assert book["book_id"] == "11870085"
@@ -116,6 +127,21 @@ def test_get_reviews_rating_filters_live():
     crit = server.get_reviews("54493401", limit=8, max_rating=2)
     assert crit["reviews"]
     assert all(r["rating"] <= 2 for r in crit["reviews"])
+
+
+def test_get_reviews_sort_language_and_search_live():
+    newest = server.get_reviews("54493401", limit=5, sort="newest")
+    oldest = server.get_reviews("54493401", limit=5, sort="oldest")
+    assert newest["reviews"] and oldest["reviews"]
+    assert oldest["reviews"][0]["date"] < newest["reviews"][-1]["date"]
+    dates = [r["date"] for r in newest["reviews"]]
+    assert dates == sorted(dates, reverse=True)
+    # Filters apply server-side, so the total shrinks to the matching reviews.
+    every = server.get_reviews("54493401", limit=1)["total_text_reviews"]
+    spanish = server.get_reviews("54493401", limit=3, language="es")
+    assert spanish["reviews"] and 0 < spanish["total_text_reviews"] < every
+    found = server.get_reviews("54493401", limit=3, search="astrophage")
+    assert found["reviews"] and 0 < found["total_text_reviews"] < every
 
 
 # --------------------------------------------------- discovery (Tier 2/3)

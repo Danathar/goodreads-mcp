@@ -334,6 +334,15 @@ _MAX_REVIEWS = 100
 _REVIEW_PAGE_SIZE = 30
 _MAX_REVIEW_PAGES = 8
 
+# get_reviews' sort parameter -> the review panel's ReviewsSort value. The
+# site's "Popular reviews" (DEFAULT) is what the backend does when no sort is
+# sent, so "relevance" sends none and the request stays as it always was.
+_REVIEW_SORTS = {"relevance": None, "newest": "NEWEST", "oldest": "OLDEST"}
+# The review panel's language codes: two-letter, lowercase, the same keys
+# get_book's review_languages carries ('en', 'es'). Goodreads answers any
+# other spelling ('ES', 'spa') with no reviews rather than an error.
+_REVIEW_LANGUAGE_RE = re.compile(r"[a-z]{2}(?:-[A-Za-z]{2,4})?")
+
 # Resolve a book to the kca ids the discovery queries need.
 _Q_BOOK_IDS = (
     "query($id: Int!){ getBookByLegacyId(legacyId:$id){"
@@ -676,6 +685,13 @@ def get_book(book_id: str, review_language_limit: int = 5) -> dict[str, Any]:
     — use get_reviews for the actual review text. review_language_limit controls
     how many languages are returned (default 5, maximum 25).
 
+    publication_date is this edition's; first_published is the work's first
+    publication, so a reprint reports both. language is the edition's
+    language name ('English'); original_title is the work's title in its
+    first language, useful for translations. asin identifies a Kindle
+    edition, which often has no isbn/isbn13. author_url links the author.
+    Any of these is null when Goodreads does not carry it.
+
     When you cite details or ratings from this book, link to its 'url'.
     """
     if review_language_limit < 0:
@@ -686,7 +702,9 @@ def get_book(book_id: str, review_language_limit: int = 5) -> dict[str, Any]:
 
     author = deref(deref(book.get("primaryContributorEdge")).get("node"))
     details = book.get("details") or {}
-    stats = deref(book.get("work")).get("stats") or book.get("stats") or {}
+    work = deref(book.get("work"))
+    work_details = work.get("details") or {}
+    stats = work.get("stats") or book.get("stats") or {}
     genres = [
         (deref(g.get("genre")) or g.get("genre") or {}).get("name")
         for g in (book.get("bookGenres") or [])
@@ -730,6 +748,7 @@ def get_book(book_id: str, review_language_limit: int = 5) -> dict[str, Any]:
         "book_id": _book_id(book.get("legacyId")),
         "title": book.get("titleComplete") or book.get("title"),
         "author": author.get("name"),
+        "author_url": author.get("webUrl"),
         "cover": book.get("imageUrl"),
         "description": _clean_text(book.get("description")),
         "average_rating": stats.get("averageRating"),
@@ -745,7 +764,12 @@ def get_book(book_id: str, review_language_limit: int = 5) -> dict[str, Any]:
         "publisher": details.get("publisher"),
         "publication_time": details.get("publicationTime"),
         "publication_date": _ms_to_iso(details.get("publicationTime")),
+        "first_published": _ms_to_iso(work_details.get("publicationTime")),
+        "original_title": work_details.get("originalTitle"),
+        "language": deref(details.get("language")).get("name"),
         "isbn13": details.get("isbn13"),
+        "isbn": details.get("isbn"),
+        "asin": details.get("asin"),
         "genres": [g for g in genres if g],
         "url": book.get("webUrl"),
     }
@@ -758,12 +782,15 @@ def get_reviews(
     min_rating: int | None = None,
     max_rating: int | None = None,
     exclude_spoilers: bool = False,
+    sort: str = "relevance",
+    language: str | None = None,
+    search: str | None = None,
 ) -> dict[str, Any]:
     """Get reader reviews for a book — the actual review text, not just a score.
 
     Fetches from Goodreads' GraphQL backend with true pagination, so limit
-    can exceed the ~30 shown on a page. Reviews come in "most relevant"
-    order and aggregate across all editions of the work. Each review has the
+    can exceed the ~30 shown on a page. Reviews aggregate across all
+    editions of the work. Each review has the
     reviewer name, star rating (1-5), full text, like/comment counts, date, a
     spoiler flag, a 'url' permalink (use it to cite/link), and the reviewer's
     profile url.
@@ -773,8 +800,16 @@ def get_reviews(
         min_rating=4 for positive reviews, max_rating=2 for the critical ones.
     exclude_spoilers: drop reviews flagged as spoilers. Paging is capped, so
         a book whose reviews are mostly spoilers can return fewer than limit.
+    sort: "relevance" (default, Goodreads' "most relevant" order), "newest"
+        or "oldest" — e.g. sort="newest" for what recent readers say.
+    language: only reviews written in this language, as a two-letter code
+        ('en', 'es'); the keys of get_book's review_languages.
+    search: only reviews whose text matches these words, as the review
+        panel's search box does.
 
-    'has_more' is true when Goodreads has reviews this call did not read.
+    The filters apply server-side, so total_text_reviews counts the matching
+    reviews. 'has_more' is true when Goodreads has reviews this call did not
+    read.
     """
     # Goodreads answers an impossible star filter with an empty page, which
     # would read as "this book has no reviews"; refuse it here instead.
@@ -783,6 +818,15 @@ def get_reviews(
             raise ValueError(f"{name} must be between 1 and 5.")
     if min_rating is not None and max_rating is not None and min_rating > max_rating:
         raise ValueError("min_rating must not be greater than max_rating.")
+    if sort not in _REVIEW_SORTS:
+        raise ValueError(
+            f"sort must be one of {', '.join(map(repr, _REVIEW_SORTS))}; got {sort!r}."
+        )
+    if language is not None and not _REVIEW_LANGUAGE_RE.fullmatch(language):
+        raise ValueError(
+            "language must be a two-letter lowercase code such as 'en' or 'es' "
+            f"(the keys of get_book's review_languages); got {language!r}."
+        )
     if limit < 0:
         raise ValueError("limit must be zero or greater.")
     want = min(limit, _MAX_REVIEWS)
@@ -796,6 +840,13 @@ def get_reviews(
         filters["ratingMin"] = min_rating
     if max_rating is not None:
         filters["ratingMax"] = max_rating
+    if _REVIEW_SORTS[sort]:
+        filters["sort"] = _REVIEW_SORTS[sort]
+    if language is not None:
+        filters["languageCode"] = language
+    # The site sends no search for an empty box; neither does this.
+    if search and search.strip():
+        filters["searchText"] = search.strip()
 
     def fetch_page(token: str | None) -> dict[str, Any]:
         pagination: dict[str, Any] = {"limit": _REVIEW_PAGE_SIZE}
