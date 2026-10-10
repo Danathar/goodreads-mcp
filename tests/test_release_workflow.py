@@ -1478,17 +1478,22 @@ def test_the_bump_changes_the_version_in_both_files_and_nothing_else(tmp_path: P
     import tomllib
 
     work = _repo_with_remote(tmp_path)
+    # The step runs on a copy of the repository's own pyproject.toml and
+    # manifest.json, so the target must be a version the repository never
+    # carries. A real one (this read 2026.10.0) stops changing anything, and
+    # the test fails, on the day the repository is bumped to it.
+    target = "2099.12.0"
 
-    result = _bump(work, python_shim, "2026.10.0")
+    result = _bump(work, python_shim, target)
 
     assert result.returncode == 0, result.stderr
     manifest = json.loads((work / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest == {**json.loads(_MANIFEST.read_text(encoding="utf-8")), "version": "2026.10.0"}
+    assert manifest == {**json.loads(_MANIFEST.read_text(encoding="utf-8")), "version": target}
     before = _PYPROJECT.read_text(encoding="utf-8").splitlines()
     after = (work / "pyproject.toml").read_text(encoding="utf-8").splitlines()
     changed = [b for a, b in zip(before, after, strict=True) if a != b]
-    assert changed == ['version = "2026.10.0"'], changed
-    assert tomllib.loads("\n".join(after))["project"]["version"] == "2026.10.0"
+    assert changed == [f'version = "{target}"'], changed
+    assert tomllib.loads("\n".join(after))["project"]["version"] == target
     assert result.stdout.count("+++ b/") == 2, "the step no longer shows the diff it made"
 
 
