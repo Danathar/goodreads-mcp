@@ -55,6 +55,7 @@ _MALFORMED = [
     "54493401-project%2Fhail",
     "54493401 project hail mary",
     "54493401_project",
+    "2147483648-a",  # one past GraphQL's 32-bit Int (bare, it is a valid ISBN-10)
     "2147483649",  # past GraphQL's 32-bit Int
     "9780593135205",  # an ISBN-13 with a bad check digit: too big for a book id
 ]
