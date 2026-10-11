@@ -1269,8 +1269,8 @@ def get_shelf(
     my_rating (int 1-5; None when unrated), shelves, date_added and date_read
     (YYYY-MM-DD; "" when absent, the raw text if it is not a date),
     year_published (int or None), cover (image URL), pages (int), my_review
-    (the reader's review text, may hold <br /> tags) and link. cover, pages and
-    my_review are None when the book has none.
+    (the reader's review text, may hold <br /> line breaks) and link. cover,
+    pages and my_review are None when the book has none.
 
     When you cite a book from a shelf, link it to its 'link' field.
     """
