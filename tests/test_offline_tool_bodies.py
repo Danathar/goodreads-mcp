@@ -318,6 +318,26 @@ def test_get_book_follows_apollo_references(monkeypatch):
     assert book["series"] == "Arc"
 
 
+def test_get_book_reads_the_book_s_own_stats_when_the_work_has_none(monkeypatch):
+    """The rating comes from the Work; a page whose Work carries no stats
+    falls back to the edition's, rather than reporting no rating at all."""
+    apollo = {
+        "Book:1": {
+            "legacyId": 1,
+            "title": "A Book",
+            "work": {"__ref": "Work:1"},
+            "stats": {"averageRating": 3.9, "ratingsCount": 7},
+        },
+        "Work:1": {"details": {"originalTitle": "A Book"}},
+    }
+    monkeypatch.setattr(server, "_fetch_book_apollo", lambda book_id: apollo)
+
+    book = server.get_book("1")
+
+    assert book["average_rating"] == 3.9
+    assert book["ratings_count"] == 7
+
+
 def test_get_book_returns_first_publication_language_and_identifiers(monkeypatch):
     """A reprint: the edition's date and the work's first publication differ.
     The Work and the language arrive as ``__ref`` pointers, as on a live page."""
