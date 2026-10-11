@@ -1484,6 +1484,39 @@ def test_compare_books_refuses_more_ids_than_the_fan_out_cap(monkeypatch):
     assert fetched == []
 
 
+def test_compare_books_fetches_a_repeated_id_once(monkeypatch):
+    """A repeated id cost one page fetch per occurrence (#360)."""
+    fetched: list[str] = []
+
+    def fake_get_book(bid: str) -> dict[str, Any]:
+        fetched.append(bid)
+        return _compared(bid, 4.0, None)
+
+    monkeypatch.setattr(server, "get_book", fake_get_book)
+
+    result = server.compare_books(["2", "1", "2", "1", "2"])
+
+    assert fetched == ["2", "1"]
+    assert result["compared"] == 2
+    assert [b["book_id"] for b in result["books"]] == ["2", "1"]
+
+
+def test_compare_books_caps_distinct_ids_not_occurrences(monkeypatch):
+    monkeypatch.setattr(server, "get_book", lambda bid: _compared(bid, 4.0, None))
+
+    ids = [str(i) for i in range(1, server._MAX_COMPARE + 1)]
+    result = server.compare_books(ids + ids)
+
+    assert result["compared"] == server._MAX_COMPARE
+
+
+def test_compare_books_docstring_allows_a_single_id():
+    """The docstring said 2-10 while one id was accepted (#360)."""
+    doc = server.compare_books.__doc__ or ""
+    assert "2-10" not in doc
+    assert "one id" in doc
+
+
 # ---------------------------------------------------------------- get_shelf
 
 

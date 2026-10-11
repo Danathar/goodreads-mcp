@@ -24,31 +24,25 @@ AGENTS.md and leave it out of here.
 
 ---
 
-## 2026-10-06 — agent audit exempts only merges from outside the PR (#308)
+## 2026-10-10 — six small tool-correctness fixes (#354, #357-#361)
 
-**Done:** `agent-audit.yml` now keeps each commit's parent hashes, not just the
-count. A commit is left out of `unsigned` only on a PR into `main`, with two
-or more parents, and with every parent after the first missing from the PR's
-own commit list. A merge of another unmerged branch therefore still needs a
-trailer, including one made before the branch had its own commit (main
-first, the other branch second; Codex review on the PR). Comparing a parent
-with `main` (the issue's suggestion) was not used: once a PR merges, every
-parent is on `main`. Four tests in `tests/test_agent_audit_workflow.py`;
-`docs/quality.md` test count moved to 1635; runbook sentence updated.
+**Done (PR open):** `get_book` skips null `bookGenres` / language-count
+entries; `search_books` raises a named `ValueError` for a non-list or non-JSON
+autocomplete body; `get_shelf` raises `LoginRequired` when page 1 is empty and
+`/user/show/{uid}` carries the private-profile marker (one extra request, empty
+page 1 only); `list_shelves` matches `&amp;shelf=`; `compare_books` dedupes ids
+and its docstring allows one id; `config.CONFIG_PATH` resolves lazily so a host
+with no home directory degrades to "no user id". 12 tests; quality.md count
+1727.
 
-**In flight:** the #308 pull request. It changes `.github/workflows/`, so a
-person merges it. The #279 pull request from 2026-10-04 is in the same state
-unless it has merged since.
+**In flight:** the PR above. Other agents have PRs on client backoff/GraphQL
+config (#355, #356, #370) and get_book/get_reviews/get_shelf (#367-#369); the
+quality.md count and this file will conflict between them.
 
 **Blocked on:** #247's A/B/C choice is still not recorded here.
 
 **Watch:**
-- Commit 019dace on #292 is a real missing `Signed-off-by`; #302 left it to
-  the maintainer.
-- Codex P2s left open: `auto-issues.yml`'s concurrency group keeps one pending
-  run, so a third red push while two are queued drops one comment (#283);
-  `risk-config.json` extraction gaps (#281); ledger and doc wording (#284, #285).
+- #358: the private feed's own body was never seen live; if it carries a
+  marker, `get_shelf` could read that instead of fetching the profile.
 - The `.mcpb` ships `.claude/` and `docs/` whole; `.mcpbignore` excludes
-  neither. Harmless public text today, but every new agent file ships too.
-- The 2026-10-01 scheduled `release.yml` run (36840547035) ended `failure`;
-  not investigated.
+  neither.

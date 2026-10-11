@@ -57,7 +57,9 @@ In rough order of robustness:
    `/user/show/{uid}` (the review-list page `/review/list/{uid}` went
    login-only in Sep 2026, #91). There's no structured equivalent for shelf
    *names*, which is why this one exists. Don't extend this approach to
-   anything that has a surface above it.
+   anything that has a surface above it. (`get_shelf` also fetches that page,
+   only when page 1 of the feed is empty, and only to look for the
+   private-profile marker; it parses nothing out of it, #358.)
 
 ## Two things that will bite you
 
