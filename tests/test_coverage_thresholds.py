@@ -32,10 +32,13 @@ way. `docs/quality.md` said 322 offline tests while the suite ran 418 (#85) —
 that the offline suite is not this project's weak spot. Unlike coverage, the
 count can be read without running the suite: `--collect-only` is a sub-second
 subprocess and is not circular, because collecting tests does not execute them.
-So it is pinned to reality rather than to a sibling copy. That does mean a PR
-adding tests must edit the row — one line, and the failure message below prints
-the exact line to write. The `CI, last 30 runs` row has no such source, so it
-gets the pinned-to-each-other treatment against `docs/metrics.md`'s fuller copy.
+So it is pinned to reality rather than to a sibling copy. The offline figure is
+a floor with a band, not an exact number (#377): an exact count made every PR
+that adds tests edit the same line, so concurrent PRs conflicted on it at every
+merge. The row now changes only when the suite leaves the band, and the failure
+message prints the exact line to write. The `CI, last 30 runs` row has no such
+source, so it gets the pinned-to-each-other treatment against
+`docs/metrics.md`'s fuller copy.
 """
 
 from __future__ import annotations
@@ -79,8 +82,17 @@ _SNAPSHOT_PROSE = {
     "docs/quality.md": "| coverage | {measured}% overall",
 }
 
-# The test-count row of the same table, pinned to what pytest actually collects.
-_COUNT_ROW = "| offline tests | {offline} passing, {live} skipped (live, opt-in) |"
+# The test-count row of the same table, pinned to what pytest actually collects:
+# the offline figure is a floor ("1,700+"), the live figure is exact.
+_COUNT_ROW = "| offline tests | {floor:,}+ passing, {live} skipped (live, opt-in) |"
+_COUNT_ROW_RE = re.compile(
+    r"\| offline tests \| (?P<floor>\d{1,3}(?:,\d{3})*)\+ passing, "
+    r"(?P<live>\d+) skipped \(live, opt-in\) \|"
+)
+# The offline count may run this far above the floor before the row is stale.
+_COUNT_BAND = 1.1
+# The floor the failure message suggests: the count rounded down to this.
+_COUNT_STEP = 100
 
 # `docs/metrics.md`'s CI row is the fuller copy: successes, non-successes, and
 # the window they were read over. `docs/quality.md` quotes the successes alone.
@@ -262,9 +274,14 @@ def test_the_note_records_that_the_snapshot_decays(thresholds: dict):
 def test_the_test_count_row_matches_what_pytest_collects(collected: dict[str, int]):
     """#85: the row read 322 while the suite ran 418, and no test looked at it.
 
-    This is the one figure in the table that a PR adding tests has to refresh.
-    That is the trade: the alternative is a number that drifts until a reader
-    draws the wrong conclusion from it, which is what happened.
+    #377: the row used to be the exact count, so every PR that added a test
+    edited this one line, and each merge put every other open test-adding PR
+    in conflict (38 of 108 commits on main in ten days changed it). It is now a
+    floor: the offline count must sit in `[floor, floor * 1.1)`. A PR edits the
+    row only when the suite outgrows the band (about 170 tests at 1,700) or
+    shrinks below the floor, and a reading more than 10% low still fails, so
+    #85 cannot recur. The live count stays exact; it moves only when a tool is
+    added, and that recipe edits the row anyway.
 
     Counts, not outcomes: the row's split into passing and skipped holds because
     `tests/e2e` is the only suite that skips itself (without `GOODREADS_LIVE`)
@@ -272,12 +289,21 @@ def test_the_test_count_row_matches_what_pytest_collects(collected: dict[str, in
     `tests/e2e` and the row's wording, not just its number, needs revisiting.
     """
     assert collected["live"], f"{_LIVE_DIR} collects nothing; the row's skipped half has no source"
-    row = _COUNT_ROW.format(offline=collected["offline"], live=collected["live"])
-    assert row in _prose("docs/quality.md"), (
-        f"docs/quality.md's test-count row is stale or reworded. pytest collects "
-        f"{collected['offline']} offline and {collected['live']} live tests, so the row should read:\n"
-        f"  {row}\n"
-        "If the wording changed on purpose, update _COUNT_ROW here to match."
+    offline, live = collected["offline"], collected["live"]
+    suggested = _COUNT_ROW.format(floor=offline // _COUNT_STEP * _COUNT_STEP, live=live)
+    match = _COUNT_ROW_RE.search(_prose("docs/quality.md"))
+    assert match, (
+        "docs/quality.md has no test-count row in the expected wording. It should read:\n"
+        f"  {suggested}\n"
+        "If the wording changed on purpose, update _COUNT_ROW and _COUNT_ROW_RE here to match."
+    )
+    floor = int(match["floor"].replace(",", ""))
+    in_band = floor <= offline < floor * _COUNT_BAND
+    assert in_band and int(match["live"]) == live, (
+        f"docs/quality.md's test-count row is stale. pytest collects {offline} offline and "
+        f"{live} live tests; the row says {floor:,}+ and {match['live']}, and the offline "
+        f"count must be at least the floor and under {_COUNT_BAND}x it. The row should read:\n"
+        f"  {suggested}"
     )
 
 
