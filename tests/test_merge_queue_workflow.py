@@ -25,7 +25,7 @@ import json
 from pathlib import Path
 import re
 
-from _workflow_steps import Workflow
+from _workflow_steps import Workflow, jobs
 
 _ROOT = Path(__file__).resolve().parent.parent
 _WORKFLOWS = _ROOT / ".github" / "workflows"
@@ -77,8 +77,11 @@ def test_its_steps_are_the_steps_ci_runs_on_a_pull_request():
 
 
 def test_the_jobs_runner_and_timeout_match_ci():
+    # ci.yml has a second job (test-newest-python) that the queue does not
+    # copy, so compare against the `test` job only.
     def header(path: Path) -> list[str]:
-        text = path.read_text(encoding="utf-8")
+        blocks, _ = jobs(path.read_text(encoding="utf-8"))
+        text = "\n".join(blocks["test"])
         return re.findall(r"^    (runs-on|timeout-minutes): (.+)$", text, re.M)
 
     assert header(_QUEUE) == header(_WORKFLOWS / "ci.yml")
