@@ -272,6 +272,45 @@ def parse_rating(value: Any) -> float | None:
     return rating if math.isfinite(rating) else None
 
 
+def parse_int(value: Any) -> int | None:
+    """A whole number from feed text, or None for blank or non-numeric text.
+
+    The shelf RSS feed sends counts and years as text. Zero stays 0; a caller
+    that reads zero as "none" (a rating) uses `parse_user_rating`.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    text = str(value).strip()
+    if text.isascii() and text.isdigit():
+        return int(text)
+    return None
+
+
+def parse_user_rating(value: Any) -> int | None:
+    """The reader's own 1-5 star rating, or None when unrated.
+
+    The shelf feed sends "0" or an empty element for a book the user has not
+    rated; both mean "no rating", not zero stars.
+    """
+    rating = parse_int(value)
+    return rating or None
+
+
+def parse_rfc822_date(value: str) -> str:
+    """An RFC 822 feed date as YYYY-MM-DD, the form get_reviews uses.
+
+    The calendar date is the one written in the feed, not converted to UTC.
+    An empty value stays "" and text that does not parse is kept as it came:
+    these surfaces are unofficial, so an odd date must not fail the shelf.
+    """
+    if not value:
+        return value
+    try:
+        return email.utils.parsedate_to_datetime(value).date().isoformat()
+    except (TypeError, ValueError, IndexError):
+        return value
+
+
 class CallCancelled(BaseException):
     """Raised in a cancelled tool call's thread instead of sending a request.
 
@@ -600,11 +639,14 @@ class GoodreadsClient:
                     "book_id": t("book_id"),
                     "isbn": t("isbn"),
                     "average_rating": parse_rating(t("average_rating")),
-                    "my_rating": t("user_rating"),
+                    "my_rating": parse_user_rating(t("user_rating")),
                     "shelves": t("user_shelves"),
-                    "date_added": t("user_date_added"),
-                    "date_read": t("user_read_at"),
-                    "year_published": t("book_published"),
+                    "date_added": parse_rfc822_date(t("user_date_added")),
+                    "date_read": parse_rfc822_date(t("user_read_at")),
+                    "year_published": parse_int(t("book_published")),
+                    "cover": t("book_large_image_url") or t("book_image_url") or None,
+                    "pages": parse_int(t("num_pages")),
+                    "my_review": t("user_review") or None,
                     "link": t("link"),
                 }
             )

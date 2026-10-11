@@ -267,6 +267,10 @@ SHELF_RSS = """<?xml version="1.0" encoding="UTF-8"?>
     <user_date_added>Mon, 01 Jan 2024 00:00:00 -0800</user_date_added>
     <user_read_at>Tue, 02 Jan 2024 00:00:00 +0000</user_read_at>
     <book_published>1965</book_published>
+    <book_image_url>https://img.example/dune_small.jpg</book_image_url>
+    <book_large_image_url><![CDATA[https://img.example/dune.jpg]]></book_large_image_url>
+    <num_pages>528</num_pages>
+    <user_review><![CDATA[Great.<br />Read twice.]]></user_review>
     <link>https://www.goodreads.com/review/show/1</link>
   </item>
   <item>
@@ -274,20 +278,50 @@ SHELF_RSS = """<?xml version="1.0" encoding="UTF-8"?>
     <author_name>William Gibson</author_name>
     <book_id>22328</book_id>
   </item>
+  <item>
+    <title>Unrated</title>
+    <book_id>1</book_id>
+    <user_rating>0</user_rating>
+    <user_date_added>sometime last week</user_date_added>
+    <user_read_at></user_read_at>
+    <book_published></book_published>
+    <book_image_url>https://img.example/only_small.jpg</book_image_url>
+    <num_pages></num_pages>
+    <user_review></user_review>
+  </item>
 </channel></rss>"""
 
 
 def test_parse_shelf_rss_full_item():
     _, items = GoodreadsClient.parse_shelf_rss(SHELF_RSS)
-    assert len(items) == 2
+    assert len(items) == 3
     first = items[0]
     assert first["title"] == "Dune"
     assert first["author"] == "Frank Herbert"
     assert first["book_id"] == "234225"
-    assert first["my_rating"] == "5"
+    assert first["my_rating"] == 5
     assert first["average_rating"] == 4.27
     assert first["shelves"] == "sci-fi, favorites"
-    assert first["year_published"] == "1965"
+    assert first["year_published"] == 1965
+    assert first["date_added"] == "2024-01-01"
+    assert first["date_read"] == "2024-01-02"
+    assert first["cover"] == "https://img.example/dune.jpg"
+    assert first["pages"] == 528
+    assert first["my_review"] == "Great.<br />Read twice."
+
+
+def test_parse_shelf_rss_unrated_and_blank_values_are_none():
+    _, items = GoodreadsClient.parse_shelf_rss(SHELF_RSS)
+    unrated = items[2]
+    assert unrated["my_rating"] is None  # "0" means unrated, not zero stars
+    assert unrated["year_published"] is None
+    assert unrated["pages"] is None
+    assert unrated["my_review"] is None
+    assert unrated["date_read"] == ""
+    # An unparseable date is kept as the feed sent it.
+    assert unrated["date_added"] == "sometime last week"
+    # Falls back to the smaller cover when there is no large one.
+    assert unrated["cover"] == "https://img.example/only_small.jpg"
 
 
 def test_parse_shelf_rss_missing_fields_default_empty():
@@ -295,7 +329,12 @@ def test_parse_shelf_rss_missing_fields_default_empty():
     second = items[1]
     assert second["title"] == "Neuromancer"
     assert second["isbn"] == ""
-    assert second["my_rating"] == ""
+    assert second["my_rating"] is None
+    assert second["year_published"] is None
+    assert second["cover"] is None
+    assert second["pages"] is None
+    assert second["my_review"] is None
+    assert second["date_added"] == ""
     assert second["average_rating"] is None
 
 
