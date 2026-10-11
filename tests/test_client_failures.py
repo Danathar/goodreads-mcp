@@ -202,6 +202,50 @@ def test_request_gives_up_at_once_when_retry_after_is_above_the_cap(
     assert attempts == [429] and slept == []
 
 
+def test_request_still_retries_a_retry_after_of_exactly_the_cap(monkeypatch):
+    # The cap is inclusive: 30 s is waited, 31 s is refused. The test above
+    # derives its value from the constant, so it cannot see the cap move.
+    client, attempts, slept = _retry_after_attempts(monkeypatch, 429, "30")
+
+    assert client.get("/anything").status_code == 200
+    assert attempts == [429, 200]
+    assert len(slept) == 1 and 30.0 <= slept[0] < 30.5
+
+
+def test_request_refuses_a_retry_after_one_second_over_30(monkeypatch):
+    client, attempts, slept = _retry_after_attempts(monkeypatch, 429, "31")
+
+    with pytest.raises(httpx.HTTPStatusError):
+        client.get("/anything")
+
+    assert attempts == [429] and slept == []
+
+
+def _offset_http_date(seconds_from_now: float, offset: str) -> str:
+    """An HTTP-date written in a zone other than GMT, as some servers send it.
+
+    "-0000" is RFC 5322's "UTC, zone unknown" and parses to a naive datetime;
+    "+0200" parses to an aware one two hours ahead of UTC.
+    """
+    when = datetime.now(timezone.utc) + timedelta(seconds=seconds_from_now)
+    if offset == "-0000":
+        return email.utils.format_datetime(when.replace(tzinfo=None))
+    return email.utils.format_datetime(when.astimezone(timezone(timedelta(hours=2))))
+
+
+@pytest.mark.parametrize("offset", ["-0000", "+0200"])
+def test_request_honours_a_retry_after_http_date_in_any_zone(monkeypatch, offset):
+    retry_after = _offset_http_date(20, offset)
+    assert retry_after.endswith(offset)
+    client, attempts, slept = _retry_after_attempts(monkeypatch, 429, retry_after)
+
+    assert client.get("/anything").status_code == 200
+    assert attempts == [429, 200]
+    # A naive date subtracted from an aware "now" raises TypeError; an offset
+    # date read as UTC waits two hours too long and is refused by the cap.
+    assert len(slept) == 1 and 18.0 <= slept[0] < 20.5
+
+
 @pytest.mark.parametrize(
     "retry_after",
     ["soon", "Wed, 21 Oct 2015 07:28:00 GMT"],
@@ -488,6 +532,39 @@ def test_graphql_config_does_not_try_another_page_when_rate_limited(monkeypatch)
         _client(handler, max_retries=0).graphql_config()
 
     assert seen == [CONFIG_DISCOVERY_PATH]
+
+
+def test_graphql_config_does_not_try_another_page_on_a_503(monkeypatch):
+    # A 503 is the other status _request backs off on; it is load, not a move.
+    monkeypatch.setattr("goodreads_mcp.client.time.sleep", lambda s: None)
+    seen: list[str] = []
+    handler = _fallback_site(httpx.Response(503, text="unavailable"), seen)
+
+    with pytest.raises(httpx.HTTPStatusError) as excinfo:
+        _client(handler, max_retries=0).graphql_config()
+
+    assert excinfo.value.response.status_code == 503
+    assert seen == [CONFIG_DISCOVERY_PATH]
+
+
+def test_graphql_config_names_every_page_missing_its_key():
+    """Both pages carry a bundle but no key: the primary error lists each."""
+    bundle = f'"endpoint":"{ENDPOINT_DEV}","shortName":"Dev","endpoint":"{ENDPOINT_PROD}"'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/_next/"):
+            return httpx.Response(200, text=bundle)
+        return httpx.Response(200, text=_discovery_page(None))
+
+    with pytest.raises(ValueError) as excinfo:
+        _client(handler).graphql_config()
+
+    assert str(excinfo.value).startswith(
+        "GraphQL config discovery failed: No page-provided AppSync key on any "
+        f"discovery page ({CONFIG_DISCOVERY_PATH}: no AppSync key in __NEXT_DATA__; "
+        f"{CONFIG_DISCOVERY_FALLBACK_PATH}: no AppSync key in __NEXT_DATA__). "
+        "Legacy pair fallback: "
+    )
 
 
 def test_graphql_config_names_every_discovery_page_when_all_fail():

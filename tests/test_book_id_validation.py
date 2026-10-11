@@ -10,12 +10,14 @@ plausibly pass; a refused one must fail before any request is sent.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import httpx
 import pytest
 
 from goodreads_mcp import server
+from goodreads_mcp.client import CONFIG_DISCOVERY_FALLBACK_PATH
 
 # (book_id as passed, the path segment get_book requests, the legacy id)
 _ACCEPTED = [
@@ -95,6 +97,17 @@ def requests(monkeypatch) -> list[str]:
     monkeypatch.setattr(server.gr, "get", get)
     monkeypatch.setattr(server.gr, "graphql", graphql)
     return sent
+
+
+def test_the_config_fallback_page_is_the_xml_page_get_book_reads(requests):
+    """#370 chose the `.xml` book page as the second discovery source because
+    it sits outside the WAF, which holds only while it is get_book's route."""
+    match = re.fullmatch(r"/book/show/(\d+)\.xml", CONFIG_DISCOVERY_FALLBACK_PATH)
+    assert match, CONFIG_DISCOVERY_FALLBACK_PATH
+
+    server.get_book(match.group(1))
+
+    assert requests == [CONFIG_DISCOVERY_FALLBACK_PATH]
 
 
 # ------------------------------------------------------------------ accepted

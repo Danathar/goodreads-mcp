@@ -11,8 +11,10 @@ raise, fall back to "no user id configured", and say why on stderr.
 from __future__ import annotations
 
 import os
+import re
 import stat
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -49,6 +51,48 @@ def test_no_home_directory_is_unset_with_a_warning(monkeypatch, capsys):
 
     assert config.load_user_id() is None
     assert "Could not determine home directory" in capsys.readouterr().err
+
+
+def test_no_home_directory_warning_names_the_documented_file(monkeypatch, capsys):
+    # With no home there is no resolved path to print; the warning names the
+    # file the README tells users to create instead.
+    monkeypatch.setattr(config, "CONFIG_PATH", None)
+    monkeypatch.delenv("GOODREADS_USER_ID", raising=False)
+
+    def no_home() -> None:
+        raise RuntimeError("Could not determine home directory.")
+
+    monkeypatch.setattr(config.Path, "home", staticmethod(no_home))
+
+    config.load_user_id()
+    assert capsys.readouterr().err.startswith(
+        "goodreads-mcp: ignoring ~/.config/goodreads-mcp/config.json: "
+    )
+
+
+def test_the_file_is_read_from_the_path_the_readme_documents(
+    tmp_path, monkeypatch, capsys
+):
+    """Every other test sets CONFIG_PATH itself, so none of them reach the
+    first-use resolution under the home directory (#361)."""
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
+    documented = "~/.config/goodreads-mcp/config.json"
+    # The README's own setup step, body and all.
+    heredoc = re.search(
+        rf"cat > {re.escape(documented)} << 'EOF'\n(.*?)\nEOF\n", readme, re.DOTALL
+    )
+    assert heredoc, "README no longer shows the config.json setup step"
+
+    monkeypatch.setattr(config, "CONFIG_PATH", None)
+    monkeypatch.delenv("GOODREADS_USER_ID", raising=False)
+    monkeypatch.setattr(config.Path, "home", staticmethod(lambda: tmp_path))
+    target = tmp_path / documented.removeprefix("~/")
+    target.parent.mkdir(parents=True)
+    target.write_text(heredoc.group(1))
+
+    assert config.load_user_id() == "12345678"
+    assert config.CONFIG_PATH == target
+    assert capsys.readouterr().err == ""
 
 
 def test_no_home_directory_still_honours_the_env_var(monkeypatch):
