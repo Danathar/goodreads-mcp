@@ -30,7 +30,7 @@ what's known-weak, and where the real risk sits.
 
 | | |
 |---|---|
-| offline tests | 1768 passing, 27 skipped (live, opt-in) |
+| offline tests | 1,700+ passing, 27 skipped (live, opt-in) |
 | coverage | 100% overall — `config.py` 100%, `client.py` 100%, `server.py` 100% |
 | CI, last 30 runs | 28 success |
 
@@ -43,7 +43,8 @@ gh run list --workflow ci.yml --limit 30 --json conclusion \
 ```
 
 `tests/test_coverage_thresholds.py` reads all three rows: the test count is
-pinned to what pytest collects (so a PR that adds tests updates this row), the
+pinned to what pytest collects (the offline figure is a floor, and the row needs
+an edit only once the suite grows 10% past it), the
 coverage figure to [`.coverage-thresholds.json`](../.coverage-thresholds.json),
 and the CI row to the fuller copy in [`metrics.md`](metrics.md#ci).
 

@@ -28,8 +28,9 @@ Tests: add offline tests with fixtures to `tests/`, and a live test to
 `tests/e2e/test_smoke_live.py`. Add the tool to the producer or non-producer
 list in `tests/test_book_id_chaining.py`, which feeds every emitted `book_id`
 back into every tool that takes one; a tool that takes a `book_id` also moves
-that file's pinned consumer list. CI enforces 55% coverage. New tests change the
-collected count, so update the offline-tests row in `docs/quality.md` to match.
+that file's pinned consumer list. CI enforces 55% coverage. A new live test changes
+the skipped count in the offline-tests row of `docs/quality.md`; the offline
+figure there is a floor, so it needs an edit only if the count test says so.
 
 Finally, update every copy of the tool registry: add the tool to the table in
 `README.md` and the docstring list at the top of `server.py`, bump the
