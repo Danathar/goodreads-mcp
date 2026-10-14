@@ -165,6 +165,19 @@ def _clean_text(s: str | None) -> str:
     return re.sub(r"\s+", " ", html_mod.unescape(s)).strip()
 
 
+def _description_text(s: str | None) -> str:
+    """A blurb's HTML as plain text, as search_books returns it.
+
+    A line break or paragraph tag becomes a space, so "spreading.<br/>And"
+    does not run together as "spreading.And". Other tags are dropped without
+    one, so "<i>Into the Wild</i>," stays "Into the Wild,". Entities are
+    unescaped and whitespace collapsed.
+    """
+    s = re.sub(r"<br\s*/?>|</?p(?:\s[^>]*)?>", " ", s or "", flags=re.IGNORECASE)
+    s = re.sub(r"<[^>]+>", "", s)
+    return re.sub(r"\s+", " ", html_mod.unescape(s)).strip()
+
+
 def _ms_to_iso(ms: Any) -> str | None:
     """Epoch-milliseconds -> YYYY-MM-DD (UTC), or None.
 
@@ -677,8 +690,8 @@ def search_books(query: str, max_results: int = 10) -> list[dict[str, Any]]:
                 "cover": b.get("imageUrl"),
                 # Null is explicit: BASE alone would be a link to the home page.
                 "url": BASE + book_url if book_url else None,
-                "description": html_mod.unescape(
-                    re.sub(r"<[^>]+>", "", (b.get("description") or {}).get("html", ""))
+                "description": _description_text(
+                    (b.get("description") or {}).get("html")
                 )[:400],
             }
         )
