@@ -363,7 +363,7 @@ _DENIED = [
     ("env -S'LD_PRELOAD=/tmp/x.so pytest -q'", "runs another command"),
     ("timeout 60 GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD", "runs another command"),
     ("command GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD", "runs another command"),
-    ("exec pytest -q", "runs another command"),
+    ("exec pytest -q", "`exec` runs another command"),
     # `noglob` is a wrapper the permission matcher steps over, so these match
     # `Bash(pytest *)` and `Bash(git diff *)`. A bare `noglob` is zsh's
     # modifier, which runs the command after it, so that command is checked in
@@ -386,7 +386,7 @@ _DENIED = [
     # spelled as any path -- an agent-made file included -- is stepped over and
     # the allow row matches the words after it, while the file is what runs.
     ("./shim/nohup git diff HEAD", "runs another command"),
-    ("/tmp/timeout 5 pytest -q", "runs another command"),
+    ("/tmp/timeout 5 pytest -q", "what `/tmp/timeout` would run"),
     # With a `\`, the matcher's cut and bash disagree, and the lexer here has
     # already taken an unquoted one out: `/usr/bin\timeout` is the file
     # `/usr/bintimeout` to bash (not found, exit 127, but `>out` is applied
@@ -394,7 +394,7 @@ _DENIED = [
     ("'./shim\\nohup' git diff HEAD", "backslash"),
     ("'./shim\\nohup' git diff --no-index /dev/null ./.env", "backslash"),
     ("'./shim\\noglob' pytest -p evil", "backslash"),
-    ("/usr/bin\\timeout 5 pytest -q >out", "backslash"),
+    ("/usr/bin\\timeout 5 pytest -q >out", "`/usr/bin\\timeout` is a wrapper spelled"),
     ("/usr/bin\\nohup git diff HEAD >goodreads_mcp/server.py", "backslash"),
     ("x\\nohup pytest -q >out", "backslash"),
     ("x\\noglob pytest -q >out", "backslash"),
@@ -490,6 +490,36 @@ _DENIED = [
     ("git diff HEAD *", "starts with a glob"),
     ("git log --oneline [-]*", "starts with a glob"),
     ("git log --grep ? HEAD", "starts with a glob"),
+    # --- rows a mutation pass over the guard found missing --------------------
+    # Each of these is denied by the guard as it stands, and was still denied
+    # with a one-token change to the guard that let it through, so no row held
+    # it. A file-descriptor duplication is dropped only when its target is a
+    # descriptor: `>&out` is bash's `&>out` and writes `out`, and `>1` writes a
+    # file named 1. Dropping one takes its own words and nothing else -- the
+    # `2` of `2>&1` only when it is a number, never the path before it or the
+    # word after it.
+    ("pytest -q >1", "shell redirection"),
+    ("pytest -q >&out", "shell redirection"),
+    ("pytest -q >", "shell redirection"),
+    ("pytest /tmp/proof/notatest.py >&2", "outside tests/"),
+    ("pytest -q 2>&1 /tmp/proof/notatest.py", "outside tests/"),
+    # A path is still a path after `--`, after `-p no:...`, and after the
+    # value of an option that takes the next word.
+    ("pytest -- /tmp/proof/notatest.py", "outside tests/"),
+    ("pytest -p no:cacheprovider /tmp/proof/notatest.py", "outside tests/"),
+    ("pytest -k expr /tmp/proof/notatest.py", "outside tests/"),
+    ("git log --grep foo /etc/hostname", "outside the repository"),
+    ("pytest -", "outside tests/"),  # a lone dash is a path to pytest, not an option
+    # `-W` checks a value given as the next word, not only an attached one.
+    ("pytest -W ignore::this.W tests", "warning category"),
+    # The backslash-wrapper scan reads quotes and operators the way bash does:
+    # a `\` inside single quotes is literal and ends nothing, one inside
+    # double quotes escapes the quote after it, and a redirection after `;`
+    # starts the next command rather than joining the `;`.
+    ("echo 'x\\'; /usr/bin\\timeout 5 pytest -q >out", "backslash"),
+    ('echo "a\\"b"; /usr/bin\\timeout 5 pytest -q', "backslash"),
+    ("true ; >out /usr/bin\\timeout 5 pytest -q", "backslash"),
+    ("true; >>out /usr/bin\\timeout 5 pytest -q", "backslash"),
 ]
 
 # Ordinary invocations the guard must not touch. The first line is the exact
@@ -614,6 +644,29 @@ _PERMITTED = [
     "echo $HOME",
     "cat <<'EOF'\nit's\nEOF",  # unparseable, but no guarded verb in it
     "",
+    # --- the other direction of the mutation pass -----------------------------
+    # The word after an option that takes one is its value, not a path:
+    # `--keyword` is `-k` spelled long, and a bare `--cov` last on the line
+    # still takes the package name after it.
+    "pytest --keyword parse tests/test_parsers.py",
+    "pytest --timeout 30 tests",
+    "pytest --cov goodreads_mcp",
+    "pytest -q -W ignore:some_message",  # two fields, so no category to import
+    "pytest -q -- tests/test_parsers.py",
+    ">&2 git diff HEAD",  # a duplication in front of the verb, nothing before it
+    # Git verbs off the allow list prompt on their own; the guard has no
+    # opinion on them, and a bare `git` names no verb at all.
+    "git commit -m msg",
+    "git push origin main",
+    "git",
+    "python3 -m http.server 8000",  # `python -m` names a module other than pytest
+    # Only `set -a` (or `-o allexport`) makes a bare assignment an export:
+    # not `-o pipefail`, not `-e`, not an `a` in another command's options,
+    # and under `set -a` a command that assigns nothing exports nothing.
+    "set -o pipefail; X=1; git diff HEAD",
+    "set -e; X=1; git diff HEAD",
+    "ls -la; X=1; git diff HEAD",
+    "set -a; echo hi; git diff HEAD",
 ]
 
 
@@ -690,6 +743,22 @@ def test_the_script_fails_closed_on_input_it_cannot_read():
 
     unrelated = _run_guard("")
     assert unrelated.returncode == 0 and unrelated.stdout == ""
+
+    # Unreadable input with no guarded verb in it is not this hook's business
+    # either: failing closed there would refuse every Bash call the moment the
+    # payload format changed.
+    unrelated = _run_guard("not json, and no verb the guard knows")
+    assert unrelated.returncode == 0 and unrelated.stdout == "", unrelated
+
+
+def test_a_path_the_guard_cannot_resolve_counts_as_outside(guard):
+    """`_is_outside_repo` fails closed when the path cannot be resolved.
+
+    bash cannot carry a NUL byte, but the hook reads its command from JSON,
+    which can, and `Path.resolve` raises on one. The answer must be "outside".
+    """
+    reason = guard.decide("git diff HEAD a\0b", _ROOT)
+    assert reason is not None and "outside the repository" in reason
 
 
 # ------------------------------------------------ what the docs claim (#60)
