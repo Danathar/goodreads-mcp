@@ -256,6 +256,36 @@ def test_search_books_caps_the_description_at_400_characters(monkeypatch):
     assert result["description"] == "x" * 400
 
 
+def test_search_books_keeps_a_space_where_the_description_breaks_a_line(
+    monkeypatch,
+):
+    """Goodreads separates blurb lines with <br/>; dropping the tag without a
+    space ran them together ("spreading.And the Capitol")."""
+    blurb = (
+        "<b>Sparks are igniting.<br/>Flames are spreading.<br/>"
+        "And the Capitol wants revenge.</b><br/> <br/>Against all odds, "
+        "<i>Katniss</i>, has won.<p>Next</p>paragraph."
+    )
+    payload = [{"bookId": "6148028", "description": {"html": blurb}}]
+    monkeypatch.setattr(server.gr, "get", _Get(_Response(payload)))
+
+    (result,) = server.search_books("catching fire")
+
+    assert result["description"] == (
+        "Sparks are igniting. Flames are spreading. And the Capitol wants "
+        "revenge. Against all odds, Katniss, has won. Next paragraph."
+    )
+
+
+def test_search_books_reads_a_null_description_html_as_empty(monkeypatch):
+    payload = [{"bookId": "7", "description": {"html": None}}]
+    monkeypatch.setattr(server.gr, "get", _Get(_Response(payload)))
+
+    (result,) = server.search_books("anything")
+
+    assert result["description"] == ""
+
+
 # --------------------------------------------------- get_book page fetching
 
 
