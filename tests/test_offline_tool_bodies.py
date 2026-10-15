@@ -991,6 +991,7 @@ def test_get_editions_flattens_the_edition_details(monkeypatch):
             "format": "Hardcover",
             "publisher": "A Press",
             "publication_time": 1600396415413,
+            "publication_date": "2020-09-18",
             "isbn13": "9780000000001",
             "pages": 320,
             "language": "English",
@@ -1016,6 +1017,7 @@ def test_get_editions_tolerates_an_edition_without_details(monkeypatch):
     assert edition["format"] is None
     assert edition["language"] is None
     assert edition["isbn13"] is None
+    assert edition["publication_date"] is None
 
 
 # ---------------------------------------------------------------- book_lists

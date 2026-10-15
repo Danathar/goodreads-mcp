@@ -1072,6 +1072,7 @@ def get_editions(book_id: str, limit: int = 20) -> dict[str, Any]:
                 "format": details.get("format"),
                 "publisher": details.get("publisher"),
                 "publication_time": details.get("publicationTime"),
+                "publication_date": _ms_to_iso(details.get("publicationTime")),
                 "isbn13": details.get("isbn13"),
                 "pages": details.get("numPages"),
                 "language": (details.get("language") or {}).get("name"),

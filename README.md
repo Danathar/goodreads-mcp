@@ -26,7 +26,7 @@ A **read-only** MCP server for Goodreads — built without the Goodreads API, be
 | `similar_books` | GraphQL — paginated "readers also enjoyed" recommendations; `limit` up to 100 |
 | `author_books` | GraphQL — paginated author bibliography, ranked by popularity, from any of their books, plus `author_url`; `limit` up to 100 |
 | `series_books` | GraphQL — paginated series books with reading-order placement; `series_index` (zero-based, in `get_book`'s `series_memberships` order) picks the series; `limit` up to 100 |
-| `get_editions` | GraphQL — paginated editions (format, ISBN, publisher, date); `limit` up to 100 |
+| `get_editions` | GraphQL — paginated editions (format, ISBN, publisher, publication date as `publication_date` YYYY-MM-DD plus raw `publication_time` in epoch ms); `limit` up to 100 |
 | `book_lists` | GraphQL — paginated Listopia lists a book appears on (title, votes, size); `limit` up to 100 |
 | `popular_books` | GraphQL — most popular books by release `year`, or a single `month` (1–12), ranked; `limit` capped at 50 |
 | `compare_books` | `get_book` for each id (`__NEXT_DATA__` via `.xml`) — ranks 1–10 distinct books by rating with positive/critical share; a repeated id is fetched once; more than 10 ids is refused; a book that fails comes back as an `error` entry |
@@ -80,7 +80,7 @@ cat > ~/.config/goodreads-mcp/config.json << 'EOF'
 EOF
 ```
 
-Env var `GOODREADS_USER_ID` overrides the file. A config file that can't be read, isn't valid JSON, isn't a JSON object, or has a non-string `user_id` is ignored with a warning on stderr; the server still starts.
+Env var `GOODREADS_USER_ID` overrides the file. A config file that can't be read, isn't valid JSON, isn't a JSON object, or has a `user_id` that is neither a string nor a whole number is ignored with a warning on stderr (a bare number such as `12345678` is accepted and used as its string form; booleans, floats, lists and objects are ignored); the server still starts.
 
 ## Claude Desktop config
 
