@@ -47,6 +47,32 @@ def test_clean_text_turns_block_tags_into_a_space():
     )
 
 
+# Every tag _clean_text treats as a line or block break, as #391/#392 lists
+# them. The tests above cover br, p and blockquote; without these rows any of
+# the others could leave the list and "<li>One</li><li>Two</li>" would read
+# "OneTwo" with no test going red.
+_BLOCK_TAGS = [
+    "br", "p", "div", "blockquote", "li", "ul", "ol",
+    "h1", "h2", "h3", "h4", "h5", "h6", "hr", "tr", "td", "th", "table",
+]
+
+
+@pytest.mark.parametrize("tag", _BLOCK_TAGS)
+def test_clean_text_turns_each_block_tag_into_a_space(tag):
+    assert _clean_text(f"one<{tag}>two</{tag}>three") == "one two three"
+    assert _clean_text(f"one<{tag.upper()} class='x'>two<{tag}/>three") == "one two three"
+
+
+def test_clean_text_turns_a_list_into_separate_words():
+    html = "Includes:<ul><li>Dune</li><li>Dune Messiah</li></ul>and more"
+    assert _clean_text(html) == "Includes: Dune Dune Messiah and more"
+
+
+def test_clean_text_turns_a_table_into_separate_words():
+    html = "<table><tr><th>Book</th><th>Year</th></tr><tr><td>Dune</td><td>1965</td></tr></table>"
+    assert _clean_text(html) == "Book Year Dune 1965"
+
+
 def test_clean_text_handles_none_and_empty():
     assert _clean_text(None) == ""
     assert _clean_text("") == ""
