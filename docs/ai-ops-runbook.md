@@ -323,7 +323,9 @@ run Dependabot version updates on a fork until they are enabled in the fork
 itself: Insights, Dependency graph, Dependabot in the web UI (repository admin;
 the API does not expose it). Committing `dependabot.yml` is not enough. That
 page also shows the log of the last run, which says why a run opened nothing.
-Until the switch is on, bump the pinned actions by hand (#365).
+Until the switch is on, bump the pinned actions by hand. The switch was turned
+on for this fork, and the first grouped run opened #389 on 2026-10-15, which
+merged (#365).
 
 ```bash
 gh pr list --author app/dependabot --state open
