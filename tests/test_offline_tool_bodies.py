@@ -286,6 +286,45 @@ def test_search_books_reads_a_null_description_html_as_empty(monkeypatch):
     assert result["description"] == ""
 
 
+def test_get_book_get_reviews_and_search_books_clean_the_same_html_alike(
+    monkeypatch,
+):
+    """One HTML-to-text rule: an <i> title followed by punctuation, a split
+    word and a blockquote read the same from all three tools."""
+    html = (
+        "Against all odds. In <i>Catching Fire</i>, the second book is "
+        "<i>un</i>conditionally good.<br/>Next<blockquote>quote</blockquote>after."
+    )
+    expected = (
+        "Against all odds. In Catching Fire, the second book is "
+        "unconditionally good. Next quote after."
+    )
+
+    monkeypatch.setattr(server.gr, "get", _Get(_Response([
+        {"bookId": "1", "description": {"html": html}}
+    ])))
+    (found,) = server.search_books("catching fire")
+
+    apollo = {"Book:1": {"legacyId": 1, "title": "A Book", "description": html}}
+    monkeypatch.setattr(server, "_fetch_book_apollo", lambda book_id: apollo)
+    book = server.get_book("1")
+
+    edge = _review_edge("ann", 5)
+    edge["node"]["text"] = html
+    graphql = _Graphql(
+        {
+            server._Q_BOOK_BY_LEGACY: [_reviews_book_response()],
+            server._Q_REVIEWS: [{"getReviews": _page([edge])}],
+        }
+    )
+    monkeypatch.setattr(server.gr, "graphql", graphql)
+    review = server.get_reviews("1", limit=10)["reviews"][0]
+
+    assert found["description"] == expected
+    assert book["description"] == expected
+    assert review["text"] == expected
+
+
 # --------------------------------------------------- get_book page fetching
 
 

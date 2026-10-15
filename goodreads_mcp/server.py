@@ -159,21 +159,23 @@ def _user_id(user_id: str | None) -> str:
     return uid
 
 
+# Tags that end a line or a block. Each becomes a space so "spreading.<br/>And"
+# does not run together; every other tag (<i>, <b>, <a>, ...) is dropped without
+# one, so "<i>Into the Wild</i>," stays "Into the Wild," and "<i>un</i>conditionally"
+# stays one word.
+_BLOCK_TAG_RE = re.compile(
+    r"</?(?:br|p|div|blockquote|li|ul|ol|h[1-6]|hr|tr|td|th|table)(?:[\s/][^>]*)?>",
+    re.IGNORECASE,
+)
+
+
 def _clean_text(s: str | None) -> str:
-    """Strip HTML tags, unescape entities, and collapse whitespace."""
-    s = re.sub(r"<[^>]+>", " ", s or "")
-    return re.sub(r"\s+", " ", html_mod.unescape(s)).strip()
+    """Goodreads HTML as plain text, the one rule every tool uses.
 
-
-def _description_text(s: str | None) -> str:
-    """A blurb's HTML as plain text, as search_books returns it.
-
-    A line break or paragraph tag becomes a space, so "spreading.<br/>And"
-    does not run together as "spreading.And". Other tags are dropped without
-    one, so "<i>Into the Wild</i>," stays "Into the Wild,". Entities are
-    unescaped and whitespace collapsed.
+    Block and line-break tags become a space; other tags are dropped without
+    one. Entities are unescaped and whitespace collapsed.
     """
-    s = re.sub(r"<br\s*/?>|</?p(?:\s[^>]*)?>", " ", s or "", flags=re.IGNORECASE)
+    s = _BLOCK_TAG_RE.sub(" ", s or "")
     s = re.sub(r"<[^>]+>", "", s)
     return re.sub(r"\s+", " ", html_mod.unescape(s)).strip()
 
@@ -690,7 +692,7 @@ def search_books(query: str, max_results: int = 10) -> list[dict[str, Any]]:
                 "cover": b.get("imageUrl"),
                 # Null is explicit: BASE alone would be a link to the home page.
                 "url": BASE + book_url if book_url else None,
-                "description": _description_text(
+                "description": _clean_text(
                     (b.get("description") or {}).get("html")
                 )[:400],
             }

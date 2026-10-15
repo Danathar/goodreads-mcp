@@ -32,6 +32,21 @@ def test_clean_text_unescapes_entities():
     assert _clean_text("Tom &amp; Jerry &lt;3") == "Tom & Jerry <3"
 
 
+def test_clean_text_drops_inline_tags_without_a_space():
+    assert _clean_text("In <i>Catching Fire</i>, the") == "In Catching Fire, the"
+
+
+def test_clean_text_keeps_a_word_with_an_inline_tag_in_it_whole():
+    assert _clean_text("<i>un</i>conditionally") == "unconditionally"
+
+
+def test_clean_text_turns_block_tags_into_a_space():
+    assert _clean_text("<blockquote>quote</blockquote>after") == "quote after"
+    assert _clean_text("one<BR/>two<br>three<P class='x'>four</p>five") == (
+        "one two three four five"
+    )
+
+
 def test_clean_text_handles_none_and_empty():
     assert _clean_text(None) == ""
     assert _clean_text("") == ""
