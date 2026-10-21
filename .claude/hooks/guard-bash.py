@@ -213,6 +213,40 @@ _WRAPPERS = frozenset(
     }
 )
 
+# Programs that run a command of their own choosing which Claude Code's
+# permission matcher does not step over: `flock /tmp/l git diff
+# --no-index /dev/null .env` matches no allow row, so in the default mode
+# Claude Code asks first. That prompt is not the boundary -- bypass and auto
+# modes prompt for nothing, and the fleet's rule is that a gate refuses the
+# protected action behind any wrapper, prompted or not
+# (Danathar/atomic-image-builder#772). The guard read the wrapper as the
+# command's name and returned, so the git command behind it was never checked.
+#
+# Their options are where the reach is, so they are not modelled: `chrt -o +0`
+# and `flock -n /tmp/l` take values that look like a command, `unshare --wd`
+# and `find -execdir` move the command out of this checkout, `find -exec ...
+# {}` hands it operands that are not in this string, and `watch` and
+# `flock -c` hand it to `sh -c` as one string. A guarded verb anywhere behind
+# one of these is refused whatever the wrapper's own arguments are; one that
+# runs nothing guarded (`flock /tmp/l make`, `watch -n 2 ls`) is left alone.
+_OPAQUE_WRAPPERS = frozenset(
+    {
+        "flock",
+        "watch",
+        "taskset",
+        "chrt",
+        "unshare",
+        "ionice",
+        "find",
+    }
+)
+
+# A guarded word behind an opaque wrapper, as a word of its own or inside a
+# command string (`watch 'git diff ...'`). Narrower than `_GUARDED_WORD_RE` in
+# one place: a `.` in front does not count, so `find . -path ./.git -prune`,
+# which runs nothing, is not read as naming git.
+_OPAQUE_GUARDED_RE = re.compile(r"(?<![\w.])(pytest|git)\b")
+
 # Environment assignments in front of the verb. The shell applies them to the
 # process the allow list started, so they are part of the command, not a detail
 # of it -- and several reach further than anything the option tables refuse:
@@ -893,6 +927,22 @@ def _check_command(words: list[str], cwd: Path) -> None:
             "git diff HEAD~1 HEAD` puts the assignment where the guard reads "
             "the verb, and `env -S '...'` hides the whole invocation inside "
             "one word. Run the command as a command of its own."
+        )
+
+    # A wrapper the matcher does not step over, in front of something it
+    # guards: refused whatever the wrapper's own arguments are (#395).
+    hidden = _OPAQUE_GUARDED_RE.search(" ".join(words[1:]))
+    if name in _OPAQUE_WRAPPERS and hidden:
+        raise Denied(
+            f"`{words[0]}` runs `{hidden.group(1)}` where this guard cannot "
+            "check it. flock, watch, taskset, chrt, "
+            "unshare, ionice and find match no allow rule, so Claude Code asks "
+            "first in the default mode, but bypass and auto modes ask for "
+            "nothing; and their own options can move the command out of this "
+            "checkout (`unshare --wd`, `find -execdir`), hand it operands that "
+            "are not in this string (`find -exec ... {}`) or pass it to `sh -c` "
+            "as one string (`watch`, `flock -c`). Run the command as a command "
+            "of its own."
         )
 
     if _PYTHON_RE.match(name) and words[1:3] == ["-m", "pytest"]:
