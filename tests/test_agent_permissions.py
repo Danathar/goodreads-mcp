@@ -382,6 +382,27 @@ _DENIED = [
     ("/usr/bin/ionice -c3 git status", "where this guard cannot check it"),
     ("noglob flock /tmp/l pytest -p evil", "where this guard cannot check it"),
     ("nice -n 5 taskset -c 0 git log", "runs another command"),
+    # any other program in front of a guarded command, or handing a shell a
+    # command string (#397): the command it would run is checked as a command
+    # of its own, with the assignments and redirections in front of it.
+    ("setarch x86_64 git diff --no-index /dev/null ./.env", "as a command of its own"),
+    ("prlimit --nofile=10 git diff --no-index /dev/null ./.env", "as a command of its own"),
+    ("strace -o /dev/null git diff --no-index /dev/null ./.env", "as a command of its own"),
+    ("setpriv --reuid=1000 git diff --no-index /dev/null ./.env", "as a command of its own"),
+    ("sudo git diff --no-index /dev/null ./.env", "as a command of its own"),
+    ("/usr/bin/setarch x86_64 /usr/bin/git diff --no-index /dev/null ./.env", "--no-index"),
+    ("setarch x86_64 python3 -m pytest -p evil", "plugin"),
+    ("sudo GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD", "safe list"),
+    ("GIT_EXTERNAL_DIFF=/tmp/prog setarch x86_64 git diff HEAD", "safe list"),
+    ("setarch x86_64 git diff HEAD >goodreads_mcp/server.py", "redirection"),
+    ("sh -c 'git diff --no-index /dev/null ./.env'", "as a command of its own"),
+    ("bash -c 'pytest -p evil'", "plugin"),
+    ("sh -c \"sh -c 'git diff --no-index /dev/null ./.env'\"", "--no-index"),
+    ("sh -c 'export GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD'", "export-family"),
+    ("script -qc 'git diff --no-index /dev/null ./.env' /dev/null", "as a command of its own"),
+    ("script -qcgit\\ diff\\ --no-index\\ /dev/null\\ ./.env /dev/null", "--no-index"),
+    ("GIT_EXTERNAL_DIFF=/tmp/prog sh -c 'git diff HEAD'", "reaches the guarded command"),
+    ("setarch x86_64" + " git diff HEAD" * 9, "too many to check"),
     # `noglob` is a wrapper the permission matcher steps over, so these match
     # `Bash(pytest *)` and `Bash(git diff *)`. A bare `noglob` is zsh's
     # modifier, which runs the command after it, so that command is checked in
@@ -398,6 +419,7 @@ _DENIED = [
     ("noglob GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD", "safe list"),
     ("noglob timeout 5 pytest -q", "runs another command"),
     ("/usr/bin/noglob pytest -p evil", "runs another command"),
+    ("/usr/bin/noglob pytest -q", "runs another command"),
     ("/usr/bin/noglob git diff .env /etc/hostname", "runs another command"),
     ("$HOME/bin/noglob pytest -q", "runs another command"),
     # The matcher cuts a wrapper's word at the last `/` or `\`, so a wrapper
@@ -413,6 +435,7 @@ _DENIED = [
     ("'./shim\\nohup' git diff --no-index /dev/null ./.env", "backslash"),
     ("'./shim\\noglob' pytest -p evil", "backslash"),
     ("/usr/bin\\timeout 5 pytest -q >out", "`/usr/bin\\timeout` is a wrapper spelled"),
+    ("/usr/bin\\timeout 5 pytest -q", "`/usr/bin\\timeout` is a wrapper spelled"),
     ("/usr/bin\\nohup git diff HEAD >goodreads_mcp/server.py", "backslash"),
     ("x\\nohup pytest -q >out", "backslash"),
     ("x\\noglob pytest -q >out", "backslash"),
@@ -583,6 +606,18 @@ _PERMITTED = [
     "find . -name '*.py' -exec grep -n flock {} +",
     "find . -path ./.git -prune -o -name '*.py' -print",
     "git log --grep flock",
+    # Behind any other program, a command that passes alone still passes, and
+    # a program that only prints or matches its arguments is not read (#397).
+    "sudo git diff HEAD",
+    "setarch x86_64 make test",
+    "sh -c 'git status'",
+    "CI=1 sh -c 'pytest -q'",
+    "uname git diff HEAD",
+    "echo git diff --no-index /dev/null ./.env",
+    "printf '%s\\n' 'pytest -p evil'",
+    "grep -rn 'git diff --no-index' docs",
+    "rg 'git diff' docs",
+    "setarch x86_64" + " git diff HEAD" * 8,
     # A bare `noglob` runs the command after it, which is the one checked: a
     # guarded word as an argument of something else is not a guarded verb.
     "noglob echo hi",
@@ -1089,19 +1124,27 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "a path-spelled `noglob` as a wrapper",
         '"noglob",',
         "",
-        "/usr/bin/noglob pytest -p evil",
+        "/usr/bin/noglob pytest -q",
     ),
     (
         "a guarded verb behind a wrapper the matcher does not step over",
         "if name in _OPAQUE_WRAPPERS and hidden:",
         "if False:",
-        "flock /tmp/l git diff --no-index /dev/null ./.env",
+        # A command that passes alone, or the backstop for any other program
+        # (#397) would still refuse it.
+        "flock -n /tmp/l git diff HEAD",
+    ),
+    (
+        "a guarded command behind any other program",
+        "_check_unlisted_program(words, env, redirections, cwd)",
+        "pass",
+        "setarch x86_64 git diff --no-index /dev/null ./.env",
     ),
     (
         "a wrapper spelled with a `\\`, read on the string as typed",
         "raw_wrapper = _backslash_wrapper(command)",
         "raw_wrapper = None",
-        "/usr/bin\\timeout 5 pytest -q >out",
+        "/usr/bin\\timeout 5 pytest -q",
     ),
 )
 

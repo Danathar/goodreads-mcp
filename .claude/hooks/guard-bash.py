@@ -247,6 +247,33 @@ _OPAQUE_WRAPPERS = frozenset(
 # which runs nothing, is not read as naming git.
 _OPAQUE_GUARDED_RE = re.compile(r"(?<![\w.])(pytest|git)\b")
 
+# No list of programs that run a command is complete: `setarch x86_64 git diff
+# --no-index /dev/null .env`, `prlimit`, `setpriv`, `sudo` and `strace -o log`
+# run the words after them, and `sh -c '...'` and `script -qc '...'` hand a
+# shell one string. None of them is in either list above, so the guard read
+# each as the command's name and returned (#397). They match no allow row, so
+# the default mode prompts, but bypass and auto modes do not. So behind any
+# program that is not itself guarded, the guarded command it would run, and
+# any command string one of its words carries, is checked as a command of its
+# own (`_check_unlisted_program`). A command that passes alone still passes
+# behind any program (`sudo git diff HEAD`). These print or match their
+# arguments and never run them, so they are not read at all, which keeps
+# `grep -rn 'git diff --no-index' docs` working; only the bare spelling counts,
+# and leaving a program out of this set can only over-refuse.
+_ARGUMENT_ONLY_PROGRAMS = frozenset({"echo", "printf", "grep", "egrep", "fgrep"})
+
+# What separates the words of a command string a program hands to a shell:
+# whitespace and the shell's own punctuation. A word without one is a single
+# word, not a command string.
+_COMMAND_STRING_RE = re.compile(r"[\s();<>|&]")
+
+# Each guarded command behind such a program is checked from where it starts to
+# the end of the command, so the work grows with the square of the words: 700
+# repeats of `git diff HEAD` behind one program took 18 seconds, and Claude
+# Code lets the command run when the hook times out. Past this many the
+# command is refused unread; no real invocation runs that many.
+_MAX_UNLISTED_INNER = 8
+
 # Environment assignments in front of the verb. The shell applies them to the
 # process the allow list started, so they are part of the command, not a detail
 # of it -- and several reach further than anything the option tables refuse:
@@ -888,11 +915,99 @@ def _check_git(verb: str, args: list[str], cwd: Path) -> None:
 # --------------------------------------------------------------------- driver
 
 
-def _check_command(words: list[str], cwd: Path) -> None:
+def _starts_guarded(words: list[str]) -> bool:
+    """Whether these words start with a command this guard checks."""
+    name = words[0].rpartition("/")[2]
+    return name in ("git", "pytest") or bool(
+        _PYTHON_RE.match(name) and words[1:3] == ["-m", "pytest"]
+    )
+
+
+def _command_strings(word: str) -> list[str]:
+    """The command strings a word may hand to a shell: the word itself when it
+    holds more than one word, the value after a long option's `=`, and every
+    tail of a short-option cluster (`-qc'git diff ...'` is `-q -c '...'`)."""
+    texts: list[str] = []
+    if _COMMAND_STRING_RE.search(word):
+        texts.append(word)
+    if word.startswith("--"):
+        if "=" in word:
+            texts.append(word.split("=", 1)[1])
+    elif cluster := re.match(r"-([A-Za-z0-9]+)", word):
+        texts.extend(word[cut:] for cut in range(2, cluster.end() + 1))
+    return [text for text in texts if text and _GUARDED_WORD_RE.search(text)]
+
+
+def _check_unlisted_program(
+    words: list[str], env: list[str], redirections: list[str], cwd: Path
+) -> None:
+    """Refuse a program that would run a command refused on its own (#397).
+
+    `words[0]` is not guarded and not a wrapper the guard knows. Each later
+    word where a guarded command starts is checked from there to the end, with
+    the assignments and redirections that reach it; each command string a word
+    carries is checked as a command string of its own. Only the direction of
+    over-refusing is guessed at: an option value that happens to read as a
+    guarded command (`uname -- git diff --no-index a b`) is refused too.
+    """
+
+    # A substring, not a word: `-qcgit\ diff ...` is `-q -c 'git diff ...'`,
+    # with no word boundary in front of the git.
+    rest = " ".join(words[1:])
+    if words[0] in _ARGUMENT_ONLY_PROGRAMS or ("git" not in rest and "pytest" not in rest):
+        return
+    checked = 0
+    for index in range(1, len(words)):
+        inner = ""
+        try:
+            if _starts_guarded(words[index:]):
+                inner = " ".join(words[index:])
+                checked += 1
+                if checked > _MAX_UNLISTED_INNER:
+                    raise Denied(
+                        f"more than {_MAX_UNLISTED_INNER} guarded commands behind "
+                        "one program, too many to check"
+                    )
+                start = index
+                while start > 1 and _ASSIGNMENT_RE.match(words[start - 1]):
+                    start -= 1
+                _check_command(env + words[start:], cwd, redirections)
+            for text in _command_strings(words[index]):
+                inner = text
+                try:
+                    _tokenise(text)
+                except ValueError:
+                    continue  # not valid shell: a shell handed it runs nothing
+                reason = decide(text, cwd)
+                unsafe_env = [a for a in env if _ASSIGNMENT_RE.match(a).group(1) not in SAFE_ENV]
+                if reason is None and (redirections or unsafe_env):
+                    reason = (
+                        "an assignment or redirection in front of the program "
+                        "reaches the guarded command it runs, as it would in "
+                        "front of the command itself"
+                    )
+                if reason is not None:
+                    raise Denied(reason)
+        except Denied as exc:
+            if len(inner) > 200:
+                inner = inner[:200] + "..."
+            raise Denied(
+                f"`{words[0]}` runs `{inner}` as a command of its own, and that "
+                f"command is refused on its own: {exc}. `{words[0]}` matches no "
+                "allow rule, so Claude Code asks first in the default mode, but "
+                "bypass and auto modes ask for nothing, so what it would run is "
+                "checked as though it stood alone. Run the command as a command "
+                "of its own."
+            ) from None
+
+
+def _check_command(words: list[str], cwd: Path, inherited: list[str] | None = None) -> None:
     # Redirections first: bash lets one stand in front of the command name, so
     # taking them out is what makes the word after them the verb rather than
     # the `>` being read as the verb and the command falling through unchecked.
+    # `inherited` carries those of a program that runs this command (#397).
     words, redirections = _split_redirections(words)
+    redirections += inherited or []
 
     # Leading VAR=value assignments, and zsh's `noglob` modifier among them.
     # A bare `noglob` takes no options and runs the next word as the command,
@@ -960,6 +1075,7 @@ def _check_command(words: list[str], cwd: Path) -> None:
         verb = rest[0]
         args = words[words.index(verb) + 1 :]
     else:
+        _check_unlisted_program(words, env, redirections, cwd)
         return
 
     if verb != "pytest":
