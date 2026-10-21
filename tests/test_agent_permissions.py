@@ -364,6 +364,24 @@ _DENIED = [
     ("timeout 60 GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD", "runs another command"),
     ("command GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD", "runs another command"),
     ("exec pytest -q", "`exec` runs another command"),
+    # a wrapper the permission matcher does not step over (#395). No allow row
+    # covers it, so Claude Code asks first in the default mode, but bypass and
+    # auto modes ask for nothing; the guarded verb behind it is refused
+    # whatever the wrapper's own arguments are.
+    ("flock /tmp/l git diff --no-index /dev/null ./.env", "where this guard cannot check it"),
+    ("flock -n /tmp/l git diff HEAD", "where this guard cannot check it"),
+    ("flock /tmp/l -c 'git diff --no-index /dev/null ./.env'", "where this guard cannot check it"),
+    ("watch 'git diff --no-index /dev/null ./.env'", "where this guard cannot check it"),
+    ("taskset -c 0 pytest -q", "where this guard cannot check it"),
+    ("chrt -o +0 git diff HEAD", "where this guard cannot check it"),
+    ("chrt -o -- -0 git diff HEAD", "where this guard cannot check it"),
+    ("find . -maxdepth 0 -exec git diff --no-index /dev/null ./.env \\;", "where this guard cannot check it"),
+    ("find / -maxdepth 0 -execdir git diff etc/passwd etc/hostname \\;", "where this guard cannot check it"),
+    ("find /etc -name passwd -ok git diff {} +", "where this guard cannot check it"),
+    ("unshare --wd=/ git diff etc/passwd etc/hostname", "where this guard cannot check it"),
+    ("/usr/bin/ionice -c3 git status", "where this guard cannot check it"),
+    ("noglob flock /tmp/l pytest -p evil", "where this guard cannot check it"),
+    ("nice -n 5 taskset -c 0 git log", "runs another command"),
     # `noglob` is a wrapper the permission matcher steps over, so these match
     # `Bash(pytest *)` and `Bash(git diff *)`. A bare `noglob` is zsh's
     # modifier, which runs the command after it, so that command is checked in
@@ -554,6 +572,17 @@ _PERMITTED = [
     # A wrapper with nothing the guard guards behind it.
     "env FOO=1 echo hi",
     "timeout 5 echo hi",
+    # A wrapper the matcher does not step over, running nothing guarded, or
+    # naming `.git` only as a path.
+    "flock /tmp/l make test",
+    "watch -n 2 ls -la",
+    "taskset -c 0 echo hi",
+    "chrt -o 0 echo hi",
+    "ionice -c3 du -sh .",
+    "unshare -r id",
+    "find . -name '*.py' -exec grep -n flock {} +",
+    "find . -path ./.git -prune -o -name '*.py' -print",
+    "git log --grep flock",
     # A bare `noglob` runs the command after it, which is the one checked: a
     # guarded word as an argument of something else is not a guarded verb.
     "noglob echo hi",
@@ -1061,6 +1090,12 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         '"noglob",',
         "",
         "/usr/bin/noglob pytest -p evil",
+    ),
+    (
+        "a guarded verb behind a wrapper the matcher does not step over",
+        "if name in _OPAQUE_WRAPPERS and hidden:",
+        "if False:",
+        "flock /tmp/l git diff --no-index /dev/null ./.env",
     ),
     (
         "a wrapper spelled with a `\\`, read on the string as typed",
