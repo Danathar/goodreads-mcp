@@ -825,6 +825,42 @@ def test_a_path_the_guard_cannot_resolve_counts_as_outside(guard):
     assert reason is not None and "outside the repository" in reason
 
 
+def test_a_command_too_slow_to_check_is_refused(guard, monkeypatch):
+    """A decision that outlasts its budget is a denial, not a hook timeout.
+
+    Claude Code runs a command whose hook times out, so a command that keeps
+    the guard busy past the timeout carries whatever follows it past the
+    guard. Each letter of a short-option cluster starts a command string the
+    guard decides in full, so this one costs the square of its length; at full
+    size (about 54 KB) it outlasted the 10-second timeout. The budget is shrunk
+    here so the test stays fast.
+    """
+    slow = "true '-" + "a" * 3000 + "cgit log " + "y " * 3000 + "'"
+    assert guard.decide(slow, _ROOT) is None, "the slow command alone is not refused"
+
+    monkeypatch.setattr(guard, "_BUDGET_SECONDS", 0.05)
+    reason = guard.decide(slow + "; git diff --no-index /dev/null .env", _ROOT)
+    assert reason is not None and "within 0.05 seconds" in reason, reason
+    # The deadline belongs to one decision: the next one starts afresh.
+    assert guard._deadline is None
+    assert guard.decide("git diff HEAD", _ROOT) is None
+
+
+def test_the_guard_budget_ends_well_before_the_hook_timeout(guard):
+    """The budget only helps while the hook is still running when it expires."""
+    timeouts = [
+        h["timeout"]
+        for e in _hooks().get("PreToolUse", [])
+        if e.get("matcher") == "Bash"
+        for h in e.get("hooks", [])
+        if "guard-bash.py" in h.get("command", "")
+    ]
+    assert timeouts, "the guard's hook entry sets no timeout"
+    assert all(guard._BUDGET_SECONDS <= t / 2 for t in timeouts), (
+        f"budget {guard._BUDGET_SECONDS}s against hook timeouts {timeouts}"
+    )
+
+
 # ------------------------------------------------ what the docs claim (#60)
 
 

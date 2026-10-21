@@ -130,11 +130,14 @@ here, change the tables there.
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
 import shlex
 import sys
+import time
+from collections.abc import Iterator
 from pathlib import Path
 
 # The project root is two levels up from this file; `CLAUDE_PROJECT_DIR` is the
@@ -273,6 +276,17 @@ _COMMAND_STRING_RE = re.compile(r"[\s();<>|&]")
 # Code lets the command run when the hook times out. Past this many the
 # command is refused unread; no real invocation runs that many.
 _MAX_UNLISTED_INNER = 8
+
+# That cap bounds one way the work grows, not all of them. A short-option
+# cluster is read as a command string from every letter on, and each of those
+# strings is decided in full, so `true '-aaaa...cgit log y y ...'` costs the
+# square of its length: about 54 KB of it outlasted the 10-second hook timeout
+# in `.claude/settings.json`, and a `git diff --no-index /dev/null .env` after
+# it then ran unchecked. Rather than cap each loop that can grow, the whole
+# decision gets a deadline; a command still being read when it passes is
+# refused. Half the hook timeout leaves room for the interpreter to start.
+_BUDGET_SECONDS = 5.0
+_deadline: float | None = None
 
 # Environment assignments in front of the verb. The shell applies them to the
 # process the allow list started, so they are part of the command, not a detail
@@ -632,6 +646,25 @@ class Denied(Exception):
     """Raised with the reason a command is refused."""
 
 
+class _OverBudget(Exception):
+    """Raised when a decision outlasts `_BUDGET_SECONDS`.
+
+    Not a `Denied`: the handlers that reword a `Denied` for the command that
+    carried it would credit the refusal to that command. `decide` returns it
+    as the reason once it has reached the outermost call.
+    """
+
+
+def _spend() -> None:
+    if _deadline is not None and time.monotonic() > _deadline:
+        raise _OverBudget(
+            f"the guard could not finish checking this command within "
+            f"{_BUDGET_SECONDS:g} seconds, and Claude Code runs a command whose "
+            "hook times out, so it is refused rather than left half-read. "
+            "Split it into shorter commands"
+        )
+
+
 # ---------------------------------------------------------------- tokenising
 
 
@@ -823,6 +856,9 @@ def _is_outside_repo(word: str, cwd: Path) -> bool:
     where `HOME` points or whether it is set.
     """
 
+    # Each operand costs a walk of the filesystem, so a long operand list is
+    # where a command spends its budget (`_BUDGET_SECONDS`).
+    _spend()
     if word.startswith("~"):
         return True
     try:
@@ -923,19 +959,25 @@ def _starts_guarded(words: list[str]) -> bool:
     )
 
 
-def _command_strings(word: str) -> list[str]:
+def _command_strings(word: str) -> Iterator[str]:
     """The command strings a word may hand to a shell: the word itself when it
     holds more than one word, the value after a long option's `=`, and every
-    tail of a short-option cluster (`-qc'git diff ...'` is `-q -c '...'`)."""
+    tail of a short-option cluster (`-qc'git diff ...'` is `-q -c '...'`).
+
+    Yielded one at a time: a long cluster has as many tails as letters, each
+    nearly as long as the word, and building them all up front was where a
+    crafted word spent the hook's whole timeout before `_spend` was reached."""
     texts: list[str] = []
     if _COMMAND_STRING_RE.search(word):
         texts.append(word)
-    if word.startswith("--"):
-        if "=" in word:
-            texts.append(word.split("=", 1)[1])
-    elif cluster := re.match(r"-([A-Za-z0-9]+)", word):
-        texts.extend(word[cut:] for cut in range(2, cluster.end() + 1))
-    return [text for text in texts if text and _GUARDED_WORD_RE.search(text)]
+    if word.startswith("--") and "=" in word:
+        texts.append(word.split("=", 1)[1])
+    cluster = None if word.startswith("--") else re.match(r"-([A-Za-z0-9]+)", word)
+    tails = (word[cut:] for cut in range(2, cluster.end() + 1)) if cluster else ()
+    for text in itertools.chain(texts, tails):
+        _spend()
+        if text and _GUARDED_WORD_RE.search(text):
+            yield text
 
 
 def _check_unlisted_program(
@@ -958,6 +1000,7 @@ def _check_unlisted_program(
         return
     checked = 0
     for index in range(1, len(words)):
+        _spend()
         inner = ""
         try:
             if _starts_guarded(words[index:]):
@@ -1006,6 +1049,7 @@ def _check_command(words: list[str], cwd: Path, inherited: list[str] | None = No
     # taking them out is what makes the word after them the verb rather than
     # the `>` being read as the verb and the command falling through unchecked.
     # `inherited` carries those of a program that runs this command (#397).
+    _spend()
     words, redirections = _split_redirections(words)
     redirections += inherited or []
 
@@ -1182,6 +1226,24 @@ def _is_bare_assignment(words: list[str]) -> bool:
 
 def decide(command: str, cwd: str | os.PathLike[str] | None = None) -> str | None:
     """Return the reason the command is denied, or None to leave it alone."""
+    # A program's command string is decided by a nested call, which shares the
+    # deadline the outermost call set.
+    global _deadline
+    outermost = _deadline is None
+    if outermost:
+        _deadline = time.monotonic() + _BUDGET_SECONDS
+    try:
+        return _decide(command, cwd)
+    except _OverBudget as exc:
+        if outermost:
+            return str(exc)
+        raise
+    finally:
+        if outermost:
+            _deadline = None
+
+
+def _decide(command: str, cwd: str | os.PathLike[str] | None) -> str | None:
     cwd_path = Path(cwd) if cwd else _PROJECT_DIR
     if _SUBSTITUTION_RE.search(command) and _GUARDED_WORD_RE.search(command):
         return (
