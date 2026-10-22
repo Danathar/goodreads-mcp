@@ -13,13 +13,15 @@ venv
 tests/
 .github
 # Repository-facing files the server never reads (#362): agent configuration,
-# docs, prompts and contributor guidance. The bundle keeps manifest.json,
-# pyproject.toml, goodreads_mcp/, README.md and the licences (hatchling reads
-# README.md and both LICENSE files when `uv run` builds the project).
+# docs, prompts, CI scripts and contributor guidance. The bundle keeps
+# manifest.json, pyproject.toml, goodreads_mcp/, README.md and the licences
+# (hatchling reads README.md and both LICENSE files when `uv run` builds the
+# project).
 .claude/
 .cursor/
 docs/
 prompts/
+scripts/
 AGENTS.md
 CLAUDE.md
 CONTRIBUTING.md

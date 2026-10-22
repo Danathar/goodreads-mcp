@@ -1,0 +1,29 @@
+# Surviving mutants a reviewer has judged harmless (#408).
+#
+# scripts/mutate_changed.py makes small deliberate breakages (mutants) on the
+# lines a pull request changes and runs the tests that load the file. A mutant
+# no test notices is a survivor, and the CI `mutation` job fails on each one
+# this file does not list. List one here only when no test could tell it apart
+# from the original (an equivalent mutant), or it changes only the wording of
+# a message; otherwise add the test that kills it.
+#
+# One entry per mutant, entries separated by a blank line, five keys each:
+#
+#   file: the path from the repository root
+#   line: the 1-based line number the mutant sits on
+#   was:  that line before the mutant, leading and trailing space stripped
+#   now:  that line with the mutant, stripped the same way
+#   why:  one line saying why no test can, or needs to, tell them apart
+#
+# A survivor matches an entry only when all four of file, line, was and now
+# are equal, so an entry cannot silently start excusing a different line after
+# an edit moves it. A failing run prints each unlisted survivor in this format,
+# with a placeholder `why` to replace.
+#
+# Example (as a comment, so it excuses nothing):
+#
+# file: .claude/hooks/guard-bash.py
+# line: 120
+# was: name = value.rsplit("/", 1)[-1]
+# now: name = value.rsplit("/", 2)[-1]
+# why: only the last part is read, and it is the same either way

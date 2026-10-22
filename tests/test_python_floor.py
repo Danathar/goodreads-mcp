@@ -95,7 +95,8 @@ def test_the_bundle_manifest_declares_the_same_floor():
 def test_the_ci_test_job_runs_the_floor_exactly():
     """The dependency-floor step uses this interpreter, so CI tests the floor only if it is the floor."""
     steps = _setup_python_steps(_WORKFLOWS / "ci.yml")
-    assert len(steps) == 2, steps  # the floor job, then the newest-Python job (#363)
+    # the floor job, then the newest-Python job (#363), then the mutation job (#408)
+    assert len(steps) == 3, steps
     body = (_WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
     assert 'uv venv --python "$(command -v python)"' in body, (
         "ci.yml's dependency-floor venv no longer takes setup-python's interpreter; "
