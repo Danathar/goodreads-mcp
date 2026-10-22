@@ -130,6 +130,7 @@ here, change the tables there.
 
 from __future__ import annotations
 
+import fnmatch
 import itertools
 import json
 import os
@@ -552,6 +553,77 @@ _OPAQUE = ("$", "`", "{", "}")
 _SUBSTITUTION_RE = re.compile(r"\$\(|`")
 _GUARDED_WORD_RE = re.compile(r"\b(pytest|git)\b")
 
+# A guarded name the shell builds before it looks it up. Bash takes quotes,
+# backslashes and an empty `$""` out of a word and expands its braces, and in a
+# path its globs, so `g""it`, `g\it`, `g$""it`, `g{,}it`, `{git,diff}` and
+# `/usr/bin/g?t` all run git. The lexer here takes quotes out of the words it
+# reads, but a command string a program hands to a shell (`sh -c 'g""it diff
+# ...'`) is one word to it, and braces and globs it leaves alone, so each check
+# that looked for `git` or `pytest` spelled out let these through (#404). A name built
+# from a variable (`G=gi; ${G}t diff ...`) is still not followed. Only a glob
+# with a `/` counts: a bare `g?t` matches files in the working directory, not
+# a program on the PATH.
+_SHELL_QUOTING_RE = re.compile(r"[\"'\\$]")
+_SPELLING_RE = re.compile(r"[\"'\\${},]")
+_BRACE_GROUP_RE = re.compile(r"\{([^{}]*,[^{}]*)\}")
+_GLOB_RE = re.compile(r"[*?[]")
+_BUILT_NAME_RE = re.compile(r"[\"'\\${}*?[]")
+_STRING_WORD_RE = re.compile(r"[\s();<>|&=]+")
+# A word with more brace alternatives than this is read only with its braces
+# and commas taken out; the expansions grow with the product of the groups.
+_MAX_BRACE_FORMS = 32
+
+
+def _guarded_spelling(word: str) -> str | None:
+    """The guarded name the shell could run from this command word, if any:
+    `git` or `pytest` when a glob in a path matches it, `{` when braces or
+    quoting build it. A name spelled plainly is read by the callers."""
+    if not _BUILT_NAME_RE.search(word):
+        return None
+    plain = _SHELL_QUOTING_RE.sub("", word)
+    forms = [plain, re.sub(r"[{},]", "", plain)]
+    pending = [plain]
+    while pending and len(forms) < _MAX_BRACE_FORMS:
+        form = pending.pop()
+        group = _BRACE_GROUP_RE.search(form)
+        if group is None:
+            continue
+        for alternative in group.group(1).split(",")[:_MAX_BRACE_FORMS]:
+            expanded = form[: group.start()] + alternative + form[group.end() :]
+            forms.append(expanded)
+            pending.append(expanded)
+    for form in forms:
+        if form.split() != [form]:
+            continue  # a word with a space in it names no program
+        name = form.rsplit("/", 1)[-1]
+        if name in ("git", "pytest"):
+            return "{" if name != word.rsplit("/", 1)[-1] else name
+        if "/" in form and _GLOB_RE.search(name):
+            for guarded in ("git", "pytest"):
+                if fnmatch.fnmatchcase(guarded, name):
+                    return guarded
+    return None
+
+
+def _could_name_guarded(word: str) -> bool:
+    """Whether the shell could run `git` or `pytest` from this command word."""
+    return _guarded_spelling(word) is not None
+
+
+def _names_guarded(text: str, pattern: re.Pattern[str] = _GUARDED_WORD_RE) -> bool:
+    """Whether a shell handed `text` could run a guarded command: `pattern`
+    found as typed or with the quoting the shell takes out removed, or a word
+    the shell would expand into a guarded name."""
+    return bool(
+        pattern.search(text)
+        or pattern.search(_SPELLING_RE.sub("", text))
+        or any(
+            _could_name_guarded(word)
+            for word in _STRING_WORD_RE.split(text)
+            if _BUILT_NAME_RE.search(word)
+        )
+    )
+
 # A word as typed, before the shell takes quotes and backslashes out of it.
 # Claude Code's matcher finds a wrapper in the text as typed, cutting the
 # command word at its last `/` or `\`, and bash does not: an unquoted `\`
@@ -954,22 +1026,15 @@ def _check_git(verb: str, args: list[str], cwd: Path) -> None:
 def _starts_guarded(words: list[str]) -> bool:
     """Whether these words start with a command this guard checks."""
     name = words[0].rpartition("/")[2]
-    return name in ("git", "pytest") or bool(
-        _PYTHON_RE.match(name) and words[1:3] == ["-m", "pytest"]
+    return (
+        name in ("git", "pytest")
+        or bool(_PYTHON_RE.match(name) and words[1:3] == ["-m", "pytest"])
+        or _could_name_guarded(words[0])
     )
 
 
 # A `$` in front of a quote is the shell's own quoting (`$'git'`), not a name.
 _DOLLAR_QUOTE_RE = re.compile(r"\$(?=['\"])")
-
-
-def _unquoted(text: str) -> str:
-    """The text as the shell would look a name up: `$`, quotes and backslashes
-    removed. The shell drops quotes and backslashes before it runs a name, so
-    `g""it`, `gi\\t` and `$'git'` inside a command string all run git. Removing
-    more can only refuse more: a string that passes as written still passes
-    unless this text names a guarded command."""
-    return re.sub(r"[$\"'\\]", "", text)
 
 
 def _command_strings(word: str) -> Iterator[str]:
@@ -989,7 +1054,7 @@ def _command_strings(word: str) -> Iterator[str]:
     tails = (word[cut:] for cut in range(2, cluster.end() + 1)) if cluster else ()
     for text in itertools.chain(texts, tails):
         _spend()
-        if text and (_GUARDED_WORD_RE.search(text) or _GUARDED_WORD_RE.search(_unquoted(text))):
+        if text and _names_guarded(text):
             yield text
 
 
@@ -1007,11 +1072,13 @@ def _check_unlisted_program(
     """
 
     # A substring, not a word: `-qcgit\ diff ...` is `-q -c 'git diff ...'`,
-    # with no word boundary in front of the git.
+    # with no word boundary in front of the git. Looked for with the quoting
+    # and braces the shell takes out removed too (`-qcg{,}it\ diff ...`).
     rest = " ".join(words[1:])
-    plain = _unquoted(rest)
-    if words[0] in _ARGUMENT_ONLY_PROGRAMS or not any(
-        name in text for text in (rest, plain) for name in ("git", "pytest")
+    plain = _SPELLING_RE.sub("", rest)
+    if words[0] in _ARGUMENT_ONLY_PROGRAMS or not (
+        "git" in plain or "pytest" in plain or "git" in rest or "pytest" in rest
+        or _names_guarded(rest)
     ):
         return
     checked = 0
@@ -1098,7 +1165,7 @@ def _check_command(words: list[str], cwd: Path, inherited: list[str] | None = No
     # A wrapper the guard cannot see through, in front of something it guards.
     # A wrapper spelled with a `\` never gets this far: `decide` refuses it on
     # the string as typed, since an unquoted `\` is gone from `words` by now.
-    if name in _WRAPPERS and _GUARDED_WORD_RE.search(" ".join(words)):
+    if name in _WRAPPERS and _names_guarded(" ".join(words)):
         raise Denied(
             f"`{words[0]}` runs another command and this guard does not model "
             f"its options, so it cannot tell what `{words[0]}` would run or "
@@ -1110,10 +1177,15 @@ def _check_command(words: list[str], cwd: Path, inherited: list[str] | None = No
 
     # A wrapper the matcher does not step over, in front of something it
     # guards: refused whatever the wrapper's own arguments are (#395).
-    hidden = _OPAQUE_GUARDED_RE.search(" ".join(words[1:]))
+    # A name spelled with quotes, braces or a glob counts too (#404).
+    rest = " ".join(words[1:])
+    hidden = _OPAQUE_GUARDED_RE.search(rest)
+    hidden = hidden.group(1) if hidden else None
+    if name in _OPAQUE_WRAPPERS and hidden is None and _names_guarded(rest, _OPAQUE_GUARDED_RE):
+        hidden = "a guarded command"
     if name in _OPAQUE_WRAPPERS and hidden:
         raise Denied(
-            f"`{words[0]}` runs `{hidden.group(1)}` where this guard cannot "
+            f"`{words[0]}` runs `{hidden}` where this guard cannot "
             "check it. flock, watch, taskset, chrt, "
             "unshare, ionice and find match no allow rule, so Claude Code asks "
             "first in the default mode, but bypass and auto modes ask for "
@@ -1123,6 +1195,22 @@ def _check_command(words: list[str], cwd: Path, inherited: list[str] | None = No
             "as one string (`watch`, `flock -c`). Run the command as a command "
             "of its own."
         )
+
+    # A name the shell builds into a guarded one (#404). A glob in a path,
+    # `/usr/bin/g?t`, is read as the program it matches, so the rules below
+    # apply to it as they would to `git`. Braces are refused: `{git,diff}
+    # --no-index ...` is `git diff --no-index ...`, and the words they add are
+    # not modelled here.
+    spelled = None if name in ("git", "pytest") else _guarded_spelling(words[0])
+    if spelled == "{":
+        raise Denied(
+            f"`{words[0]}` is a command name the shell expands with its braces "
+            "before running it, and it can expand to `git` or `pytest`, which "
+            "this guard checks only when the name is spelled out. Spell the "
+            "name out"
+        )
+    if spelled is not None:
+        words, name = [spelled, *words[1:]], spelled
 
     if _PYTHON_RE.match(name) and words[1:3] == ["-m", "pytest"]:
         verb, args = "pytest", words[3:]
