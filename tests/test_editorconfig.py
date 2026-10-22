@@ -89,6 +89,7 @@ _INDENT_BY_SUFFIX = {
     ".mdc": 4,
     ".py": 4,
     ".toml": 2,
+    ".txt": 4,
     ".yml": 2,
 }
 

@@ -14,6 +14,7 @@ what's known-weak, and where the real risk sits.
 | offline suite at the declared dependency floors (`uv pip install --resolution lowest-direct`) | `ci.yml` | yes |
 | MCPB manifest validation | `ci.yml` | yes |
 | every workflow `uses:` pinned to a full commit SHA with its tag as a comment, one pin per action, and a Dependabot `github-actions` entry to move them (`tests/test_action_pins.py`) | `ci.yml` | yes |
+| every small deliberate breakage (a mutant: a comparison swapped, a test forced, an integer moved by one, ...) of a line a pull request changes in `goodreads_mcp/` or `.claude/hooks/` fails a test that loads the file, or is listed with its reason in `tests/mutation-equivalents.txt` (`scripts/mutate_changed.py`, #408) | `ci.yml` (`mutation` job, pull requests only) | yes, as a red check; not yet one the ruleset requires |
 | version sync (`pyproject` vs `manifest`) | `release.yml` | yes, at release |
 | bundle carries no compiled module (it declares three platforms) | `release.yml` | yes, at release |
 | packed bundle starts under the manifest's own `uv run` command | `release.yml` | yes, at release |

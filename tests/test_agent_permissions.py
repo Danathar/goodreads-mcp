@@ -406,6 +406,8 @@ _DENIED = [
     ("script -qc 'g\"\"it diff --no-index /dev/null .env' /dev/null", "as a command of its own"),
     ("script -qc 'gi\\t diff --no-index /dev/null .env' /dev/null", "as a command of its own"),
     ("script -qc \"$'git' diff --no-index /dev/null .env\" /dev/null", "as a command of its own"),
+    # A long option's `=VALUE` is a command string of its own (#408).
+    ("script --command='git diff --no-index /dev/null .env' /dev/null", "as a command of its own"),
     ("GIT_EXTERNAL_DIFF=/tmp/prog sh -c 'git diff HEAD'", "reaches the guarded command"),
     ("setarch x86_64" + " git diff HEAD" * 9, "too many to check"),
     # A guarded name the shell builds before it looks it up (#404): quotes,
@@ -435,6 +437,8 @@ _DENIED = [
     ("$'\\147it' diff --no-index /dev/null .env", "--no-index"),
     ("$'\\u0067it' diff --no-index /dev/null .env", "--no-index"),
     ("$'\\U00000067it' diff --no-index /dev/null .env", "--no-index"),
+    # bash ends a `$'...'` string at its first NUL byte, so the name is `git` (#408).
+    ("$'git\\0x' diff --no-index /dev/null .env", "--no-index"),
     ("g$'\\x69'\"t\" diff HEAD --output=x", "--output"),
     ("$'py\\x74est' -p evil", "plugin"),
     ("git diff $'\\055\\055no-index' /dev/null .env", "--no-index"),
