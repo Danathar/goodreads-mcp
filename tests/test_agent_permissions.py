@@ -401,6 +401,11 @@ _DENIED = [
     ("sh -c 'export GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD'", "export-family"),
     ("script -qc 'git diff --no-index /dev/null ./.env' /dev/null", "as a command of its own"),
     ("script -qcgit\\ diff\\ --no-index\\ /dev/null\\ ./.env /dev/null", "--no-index"),
+    # The shell drops quotes, backslashes and `$` before it looks a name up, so
+    # a name split with them inside a command string still runs git.
+    ("script -qc 'g\"\"it diff --no-index /dev/null .env' /dev/null", "as a command of its own"),
+    ("script -qc 'gi\\t diff --no-index /dev/null .env' /dev/null", "as a command of its own"),
+    ("script -qc \"$'git' diff --no-index /dev/null .env\" /dev/null", "as a command of its own"),
     ("GIT_EXTERNAL_DIFF=/tmp/prog sh -c 'git diff HEAD'", "reaches the guarded command"),
     ("setarch x86_64" + " git diff HEAD" * 9, "too many to check"),
     # `noglob` is a wrapper the permission matcher steps over, so these match
@@ -611,6 +616,7 @@ _PERMITTED = [
     "sudo git diff HEAD",
     "setarch x86_64 make test",
     "sh -c 'git status'",
+    "script -qc 'g\"\"it status' /dev/null",
     "CI=1 sh -c 'pytest -q'",
     "uname git diff HEAD",
     "echo git diff --no-index /dev/null ./.env",

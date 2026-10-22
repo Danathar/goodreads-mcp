@@ -959,6 +959,19 @@ def _starts_guarded(words: list[str]) -> bool:
     )
 
 
+# A `$` in front of a quote is the shell's own quoting (`$'git'`), not a name.
+_DOLLAR_QUOTE_RE = re.compile(r"\$(?=['\"])")
+
+
+def _unquoted(text: str) -> str:
+    """The text as the shell would look a name up: `$`, quotes and backslashes
+    removed. The shell drops quotes and backslashes before it runs a name, so
+    `g""it`, `gi\\t` and `$'git'` inside a command string all run git. Removing
+    more can only refuse more: a string that passes as written still passes
+    unless this text names a guarded command."""
+    return re.sub(r"[$\"'\\]", "", text)
+
+
 def _command_strings(word: str) -> Iterator[str]:
     """The command strings a word may hand to a shell: the word itself when it
     holds more than one word, the value after a long option's `=`, and every
@@ -976,7 +989,7 @@ def _command_strings(word: str) -> Iterator[str]:
     tails = (word[cut:] for cut in range(2, cluster.end() + 1)) if cluster else ()
     for text in itertools.chain(texts, tails):
         _spend()
-        if text and _GUARDED_WORD_RE.search(text):
+        if text and (_GUARDED_WORD_RE.search(text) or _GUARDED_WORD_RE.search(_unquoted(text))):
             yield text
 
 
@@ -996,7 +1009,10 @@ def _check_unlisted_program(
     # A substring, not a word: `-qcgit\ diff ...` is `-q -c 'git diff ...'`,
     # with no word boundary in front of the git.
     rest = " ".join(words[1:])
-    if words[0] in _ARGUMENT_ONLY_PROGRAMS or ("git" not in rest and "pytest" not in rest):
+    plain = _unquoted(rest)
+    if words[0] in _ARGUMENT_ONLY_PROGRAMS or not any(
+        name in text for text in (rest, plain) for name in ("git", "pytest")
+    ):
         return
     checked = 0
     for index in range(1, len(words)):
@@ -1022,6 +1038,10 @@ def _check_unlisted_program(
                 except ValueError:
                     continue  # not valid shell: a shell handed it runs nothing
                 reason = decide(text, cwd)
+                # The lexer leaves `$'git'` as the word `$git`; a shell runs git.
+                dollar = _DOLLAR_QUOTE_RE.sub("", text)
+                if reason is None and dollar != text:
+                    reason = decide(dollar, cwd)
                 unsafe_env = [a for a in env if _ASSIGNMENT_RE.match(a).group(1) not in SAFE_ENV]
                 if reason is None and (redirections or unsafe_env):
                     reason = (
