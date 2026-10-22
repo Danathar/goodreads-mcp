@@ -573,6 +573,100 @@ _STRING_WORD_RE = re.compile(r"[\s();<>|&=]+")
 # and commas taken out; the expansions grow with the product of the groups.
 _MAX_BRACE_FORMS = 32
 
+# Bash decodes escapes inside `$'...'` before it looks a name up, so
+# `$'\x67it'`, `$'\147it'` and `$'\u0067it'` all run git (#406). The lexer
+# reads `$'...'` as a plain single-quoted string with a `$` in front, which
+# left the escapes in the word and matched no guarded name. Each `$'...'` is
+# rewritten as the single-quoted string bash would make of it before anything
+# else reads the command: `\xHH`, `\NNN` (octal), `\uHHHH`, `\UHHHHHHHH`,
+# `\cX` and the C letter escapes are decoded, `\\`, `\'`, `\"` and `\?` stand
+# for the character, and any other backslash is kept, as bash keeps it. A `\'`
+# does not end the string, and a NUL ends what bash keeps of it.
+_ANSI_C_LETTERS = {
+    "a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n",
+    "r": "\r", "t": "\t", "v": "\v", "\\": "\\", "'": "'", '"': '"', "?": "?",
+}
+_ANSI_C_ESCAPE_RE = re.compile(
+    r"\\(?:x([0-9A-Fa-f]{1,2})|u([0-9A-Fa-f]{1,4})|U([0-9A-Fa-f]{1,8})"
+    r"|([0-7]{1,3})|c(\\\\|[\s\S])|([\s\S]))"
+)
+# A `$'...'` anywhere in the text, inside double quotes too. Bash leaves one
+# there alone, but inside a `"$(...)"` it does not, so the checks that only
+# ask whether a guarded name could be in the text read every one.
+_ANSI_C_ANYWHERE_RE = re.compile(r"\$'((?:[^'\\]|\\[\s\S])*)'")
+
+
+def _ansi_c_escape(match: re.Match[str]) -> str:
+    hex2, hex4, hex8, octal, control, letter = match.groups()
+    if hex2 is not None:
+        return chr(int(hex2, 16))
+    if hex4 is not None or hex8 is not None:
+        code = int(hex4 if hex4 is not None else hex8, 16)
+        return chr(code) if code <= 0x10FFFF else match.group()
+    if octal is not None:
+        return chr(int(octal, 8) & 0xFF)
+    if control is not None:
+        return "\x7f" if control == "?" else chr(ord(control[-1]) & 0x1F)
+    return _ANSI_C_LETTERS.get(letter, match.group())
+
+
+def _ansi_c_body(body: str) -> str:
+    """The text bash makes of the body of a `$'...'` string."""
+    return _ANSI_C_ESCAPE_RE.sub(_ansi_c_escape, body).split("\0", 1)[0]
+
+
+def _ansi_c_end(command: str, start: int) -> int:
+    """Index of the `'` that closes a `$'...'` body starting at `start`, or
+    `len(command)` when none does. A backslash escapes the character after it,
+    so `\\'` does not end the string."""
+    i = start
+    while i < len(command) and command[i] != "'":
+        i += 2 if command[i] == "\\" else 1
+    return min(i, len(command))
+
+
+def _decode_ansi_c(command: str) -> str:
+    """`command` with each `$'...'` the shell decodes rewritten as the
+    single-quoted string it decodes to. One inside quotes, or after a `\\`, is
+    left as typed, as bash leaves it. An unterminated one stays unterminated,
+    so the lexer still refuses to read it."""
+    if "$'" not in command:
+        return command
+    out: list[str] = []
+    quote = ""
+    i = 0
+    while i < len(command):
+        ch = command[i]
+        if quote == "'":
+            quote = "" if ch == "'" else quote
+            out.append(ch)
+        elif ch == "\\":
+            out.append(command[i : i + 2])
+            i += 1
+        elif quote:
+            quote = "" if ch == '"' else quote
+            out.append(ch)
+        elif command.startswith("$$", i):
+            out.append("$$")  # the shell's PID, then whatever follows it
+            i += 1
+        elif command.startswith("$'", i):
+            end = _ansi_c_end(command, i + 2)
+            body = _ansi_c_body(command[i + 2 : end]).replace("'", "'\\''")
+            out.append("'" + body + ("'" if end < len(command) else ""))
+            i = end
+        else:
+            quote = ch if ch in "'\"" else quote
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _decode_ansi_c_anywhere(text: str) -> str:
+    """`text` with every `$'...'` replaced by its decoded body, quoted or not."""
+    if "$'" not in text:
+        return text
+    return _ANSI_C_ANYWHERE_RE.sub(lambda m: _ansi_c_body(m.group(1)), text)
+
 
 def _guarded_spelling(word: str) -> str | None:
     """The guarded name the shell could run from this command word, if any:
@@ -613,15 +707,18 @@ def _could_name_guarded(word: str) -> bool:
 def _names_guarded(text: str, pattern: re.Pattern[str] = _GUARDED_WORD_RE) -> bool:
     """Whether a shell handed `text` could run a guarded command: `pattern`
     found as typed or with the quoting the shell takes out removed, or a word
-    the shell would expand into a guarded name."""
-    return bool(
-        pattern.search(text)
-        or pattern.search(_SPELLING_RE.sub("", text))
+    the shell would expand into a guarded name. Read with each `$'...'`
+    decoded too (#406)."""
+    decoded = _decode_ansi_c_anywhere(text)
+    return any(
+        pattern.search(form)
+        or pattern.search(_SPELLING_RE.sub("", form))
         or any(
             _could_name_guarded(word)
-            for word in _STRING_WORD_RE.split(text)
+            for word in _STRING_WORD_RE.split(form)
             if _BUILT_NAME_RE.search(word)
         )
+        for form in ((text,) if decoded == text else (text, decoded))
     )
 
 # A word as typed, before the shell takes quotes and backslashes out of it.
@@ -1105,7 +1202,8 @@ def _check_unlisted_program(
                 except ValueError:
                     continue  # not valid shell: a shell handed it runs nothing
                 reason = decide(text, cwd)
-                # The lexer leaves `$'git'` as the word `$git`; a shell runs git.
+                # The lexer leaves `$"git"` as the word `$git`; a shell runs git.
+                # (`$'git'` is decoded by `decide` itself, #406.)
                 dollar = _DOLLAR_QUOTE_RE.sub("", text)
                 if reason is None and dollar != text:
                     reason = decide(dollar, cwd)
@@ -1353,12 +1451,18 @@ def decide(command: str, cwd: str | os.PathLike[str] | None = None) -> str | Non
 
 def _decide(command: str, cwd: str | os.PathLike[str] | None) -> str | None:
     cwd_path = Path(cwd) if cwd else _PROJECT_DIR
-    if _SUBSTITUTION_RE.search(command) and _GUARDED_WORD_RE.search(command):
+    if _SUBSTITUTION_RE.search(command) and (
+        _GUARDED_WORD_RE.search(command)
+        or _GUARDED_WORD_RE.search(_decode_ansi_c_anywhere(command))
+    ):
         return (
             "a command substitution next to a guarded command: the guard "
             "cannot see what the shell would run, so it cannot check the "
             "command that would actually run"
         )
+    # Everything below reads the command as bash would after decoding its
+    # `$'...'` strings: `$'\x67it' diff ...` is `'git' diff ...` (#406).
+    command = _decode_ansi_c(command)
     raw_wrapper = _backslash_wrapper(command)
     if raw_wrapper is not None:
         return (

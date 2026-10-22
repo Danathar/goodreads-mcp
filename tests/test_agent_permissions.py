@@ -429,6 +429,20 @@ _DENIED = [
     ("/usr/bin/p?test -p evil", "plugin"),
     ("setarch x86_64 /usr/bin/g?t diff --no-index /dev/null ./.env", "--no-index"),
     ("timeout 5 /usr/bin/g?t diff --no-index /dev/null ./.env", "runs another command"),
+    # Bash decodes the escapes inside `$'...'` before it looks a name up, so
+    # each of these runs git or pytest (#406). `\'` does not end the string.
+    ("$'\\x67it' diff --no-index /dev/null .env", "--no-index"),
+    ("$'\\147it' diff --no-index /dev/null .env", "--no-index"),
+    ("$'\\u0067it' diff --no-index /dev/null .env", "--no-index"),
+    ("$'\\U00000067it' diff --no-index /dev/null .env", "--no-index"),
+    ("g$'\\x69'\"t\" diff HEAD --output=x", "--output"),
+    ("$'py\\x74est' -p evil", "plugin"),
+    ("git diff $'\\055\\055no-index' /dev/null .env", "--no-index"),
+    ("setarch x86_64 $'\\x67it' diff --no-index /dev/null .env", "as a command of its own"),
+    ("script -qc \"$'\\x67it' diff --no-index /dev/null .env\" /dev/null", "as a command of its own"),
+    ("sh -c $'\\x67it diff --no-index /dev/null .env'", "as a command of its own"),
+    ("echo \"$($'\\x67it' diff --no-index /dev/null .env)\"", "command substitution"),
+    ("echo $'\\'' $(git push --force origin main)", "command substitution"),
     # `noglob` is a wrapper the permission matcher steps over, so these match
     # `Bash(pytest *)` and `Bash(git diff *)`. A bare `noglob` is zsh's
     # modifier, which runs the command after it, so that command is checked in
@@ -656,6 +670,12 @@ _PERMITTED = [
     "sh -c \"awk -F: '$1 == \\\"root\\\" {print $7}' /etc/passwd\"",
     "find . -name '*' -print",
     "echo 'g\"\"it diff --no-index /dev/null ./.env'",
+    # A decoded `$'...'` name that is allowed spelled plainly stays allowed,
+    # and one that decodes to no guarded name is left alone (#406).
+    "$'\\x67it' status",
+    "echo $'hello\\tworld'",
+    "echo $'it\\'s' 'git diff --no-index /dev/null .env'",
+    "echo \"$'\\x67it' diff --no-index /dev/null .env\"",
     # A bare `noglob` runs the command after it, which is the one checked: a
     # guarded word as an argument of something else is not a guarded verb.
     "noglob echo hi",
@@ -1225,6 +1245,12 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         '    spelled = None if name in ("git", "pytest") else _guarded_spelling(words[0])',
         "    spelled = None",
         "/usr/bin/g?t diff --no-index /dev/null ./.env",
+    ),
+    (
+        "a `$'...'` name decoded the way the shell decodes it",
+        "    command = _decode_ansi_c(command)",
+        "    command = command",
+        "$'\\x67it' diff --no-index /dev/null .env",
     ),
     (
         "a wrapper spelled with a `\\`, read on the string as typed",
