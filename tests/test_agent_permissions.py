@@ -408,6 +408,27 @@ _DENIED = [
     ("script -qc \"$'git' diff --no-index /dev/null .env\" /dev/null", "as a command of its own"),
     ("GIT_EXTERNAL_DIFF=/tmp/prog sh -c 'git diff HEAD'", "reaches the guarded command"),
     ("setarch x86_64" + " git diff HEAD" * 9, "too many to check"),
+    # A guarded name the shell builds before it looks it up (#404): quotes,
+    # backslashes and `$""` inside a command string, braces anywhere, and a
+    # glob in a path. Each runs git or pytest.
+    ("sh -c 'g\"\"it diff --no-index /dev/null ./.env'", "--no-index"),
+    ("script -qc 'g\\it diff --no-index /dev/null ./.env' /dev/null", "--no-index"),
+    ("sh -c 'g$\"\"it diff --no-index /dev/null ./.env'", "--no-index"),
+    ("sh -c 'g{,}it diff --no-index /dev/null ./.env'", "braces"),
+    ("script -qcg{,}it\\ diff\\ --no-index\\ /dev/null\\ ./.env /dev/null", "braces"),
+    ("sh -c '/usr/bin/g?t diff --no-index /dev/null ./.env'", "--no-index"),
+    ("sh -c 'py\"\"test -p evil'", "plugin"),
+    ("sh -c 'python3 -m py\"\"test -p evil'", "plugin"),
+    ("setarch x86_64 sh -c 'g\"\"it diff --no-index /dev/null ./.env'", "--no-index"),
+    ("watch 'g\"\"it diff --no-index /dev/null ./.env'", "where this guard cannot check it"),
+    ("env -S 'g\"\"it diff --no-index /dev/null ./.env'", "runs another command"),
+    ("{git,diff} --no-index /dev/null ./.env", "braces"),
+    ("g{i,x}t diff --no-index /dev/null ./.env", "braces"),
+    ("/usr/bin/g?t diff --no-index /dev/null ./.env", "--no-index"),
+    ("/usr/bin/g[i]t diff HEAD --output=x", "--output"),
+    ("/usr/bin/p?test -p evil", "plugin"),
+    ("setarch x86_64 /usr/bin/g?t diff --no-index /dev/null ./.env", "--no-index"),
+    ("timeout 5 /usr/bin/g?t diff --no-index /dev/null ./.env", "runs another command"),
     # `noglob` is a wrapper the permission matcher steps over, so these match
     # `Bash(pytest *)` and `Bash(git diff *)`. A bare `noglob` is zsh's
     # modifier, which runs the command after it, so that command is checked in
@@ -624,6 +645,17 @@ _PERMITTED = [
     "grep -rn 'git diff --no-index' docs",
     "rg 'git diff' docs",
     "setarch x86_64" + " git diff HEAD" * 8,
+    # A spelled-out name read loosely passes as it would spelled plainly, and
+    # quotes, braces and globs that build no guarded name are left alone.
+    "sh -c 'g\"\"it status'",
+    "/usr/bin/g?t status",
+    "ls /usr/bin/g*",
+    "sh -c 'ls /usr/bin/g?t'",
+    "cat {a,b}.txt",
+    "sh -c 'cp {a,b}.py /tmp'",
+    "sh -c \"awk -F: '$1 == \\\"root\\\" {print $7}' /etc/passwd\"",
+    "find . -name '*' -print",
+    "echo 'g\"\"it diff --no-index /dev/null ./.env'",
     # A bare `noglob` runs the command after it, which is the one checked: a
     # guarded word as an argument of something else is not a guarded verb.
     "noglob echo hi",
@@ -1181,6 +1213,18 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "_check_unlisted_program(words, env, redirections, cwd)",
         "pass",
         "setarch x86_64 git diff --no-index /dev/null ./.env",
+    ),
+    (
+        "a guarded name built with quotes inside a command string",
+        "        if text and _names_guarded(text):",
+        "        if text and _GUARDED_WORD_RE.search(text):",
+        "sh -c 'g\"\"it diff --no-index /dev/null ./.env'",
+    ),
+    (
+        "a command name a glob in a path or braces build",
+        '    spelled = None if name in ("git", "pytest") else _guarded_spelling(words[0])',
+        "    spelled = None",
+        "/usr/bin/g?t diff --no-index /dev/null ./.env",
     ),
     (
         "a wrapper spelled with a `\\`, read on the string as typed",
