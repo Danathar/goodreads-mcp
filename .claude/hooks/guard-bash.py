@@ -560,15 +560,30 @@ _GUARDED_WORD_RE = re.compile(r"\b(pytest|git)\b")
 # reads, but a command string a program hands to a shell (`sh -c 'g""it diff
 # ...'`) is one word to it, and braces and globs it leaves alone, so each check
 # that looked for `git` or `pytest` spelled out let these through (#404). A name built
-# from a variable (`G=gi; ${G}t diff ...`) is still not followed. Only a glob
-# with a `/` counts: a bare `g?t` matches files in the working directory, not
-# a program on the PATH.
+# from a variable (`G=gi; ${G}t diff ...`) is still not followed. A glob in a
+# path names the program it matches. A glob without a `/` is matched against
+# the files in the working directory and the first match is then looked up on
+# the PATH, so after `touch git`, `g?t diff ...` runs git; with more matches
+# the rest become its first arguments (`touch git grep; g* ...` runs `git grep
+# ...`). Which program that is depends on files this guard cannot see, so such
+# a name is refused rather than read. A word that is wildcards only (`*`,
+# `???`) is refused in command position too, but is not looked for anywhere
+# else: it stands for every file, and `ls *` would read as `git`.
 _SHELL_QUOTING_RE = re.compile(r"[\"'\\$]")
 _SPELLING_RE = re.compile(r"[\"'\\${},]")
 _BRACE_GROUP_RE = re.compile(r"\{([^{}]*,[^{}]*)\}")
 _GLOB_RE = re.compile(r"[*?[]")
 _BUILT_NAME_RE = re.compile(r"[\"'\\${}*?[]")
 _STRING_WORD_RE = re.compile(r"[\s();<>|&=]+")
+_ALL_WILDCARD_RE = re.compile(r"(?:[*?]|\[[^]]*\])+")
+# A wrapper's options and the values they take, which come before the command
+# it runs: `timeout 5 *` and `nice -n 5 *` run whatever `*` matches first.
+_WRAPPER_VALUE_RE = re.compile(r"-.*|\d+(?:\.\d+)?[smhd]?")
+# A glob longer than this is not matched: compiling one is what takes the time,
+# and a 330 KB path glob kept the hook past its 10-second timeout, after which
+# Claude Code runs the command unchecked. No file name is this long, so such a
+# word is read as one that could name a guarded program.
+_MAX_GLOB_NAME = 255
 # A word with more brace alternatives than this is read only with its braces
 # and commas taken out; the expansions grow with the product of the groups.
 _MAX_BRACE_FORMS = 32
@@ -671,7 +686,8 @@ def _decode_ansi_c_anywhere(text: str) -> str:
 def _guarded_spelling(word: str) -> str | None:
     """The guarded name the shell could run from this command word, if any:
     `git` or `pytest` when a glob in a path matches it, `{` when braces or
-    quoting build it. A name spelled plainly is read by the callers."""
+    quoting build it, `*` when a glob without a `/` could match it. A name
+    spelled plainly is read by the callers."""
     if not _BUILT_NAME_RE.search(word):
         return None
     plain = _SHELL_QUOTING_RE.sub("", word)
@@ -692,16 +708,32 @@ def _guarded_spelling(word: str) -> str | None:
         name = form.rsplit("/", 1)[-1]
         if name in ("git", "pytest"):
             return "{" if name != word.rsplit("/", 1)[-1] else name
-        if "/" in form and _GLOB_RE.search(name):
-            for guarded in ("git", "pytest"):
-                if fnmatch.fnmatchcase(guarded, name):
-                    return guarded
+        if not _GLOB_RE.search(name):
+            continue
+        if len(name) > _MAX_GLOB_NAME:
+            return "*"
+        for guarded in ("git", "pytest"):
+            if fnmatch.fnmatchcase(guarded, name):
+                return guarded if "/" in form else "*"
     return None
 
 
 def _could_name_guarded(word: str) -> bool:
-    """Whether the shell could run `git` or `pytest` from this command word."""
-    return _guarded_spelling(word) is not None
+    """Whether the shell could run `git` or `pytest` from this command word.
+    A word of wildcards only is left out: it matches every name."""
+    return _guarded_spelling(word) is not None and not _ALL_WILDCARD_RE.fullmatch(
+        _SPELLING_RE.sub("", word)
+    )
+
+
+def _wrapped_word(words: list[str]) -> str:
+    """The word a wrapper would run, read past its options, the numbers they
+    take and any assignments; `""` when there is none. Only a wildcard there is
+    looked at, so an option value read as the command costs nothing."""
+    for word in words:
+        if not (_WRAPPER_VALUE_RE.fullmatch(word) or _ASSIGNMENT_RE.match(word)):
+            return word
+    return ""
 
 
 def _names_guarded(text: str, pattern: re.Pattern[str] = _GUARDED_WORD_RE) -> bool:
@@ -1126,7 +1158,9 @@ def _starts_guarded(words: list[str]) -> bool:
     return (
         name in ("git", "pytest")
         or bool(_PYTHON_RE.match(name) and words[1:3] == ["-m", "pytest"])
-        or _could_name_guarded(words[0])
+        # A bare glob with nothing after it is an argument (`ls g*`): it can
+        # make the command only from the names of files it matches.
+        or (_could_name_guarded(words[0]) and (len(words) > 1 or _guarded_spelling(words[0]) != "*"))
     )
 
 
@@ -1263,7 +1297,9 @@ def _check_command(words: list[str], cwd: Path, inherited: list[str] | None = No
     # A wrapper the guard cannot see through, in front of something it guards.
     # A wrapper spelled with a `\` never gets this far: `decide` refuses it on
     # the string as typed, since an unquoted `\` is gone from `words` by now.
-    if name in _WRAPPERS and _names_guarded(" ".join(words)):
+    if name in _WRAPPERS and (
+        _names_guarded(" ".join(words)) or _guarded_spelling(_wrapped_word(words[1:])) == "*"
+    ):
         raise Denied(
             f"`{words[0]}` runs another command and this guard does not model "
             f"its options, so it cannot tell what `{words[0]}` would run or "
@@ -1306,6 +1342,15 @@ def _check_command(words: list[str], cwd: Path, inherited: list[str] | None = No
             "before running it, and it can expand to `git` or `pytest`, which "
             "this guard checks only when the name is spelled out. Spell the "
             "name out"
+        )
+    if spelled == "*":
+        raise Denied(
+            f"`{words[0]}` is a wildcard the shell replaces with the names of "
+            "files in the working directory, and the first of them becomes the "
+            "command it runs: after `touch git`, `g?t diff ...` runs `git diff "
+            "...`, with any other matching files as its first arguments. It can "
+            "match `git` or `pytest`, which this guard checks only when the name "
+            "is spelled out. Spell the name out"
         )
     if spelled is not None:
         words, name = [spelled, *words[1:]], spelled

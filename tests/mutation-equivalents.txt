@@ -27,3 +27,9 @@
 # was: name = value.rsplit("/", 1)[-1]
 # now: name = value.rsplit("/", 2)[-1]
 # why: only the last part is read, and it is the same either way
+
+file: .claude/hooks/guard-bash.py
+line: 1163
+was: or (_could_name_guarded(words[0]) and (len(words) > 1 or _guarded_spelling(words[0]) != "*"))
+now: or (_could_name_guarded(words[0]) and (len(words) > 1 or _guarded_spelling(words[-1]) != "*"))
+why: the right side of the `or` is reached only when there is one word, so words[-1] is words[0]
