@@ -740,8 +740,17 @@ def _names_guarded(text: str, pattern: re.Pattern[str] = _GUARDED_WORD_RE) -> bo
     """Whether a shell handed `text` could run a guarded command: `pattern`
     found as typed or with the quoting the shell takes out removed, or a word
     the shell would expand into a guarded name. Read with each `$'...'`
-    decoded too (#406)."""
+    decoded too (#406), and with each extglob group written as the `*` it
+    matches no more than (`/usr/bin/g@(i)t` is `/usr/bin/g*t`)."""
     decoded = _decode_ansi_c_anywhere(text)
+    forms = [text] if decoded == text else [text, decoded]
+    for form in list(forms):
+        flattened = form
+        while _EXTGLOB_GROUP_RE.search(flattened):
+            _spend()
+            flattened = _EXTGLOB_GROUP_RE.sub("*", flattened)
+        if flattened != form:
+            forms.append(flattened)
     return any(
         pattern.search(form)
         or pattern.search(_SPELLING_RE.sub("", form))
@@ -750,8 +759,14 @@ def _names_guarded(text: str, pattern: re.Pattern[str] = _GUARDED_WORD_RE) -> bo
             for word in _STRING_WORD_RE.split(form)
             if _BUILT_NAME_RE.search(word)
         )
-        for form in ((text,) if decoded == text else (text, decoded))
+        for form in forms
     )
+
+
+# An innermost extglob group, which `_names_guarded` reads as `*`. Quotes are
+# not taken into account here: reading a quoted group as `*` only means a
+# string is checked that need not have been. See `_EXTGLOB_OPENERS`.
+_EXTGLOB_GROUP_RE = re.compile(r"[@?*+!]\([^()]*\)")
 
 # A word as typed, before the shell takes quotes and backslashes out of it.
 # Claude Code's matcher finds a wrapper in the text as typed, cutting the
@@ -771,12 +786,20 @@ def _raw_tokens(command: str) -> list[str]:
 
     Quotes and backslashes stay in the word; a quoted or escaped character
     does not end it or start an operator.
+
+    Whether the last token is an operator is kept as it is built rather than
+    read back from the token: a run of `(` is one token, and reading the
+    whole of it again at every character made a 40 KB run keep the hook past
+    its 10-second timeout, after which Claude Code runs the command
+    unchecked (`git diff --no-index /dev/null ./.env #((((...`).
     """
     tokens: list[str] = []
     word: list[str] = []
     quote = ""
+    operator_last = False
     i = 0
     while i < len(command):
+        _spend()
         ch = command[i]
         if quote:
             word.append(ch)
@@ -795,11 +818,13 @@ def _raw_tokens(command: str) -> list[str]:
             if word:
                 tokens.append("".join(word))
                 word = []
+                operator_last = False
             if ch in _PUNCTUATION:
-                if tokens and _is_operator(tokens[-1]) and command[i - 1] == tokens[-1][-1]:
+                if operator_last and command[i - 1] == tokens[-1][-1]:
                     tokens[-1] += ch
                 else:
                     tokens.append(ch)
+                operator_last = True
         else:
             word.append(ch)
         i += 1
@@ -1475,6 +1500,124 @@ def _is_bare_assignment(words: list[str]) -> bool:
     return bool(words) and all(_ASSIGNMENT_RE.match(word) for word in words)
 
 
+# The characters that open an extglob group when an unquoted `(` touches them.
+# With `shopt -s extglob` on, `@(...)`, `?(...)`, `*(...)`, `+(...)` and
+# `!(...)` are part of the word they touch and match files the way `*` does,
+# and Claude Code runs a call one line at a time, so a first line
+# `shopt -s extglob` turns them on for the next. The lexer here ends a word at
+# the `(`, so `/usr/bin/g@(i)t diff /dev/null ./.env` reached the checks as
+# `/usr/bin/g@`, a subshell and a command named `t`, none of them git, and bash
+# printed `.env`. See `_extglob_flattened`.
+_EXTGLOB_OPENERS = frozenset("@?*+!")
+
+
+def _mask_quotes(command: str) -> str:
+    """The command with every quoted or escaped character replaced by `Q`.
+
+    The copy is the same length as the command, so an index into one is an
+    index into the other. `$'...'` is masked as a quote in which a backslash
+    escapes the next character, as bash reads it.
+    """
+    masked: list[str] = []
+    quote = ""
+    i = 0
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            masked.append("Q")
+            if ch == "\\" and quote != "'" and i + 1 < len(command):
+                i += 1
+                masked.append("Q")
+            elif ch == quote[-1]:
+                quote = ""
+        elif ch == "\\":
+            masked.append("Q")
+            if i + 1 < len(command):
+                i += 1
+                masked.append("Q")
+        elif ch == "$" and command[i + 1 : i + 2] == "'":
+            masked.append("QQ")
+            i += 1
+            quote = "$'"
+        elif ch in "'\"":
+            masked.append("Q")
+            quote = ch
+        else:
+            masked.append(ch)
+        i += 1
+    return "".join(masked)
+
+
+def _extglob_flattened(command: str) -> tuple[str, str] | None:
+    """The command with each unquoted extglob group written as `*`, and the
+    first group as typed, or None when it has none.
+
+    Read as `/usr/bin/g*t`, the name in `_EXTGLOB_OPENERS`' example is the
+    path glob the checks already read as git. A group can only match what `*`
+    matches, so the reading can only refuse more: `ls @(README|AGENTS).md`
+    reads as `ls *.md` and still passes. A group runs to its matching `)` in
+    the quote-masked command, so a quoted `'@'(x)` or `@'('` is no group, and
+    an opener with no matching `)` is left as typed. The `*` a group is
+    written as opens the next one when a `(` touches it (`g@(i)(t)` is `g*`),
+    as bash reads `*(t)`. A backslash-newline is taken out first, as bash
+    takes it out before it reads a word.
+    """
+    command = command.replace("\\\n", "")
+    masked = _mask_quotes(command)
+    closing: dict[int, int] = {}
+    opened: list[int] = []
+    for index, ch in enumerate(masked):
+        _spend()
+        if ch == "(":
+            opened.append(index)
+        elif ch == ")" and opened:
+            closing[opened.pop()] = index
+    out: list[str] = []
+    unquoted_opener = False
+    first = None
+    index = 0
+    while index < len(command):
+        _spend()
+        if masked[index] == "(" and unquoted_opener and index in closing:
+            close = closing[index]
+            first = first or command[index - 1 : close + 1]
+            out[-1] = "*"
+            index = close + 1
+            continue
+        out.append(command[index])
+        unquoted_opener = masked[index] in _EXTGLOB_OPENERS
+        index += 1
+    if first is None:
+        return None
+    return "".join(out), first
+
+
+def _decide_extglob(command: str, cwd: str | os.PathLike[str] | None) -> str | None:
+    """`_decide`, then the same with each extglob group written as `*`.
+
+    The second reading only ever adds a refusal; a command refused as typed
+    keeps the reason it gets as typed.
+    """
+    reason = _decide(command, cwd)
+    if reason is not None:
+        return reason
+    flattened = _extglob_flattened(command)
+    if flattened is None:
+        return None
+    rewritten, group = flattened
+    reason = _decide(rewritten, cwd)
+    if reason is None:
+        return None
+    if len(group) > 40:
+        group = group[:37] + "..."
+    return (
+        f"`{group}` is an extglob pattern: with `shopt -s extglob` on, bash "
+        "reads it as part of the word it touches and matches the word against "
+        "files the way `*` does, and the command is refused once the pattern "
+        f"is read as `*`: {reason}"
+    )
+
+
 def decide(command: str, cwd: str | os.PathLike[str] | None = None) -> str | None:
     """Return the reason the command is denied, or None to leave it alone."""
     # A program's command string is decided by a nested call, which shares the
@@ -1484,7 +1627,7 @@ def decide(command: str, cwd: str | os.PathLike[str] | None = None) -> str | Non
     if outermost:
         _deadline = time.monotonic() + _BUDGET_SECONDS
     try:
-        return _decide(command, cwd)
+        return _decide_extglob(command, cwd)
     except _OverBudget as exc:
         if outermost:
             return str(exc)

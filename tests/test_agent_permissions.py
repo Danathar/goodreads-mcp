@@ -470,6 +470,23 @@ _DENIED = [
     ("timeout 5 * diff --no-index /dev/null .env", "runs another command"),
     ("nice -n 5 ??? diff --no-index /dev/null .env", "runs another command"),
     ("env FOO=1 * diff --no-index /dev/null .env", "runs another command"),
+    # With `shopt -s extglob` on, which a first line turns on for the next
+    # (Claude Code runs a call one line at a time), `@(...)` and its four
+    # siblings match files the way `*` does, so each of these runs git or
+    # pytest. The lexer ends a word at the `(`, so the name read as typed is
+    # none of them.
+    ("shopt -s extglob\n/usr/bin/g@(i)t diff --no-index /dev/null ./.env", "extglob"),
+    ("shopt -s extglob\n/usr/bin/@(git) diff /dev/null ./.env", "extglob"),
+    ("shopt -s extglob\n/usr/bin/g?(i)t log --output=.env -1", "extglob"),
+    ("shopt -s extglob\n/usr/bin/g+(i)t diff --no-index /dev/null .env", "extglob"),
+    ("shopt -s extglob\n/usr/bin/g*(i)t diff --no-index /dev/null .env", "extglob"),
+    ("shopt -s extglob\n/usr/bin/py!(x)est -p evil", "extglob"),
+    ("shopt -s extglob\ntouch git; g@(i)t diff /dev/null ./.env", "extglob"),
+    ("shopt -s extglob\n/usr/bin/g@(i)(t) diff /dev/null ./.env", "extglob"),
+    ("shopt -s extglob\n/usr/bin/g@\\\n(i)t diff /dev/null ./.env", "extglob"),
+    ("shopt -s extglob\nsetarch x86_64 /usr/bin/g@(i)t diff /dev/null ./.env", "extglob"),
+    ("bash -c $'shopt -s extglob\\n/usr/bin/g@(i)t diff /dev/null ./.env'", "extglob"),
+    ("shopt -s extglob\nsh -c '/usr/bin/g@(i)t diff /dev/null ./.env'", "extglob"),
     # `noglob` is a wrapper the permission matcher steps over, so these match
     # `Bash(pytest *)` and `Bash(git diff *)`. A bare `noglob` is zsh's
     # modifier, which runs the command after it, so that command is checked in
@@ -715,6 +732,12 @@ _PERMITTED = [
     "sh -c 'ls *'",
     "nice ls *",
     "timeout 5 grep -n x *",
+    # An extglob group that is an argument, or quoted, names no program.
+    "shopt -s extglob\ngit diff HEAD",
+    "shopt -s extglob\nls @(README|AGENTS).md",
+    "git log --grep='@(x)' -1",
+    'git diff HEAD -- "@(x)"',
+    "echo '/usr/bin/g@(i)t'",
     "nice -n 5 make",
     "env FOO=1",
     "[ -f x ]",
@@ -972,6 +995,88 @@ def test_a_glob_longer_than_a_file_name_is_not_matched(guard, monkeypatch):
     assert guard._guarded_spelling("/usr/bin/g" + "*" * 254) == "git"
     assert guard._guarded_spelling("/usr/bin/g" + "*" * 255) == "*"
     assert lengths and max(lengths) <= guard._MAX_GLOB_NAME, lengths
+
+
+def test_a_long_run_of_operators_is_read_in_one_pass(guard):
+    """A run of `(` is one token, and reading it again at every character
+    kept a 40 KB command past the 10-second hook timeout, so the `git diff
+    --no-index` in front of it ran unchecked. The budget is shrunk to a
+    fraction of what the old reading took on this command."""
+    slow = "git diff --no-index /dev/null ./.env #" + "(" * 20000
+    tokens = guard._raw_tokens("a (( b ;; c")
+    assert tokens == ["a", "((", "b", ";;", "c"], tokens
+    reason = guard.decide(slow, _ROOT)
+    assert reason is not None and "--no-index" in reason, reason
+    started = guard.time.monotonic()
+    guard._raw_tokens(slow)
+    assert guard.time.monotonic() - started < 1.0
+
+
+@pytest.mark.parametrize(
+    ("command", "masked"),
+    [
+        # A backslash in double quotes escapes the quote after it.
+        ('a"b\\"(c"d', "aQQQQQQQd"),
+        # In single quotes it does not, so the `'` after it ends the string.
+        ("a'b\\'(c", "aQQQQ(c"),
+        ("\\(x", "QQx"),
+        ("a\\", "aQ"),
+        ("a\\(", "aQQ"),
+        # In `$'...'` it does, as in double quotes.
+        ("$'a\\'(b'c", "QQQQQQQQc"),
+        ("$x(y)", "$x(y)"),
+        ("a$", "a$"),
+        ('"a', "QQ"),
+        ("$'a\\", "QQQQ"),
+        ('"a\\', "QQQ"),
+    ],
+)
+def test_quoted_characters_are_masked_in_place(guard, command, masked):
+    """The masked copy is as long as the command, so an index into one is an
+    index into the other, and nothing quoted or escaped is left as syntax."""
+    assert guard._mask_quotes(command) == masked
+
+
+@pytest.mark.parametrize(
+    ("command", "flattened"),
+    [
+        ("/usr/bin/g@(i)t diff", ("/usr/bin/g*t diff", "@(i)")),
+        ("a@(x)", ("a*", "@(x)")),
+        ("*(t)", ("*", "*(t)")),
+        # The `*` a group becomes opens the next group a `(` touches.
+        ("g@(i)(t)", ("g*", "@(i)")),
+        ("@(a(b)c)", ("*", "@(a(b)c)")),
+        # A `)` with nothing open is left as typed.
+        ("a)@(b)", ("a)*", "@(b)")),
+        # The first group is the one named.
+        ("@(a) @(b)", ("* *", "@(a)")),
+        ("x\\\n@(y)", ("x*", "@(y)")),
+        ('"@(x)" ?(y)', ('"@(x)" *', "?(y)")),
+        ("$'@(x)' +(y)", ("$'@(x)' *", "+(y)")),
+        ("\\@(x) !(y)", ("\\@(x) *", "!(y)")),
+        # Quoted, unclosed or with no opener in front: no group.
+        ("'@'(x)", None),
+        ("@'('x)", None),
+        ("x @(a", None),
+        ("a(b)", None),
+        ("(a)", None),
+    ],
+)
+def test_an_extglob_group_is_read_as_a_star(guard, command, flattened):
+    assert guard._extglob_flattened(command) == flattened
+
+
+@pytest.mark.parametrize("length", [40, 41, 53])
+def test_an_extglob_refusal_names_the_group_cut_to_forty_characters(guard, length):
+    group = "@(" + "i" * (length - 3) + ")"
+    reason = guard.decide(f"/usr/bin/g{group}t diff --no-index /dev/null .env", _ROOT)
+    shown = group if length <= 40 else group[:37] + "..."
+    assert reason is not None and reason.startswith(f"`{shown}` is an extglob pattern"), reason
+
+
+def test_operator_characters_join_only_when_adjacent(guard):
+    assert guard._raw_tokens("a ( ( b") == ["a", "(", "(", "b"]
+    assert guard._raw_tokens("a |&> b") == ["a", "|&>", "b"]
 
 
 def test_the_guard_budget_ends_well_before_the_hook_timeout(guard):
@@ -1333,6 +1438,18 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "    command = _decode_ansi_c(command)",
         "    command = command",
         "$'\\x67it' diff --no-index /dev/null .env",
+    ),
+    (
+        "a command name that is an extglob group",
+        "    reason = _decide(rewritten, cwd)",
+        "    reason = None",
+        "shopt -s extglob\n/usr/bin/g@(i)t diff --no-index /dev/null ./.env",
+    ),
+    (
+        "an extglob command name inside a command string",
+        "        if flattened != form:",
+        "        if False:",
+        "bash -c $'shopt -s extglob\\n/usr/bin/g@(i)t diff /dev/null ./.env'",
     ),
     (
         "a wrapper spelled with a `\\`, read on the string as typed",

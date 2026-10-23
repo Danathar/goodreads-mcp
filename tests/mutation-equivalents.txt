@@ -33,3 +33,21 @@ line: 1163
 was: or (_could_name_guarded(words[0]) and (len(words) > 1 or _guarded_spelling(words[0]) != "*"))
 now: or (_could_name_guarded(words[0]) and (len(words) > 1 or _guarded_spelling(words[-1]) != "*"))
 why: the right side of the `or` is reached only when there is one word, so words[-1] is words[0]
+
+file: .claude/hooks/guard-bash.py
+line: 746
+was: forms = [text] if decoded == text else [text, decoded]
+now: forms = [text] if False else [text, decoded]
+why: when nothing decodes, the second form is the first again, and reading the same text twice gives the same answer
+
+file: .claude/hooks/guard-bash.py
+line: 1528
+was: if ch == "\\" and quote != "'" and i + 1 < len(command):
+now: if ch == "\\" and quote != "'" and i + 2 < len(command):
+why: it differs only when the escaped character is the last one, which is inside the quote and masked either way, with nothing after it to read
+
+file: .claude/hooks/guard-bash.py
+line: 1581
+was: if masked[index] == "(" and unquoted_opener and index in closing:
+now: if unquoted_opener and index in closing:
+why: every key of closing is the index of a `(` in masked, so the dropped test is implied by the one kept
