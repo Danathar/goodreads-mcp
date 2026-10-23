@@ -447,6 +447,29 @@ _DENIED = [
     ("sh -c $'\\x67it diff --no-index /dev/null .env'", "as a command of its own"),
     ("echo \"$($'\\x67it' diff --no-index /dev/null .env)\"", "command substitution"),
     ("echo $'\\'' $(git push --force origin main)", "command substitution"),
+    # A glob without a `/` is matched against the files in the working
+    # directory and the first match is looked up on the PATH, so after `touch
+    # git` each of these runs git or pytest (#410). A word of wildcards only
+    # matches every file, so it is refused where a command name goes.
+    ("touch git; g?t diff --no-index /dev/null ./.env", "wildcard"),
+    ("g[i]t diff --no-index /dev/null .env", "wildcard"),
+    ("gi* diff --no-index /dev/null .env", "wildcard"),
+    ("* diff --no-index /dev/null .env", "wildcard"),
+    ("??? diff --no-index /dev/null .env", "wildcard"),
+    ("g?t status", "`g?t` is a wildcard"),
+    ("FOO=1 g?t status", "wildcard"),
+    ("pyt*st --pastebin=all", "wildcard"),
+    ("python3 -m py?est -p evil", "wildcard"),
+    ("setarch x86_64 g?t diff --no-index /dev/null .env", "wildcard"),
+    ("setarch x86_64 g?t status", "wildcard"),
+    ("setarch x86_64 {git,diff,--no-index,/dev/null,./.env}", "braces"),
+    ("sh -c 'g?t diff --no-index /dev/null .env'", "wildcard"),
+    ("script -qc 'gi? diff --no-index /dev/null .env' /dev/null", "as a command of its own"),
+    ("find . -exec g?t diff --no-index /dev/null .env \\;", "where this guard cannot check it"),
+    ("timeout 5 g?t diff --no-index /dev/null .env", "runs another command"),
+    ("timeout 5 * diff --no-index /dev/null .env", "runs another command"),
+    ("nice -n 5 ??? diff --no-index /dev/null .env", "runs another command"),
+    ("env FOO=1 * diff --no-index /dev/null .env", "runs another command"),
     # `noglob` is a wrapper the permission matcher steps over, so these match
     # `Bash(pytest *)` and `Bash(git diff *)`. A bare `noglob` is zsh's
     # modifier, which runs the command after it, so that command is checked in
@@ -680,6 +703,21 @@ _PERMITTED = [
     "echo $'hello\\tworld'",
     "echo $'it\\'s' 'git diff --no-index /dev/null .env'",
     "echo \"$'\\x67it' diff --no-index /dev/null .env\"",
+    # A wildcard that is an argument, or that matches no guarded name, is left
+    # alone (#410): only where a command name goes does it run a program.
+    "ls g?t",
+    "ls g*",
+    "ls py*",
+    "ls *",
+    "cat *.py",
+    "wc -l *",
+    "cp * /tmp/x",
+    "sh -c 'ls *'",
+    "nice ls *",
+    "timeout 5 grep -n x *",
+    "nice -n 5 make",
+    "env FOO=1",
+    "[ -f x ]",
     # A bare `noglob` runs the command after it, which is the one checked: a
     # guarded word as an argument of something else is not a guarded verb.
     "noglob echo hi",
@@ -906,6 +944,34 @@ def test_a_command_too_slow_to_check_is_refused(guard, monkeypatch):
     # The deadline belongs to one decision: the next one starts afresh.
     assert guard._deadline is None
     assert guard.decide("git diff HEAD", _ROOT) is None
+
+
+def test_a_glob_longer_than_a_file_name_is_not_matched(guard, monkeypatch):
+    """Compiling a long glob is where the time goes (#410).
+
+    A 330 KB glob in a path kept the guard busy for about 15 seconds, past the
+    10-second hook timeout, so a `git diff --no-index` after it ran unchecked.
+    No file name is longer than 255 bytes, so a longer glob is read as one that
+    could name a guarded program instead of being matched.
+    """
+    lengths: list[int] = []
+    match = guard.fnmatch.fnmatchcase
+    monkeypatch.setattr(
+        guard.fnmatch,
+        "fnmatchcase",
+        lambda name, pattern: lengths.append(len(pattern)) or match(name, pattern),
+    )
+    long_glob = "/usr/bin/" + "g?*[a]{x,y}" * 30000
+    reason = guard.decide(f"ls {long_glob}; git diff --no-index /dev/null .env", _ROOT)
+    assert reason is not None and "--no-index" in reason, reason
+    reason = guard.decide(f"{long_glob} status", _ROOT)
+    assert reason is not None and "wildcard" in reason, reason
+    assert guard.decide(f"ls {long_glob}", _ROOT) is None
+    # Only a glob: a long name the braces build is still read as typed.
+    assert guard.decide("{" + "a" * 300 + ",b} status", _ROOT) is None
+    assert guard._guarded_spelling("/usr/bin/g" + "*" * 254) == "git"
+    assert guard._guarded_spelling("/usr/bin/g" + "*" * 255) == "*"
+    assert lengths and max(lengths) <= guard._MAX_GLOB_NAME, lengths
 
 
 def test_the_guard_budget_ends_well_before_the_hook_timeout(guard):
@@ -1249,6 +1315,18 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         '    spelled = None if name in ("git", "pytest") else _guarded_spelling(words[0])',
         "    spelled = None",
         "/usr/bin/g?t diff --no-index /dev/null ./.env",
+    ),
+    (
+        "a command name that is a wildcard without a `/`",
+        '    if spelled == "*":',
+        "    if False:",
+        "touch git; g?t diff --no-index /dev/null ./.env",
+    ),
+    (
+        "a wildcard where a wrapper's command goes",
+        '_names_guarded(" ".join(words)) or _guarded_spelling(_wrapped_word(words[1:])) == "*"',
+        '_names_guarded(" ".join(words))',
+        "timeout 5 * diff --no-index /dev/null .env",
     ),
     (
         "a `$'...'` name decoded the way the shell decodes it",
