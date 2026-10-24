@@ -4,8 +4,12 @@ The script is the `mutation` job in `ci.yml`: it makes small deliberate
 breakages (mutants) on the lines a pull request changes and fails on one no
 test notices, unless `tests/mutation-equivalents.txt` lists it. A script that
 quietly builds no mutants, or builds them on the wrong line, passes every
-change, so its pieces are checked here on small sources held in memory. No
-test here runs pytest, git or a mutant; the CI job is what does that.
+change, so its pieces are checked here on small sources held in memory.
+
+The verdict is checked too. The CI job only ever shows the script passing a
+change, and a script that stopped counting survivors would pass every change
+the same way, so `run()` is driven here over a throwaway git repository with
+a one-line change and a test that does or does not notice each mutant.
 """
 
 from __future__ import annotations
@@ -14,6 +18,8 @@ import ast
 import importlib.util
 from pathlib import Path
 import re
+import signal
+import subprocess
 
 import pytest
 
@@ -272,3 +278,192 @@ def test_the_ci_job_runs_the_script_from_the_merge_base_with_full_history():
     run = job.step("Run mutants on changed lines")
     assert run.run.strip() == 'python scripts/mutate_changed.py --base "origin/$BASE_REF"'
     assert run.env.get("BASE_REF") == "${{ github.base_ref }}"
+
+
+# --------------------------------------------------------------------------
+# The verdict on a change
+# --------------------------------------------------------------------------
+
+_BEFORE = "def big(n):\n    return False\n"
+_AFTER = "def big(n):\n    return n > 1\n"
+_CHANGED = "goodreads_mcp/m.py"
+
+# The test file loads the module by path, so the installed package is never
+# the one it reads; naming the package is what selects it for a mutant.
+_TEST_FILE = """\
+import importlib.util
+import pathlib
+
+_PATH = pathlib.Path(__file__).resolve().parents[1] / "goodreads_mcp" / "m.py"
+_SPEC = importlib.util.spec_from_file_location("m", _PATH)
+m = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(m)
+
+
+def test_m():
+{body}
+"""
+
+# Kills every mutant of `return n > 1`.
+_STRONG = "    assert m.big(2) is True\n    assert m.big(1) is False\n"
+# Kills only `return None`.
+_WEAK = "    assert m.big(5)\n"
+_WEAK_SURVIVORS = {"return n >= 1", "return n > 2", "return n > 0"}
+
+
+def _git_in(root: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *args],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+
+
+@pytest.fixture
+def change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A repository on branch `pr`, one commit past `main`, that the script reads as its own."""
+    # `run()` installs its own SIGINT/SIGTERM/SIGHUP handlers; give pytest its own back.
+    names = [name for name in ("SIGINT", "SIGTERM", "SIGHUP") if hasattr(signal, name)]
+    handlers = {name: signal.getsignal(getattr(signal, name)) for name in names}
+
+    def make(after: str = _AFTER, test_body: str | None = _STRONG, equivalents: str = "", before: str = _BEFORE):
+        (tmp_path / "goodreads_mcp").mkdir(exist_ok=True)
+        (tmp_path / "tests").mkdir(exist_ok=True)
+        (tmp_path / _CHANGED).write_text(before, encoding="utf-8")
+        if test_body is not None:
+            (tmp_path / "tests" / "test_m.py").write_text(_TEST_FILE.format(body=test_body), encoding="utf-8")
+        (tmp_path / "tests" / "mutation-equivalents.txt").write_text(equivalents, encoding="utf-8")
+        _git_in(tmp_path, "init", "-q", "-b", "main")
+        _git_in(tmp_path, "add", "-A")
+        _git_in(tmp_path, "commit", "-q", "-m", "base")
+        _git_in(tmp_path, "checkout", "-q", "-b", "pr")
+        (tmp_path / _CHANGED).write_text(after, encoding="utf-8")
+        _git_in(tmp_path, "commit", "-q", "--allow-empty", "-am", "change")
+        monkeypatch.setattr(mc, "ROOT", tmp_path)
+        monkeypatch.setattr(mc, "EQUIVALENTS", tmp_path / "tests" / "mutation-equivalents.txt")
+        return tmp_path
+
+    yield make
+    for name, handler in handlers.items():
+        signal.signal(getattr(signal, name), handler)
+
+
+def _verdicts(out: str) -> dict[str, str]:
+    """{mutated line: verdict} from the script's per-mutant lines."""
+    found = re.findall(r"^\[\d+/\d+\] (\w+)\s+goodreads_mcp/m\.py:\d+ \[[^]]+\] (.+)$", out, re.M)
+    return {now: verdict for verdict, now in found}
+
+
+def test_a_change_whose_tests_notice_every_mutant_passes(change, capfd):
+    root = change()
+    assert mc.run("main", list_only=False, timeout=30) == 0
+    out = capfd.readouterr().out
+    assert _verdicts(out) == {
+        "return n >= 1": "killed",
+        "return n > 2": "killed",
+        "return n > 0": "killed",
+        "return None": "killed",
+    }
+    assert "no unlisted survivor" in out
+    assert (root / _CHANGED).read_text(encoding="utf-8") == _AFTER
+
+
+def test_a_change_whose_tests_miss_a_mutant_fails_and_prints_its_entry(change, capfd):
+    root = change(test_body=_WEAK)
+    assert mc.run("main", list_only=False, timeout=30) == 1
+    out = capfd.readouterr().out
+    verdicts = _verdicts(out)
+    assert {now for now, verdict in verdicts.items() if verdict == "SURVIVED"} == _WEAK_SURVIVORS
+    assert verdicts["return None"] == "killed"
+    assert "3 mutants survived" in out
+    # What it prints is what the list takes, so a reviewer can paste it.
+    entries = out.split("its entry with the reason:\n", 1)[1]
+    keys = mc.parse_equivalents(entries.replace("TODO: why no test can tell this mutant apart", "x"))
+    assert keys == {(_CHANGED, 2, "return n > 1", now) for now in _WEAK_SURVIVORS}
+    assert (root / _CHANGED).read_text(encoding="utf-8") == _AFTER
+
+
+def test_a_survivor_the_list_names_passes_and_one_it_does_not_still_fails(change, capfd):
+    listed = sorted(_WEAK_SURVIVORS)
+    entry = "file: {}\nline: 2\nwas: return n > 1\nnow: {}\nwhy: x\n"
+    change(test_body=_WEAK, equivalents="\n".join(entry.format(_CHANGED, now) for now in listed))
+    assert mc.run("main", list_only=False, timeout=30) == 0
+    out = capfd.readouterr().out
+    assert {now for now, verdict in _verdicts(out).items() if verdict == "listed"} == _WEAK_SURVIVORS
+    assert "3 survivors are listed" in out
+
+    # The key carries the line: the same entry one line off excuses nothing.
+    mc.EQUIVALENTS.write_text(
+        "\n".join(entry.format(_CHANGED, now).replace("line: 2", "line: 3") for now in listed), encoding="utf-8"
+    )
+    assert mc.run("main", list_only=False, timeout=30) == 1
+
+
+def test_a_changed_file_no_test_loads_fails(change, capfd):
+    root = change(test_body=None)
+    assert mc.run("main", list_only=False, timeout=30) == 1
+    captured = capfd.readouterr()
+    assert "no test file loads it" in captured.err
+    assert set(_verdicts(captured.out).values()) == {"SURVIVED"}
+    assert (root / _CHANGED).read_text(encoding="utf-8") == _AFTER
+
+
+def test_tests_that_already_fail_stop_the_run_before_any_mutant(change, capfd):
+    root = change(test_body="    assert False\n")
+    assert mc.run("main", list_only=False, timeout=30) == 2
+    captured = capfd.readouterr()
+    assert "fail on the unmodified code" in captured.err
+    assert _verdicts(captured.out) == {}
+    assert (root / _CHANGED).read_text(encoding="utf-8") == _AFTER
+
+
+def test_a_list_that_does_not_parse_stops_the_run(change, capfd):
+    change(equivalents="file: goodreads_mcp/m.py\n")
+    assert mc.run("main", list_only=False, timeout=30) == 2
+    assert "has no line, was, now, why" in capfd.readouterr().err
+
+
+def test_a_change_outside_the_targets_passes_without_running_anything(change, capfd, monkeypatch):
+    root = change(after=_BEFORE)
+    (root / "tests" / "notes.py").write_text("x = 1\n", encoding="utf-8")
+    _git_in(root, "add", "-A")
+    _git_in(root, "commit", "-q", "-m", "outside")
+    monkeypatch.setattr(mc, "_run_tests", lambda *a, **k: pytest.fail("ran tests"))
+    assert mc.run("main", list_only=False, timeout=30) == 0
+    assert "no changed .py lines" in capfd.readouterr().out
+
+
+def test_a_mutant_that_hangs_counts_as_killed(change, capfd):
+    before = "def count(n):\n    while n > 0:\n        n -= 2\n    return n\n"
+    root = change(before=before, after=before.replace("n -= 2", "n -= 1"), test_body="    assert m.count(3) == 0\n")
+    assert mc.run("main", list_only=False, timeout=8) == 0
+    out = capfd.readouterr().out
+    assert _verdicts(out) == {"n -= 2": "killed", "n -= 0": "killed"}
+    assert "n -= 1" in (root / _CHANGED).read_text(encoding="utf-8")
+
+
+def test_the_file_is_restored_when_the_run_is_stopped_mid_mutant(change, capfd, monkeypatch):
+    root = change()
+    seen = []
+
+    def stopped(tests, timeout, cache, quiet=True):
+        if not quiet:
+            return "passed"  # the clean run
+        seen.append((root / _CHANGED).read_text(encoding="utf-8"))
+        raise mc._Stop("SIGTERM")
+
+    monkeypatch.setattr(mc, "_run_tests", stopped)
+    assert mc.run("main", list_only=False, timeout=30) == 1
+    assert len(seen) == 1 and seen[0] != _AFTER, "the mutant was on disk when the run stopped"
+    assert (root / _CHANGED).read_text(encoding="utf-8") == _AFTER
+    assert "stopped by SIGTERM" in capfd.readouterr().err
+
+
+def test_list_prints_the_mutants_and_runs_no_test(change, capfd, monkeypatch):
+    change()
+    monkeypatch.setattr(mc, "_run_tests", lambda *a, **k: pytest.fail("ran tests"))
+    assert mc.main(["--base", "main", "--list"]) == 0
+    out = capfd.readouterr().out
+    assert f"{_CHANGED}: 1 changed lines, 4 mutants, 1 test files" in out
+    assert "-> return n >= 1" in out
