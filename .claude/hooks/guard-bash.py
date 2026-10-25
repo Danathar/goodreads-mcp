@@ -1618,6 +1618,29 @@ def _decide_extglob(command: str, cwd: str | os.PathLike[str] | None) -> str | N
     )
 
 
+def _decide_joined(command: str, cwd: str | os.PathLike[str] | None) -> str | None:
+    """`_decide_extglob`, then the same with every backslash-newline taken out.
+
+    bash drops a backslash-newline before it reads a word, so `gi\\<newline>t`
+    is `git`, outside quotes and inside double quotes alike. Single quotes keep
+    the pair, but a shell handed the string (`bash -c 'gi\\<newline>t ...'`)
+    drops it in turn. Reading as typed, the guard saw two words `gi` and `t`
+    and let `git diff --no-index /dev/null ./.env` run. The second reading only
+    ever adds a refusal; a command refused as typed keeps that reason.
+    """
+    reason = _decide_extglob(command, cwd)
+    if reason is not None or "\\\n" not in command:
+        return reason
+    reason = _decide_extglob(command.replace("\\\n", ""), cwd)
+    if reason is None:
+        return None
+    return (
+        "a backslash-newline is taken out by the shell before it reads a word, "
+        "here or in the shell a command string is handed to, and the command "
+        f"is refused once it is read that way: {reason}"
+    )
+
+
 def decide(command: str, cwd: str | os.PathLike[str] | None = None) -> str | None:
     """Return the reason the command is denied, or None to leave it alone."""
     # A program's command string is decided by a nested call, which shares the
@@ -1627,7 +1650,7 @@ def decide(command: str, cwd: str | os.PathLike[str] | None = None) -> str | Non
     if outermost:
         _deadline = time.monotonic() + _BUDGET_SECONDS
     try:
-        return _decide_extglob(command, cwd)
+        return _decide_joined(command, cwd)
     except _OverBudget as exc:
         if outermost:
             return str(exc)
