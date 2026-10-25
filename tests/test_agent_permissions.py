@@ -487,6 +487,17 @@ _DENIED = [
     ("shopt -s extglob\nsetarch x86_64 /usr/bin/g@(i)t diff /dev/null ./.env", "extglob"),
     ("bash -c $'shopt -s extglob\\n/usr/bin/g@(i)t diff /dev/null ./.env'", "extglob"),
     ("shopt -s extglob\nsh -c '/usr/bin/g@(i)t diff /dev/null ./.env'", "extglob"),
+    # bash drops a backslash-newline before it reads a word, outside quotes
+    # and inside double quotes; single quotes keep it for the shell the string
+    # is handed to, which drops it in turn. Each of these runs git or pytest.
+    ("gi\\\nt diff --no-index /dev/null ./.env", "backslash-newline"),
+    ('"gi\\\nt" diff --no-index /dev/null ./.env', "backslash-newline"),
+    ("bash -c 'gi\\\nt diff --no-index /dev/null ./.env'", "backslash-newline"),
+    ('bash -c "gi\\\nt diff --no-index /dev/null ./.env"', "backslash-newline"),
+    ("script -qc 'gi\\\nt diff --no-index /dev/null .env' /dev/null", "backslash-newline"),
+    ("git di\\\nff --no-index /dev/null ./.env", "backslash-newline"),
+    ("sh -c 'pyt\\\nest --pastebin=all'", "backslash-newline"),
+    ("bash -O extglob -c '/usr/bin/g@\\\n(i)t diff /dev/null ./.env'", "backslash-newline"),
     # `noglob` is a wrapper the permission matcher steps over, so these match
     # `Bash(pytest *)` and `Bash(git diff *)`. A bare `noglob` is zsh's
     # modifier, which runs the command after it, so that command is checked in
@@ -732,6 +743,13 @@ _PERMITTED = [
     "sh -c 'ls *'",
     "nice ls *",
     "timeout 5 grep -n x *",
+    # A backslash-newline between words is a line continuation and nothing
+    # more, here and in a command string.
+    "git diff \\\n  HEAD~1",
+    "git log --oneline \\\n  -5",
+    "pytest -q \\\n  tests/test_config.py",
+    "sh -c 'git status \\\n  --short'",
+    "echo 'gi\\\nt'",
     # An extglob group that is an argument, or quoted, names no program.
     "shopt -s extglob\ngit diff HEAD",
     "shopt -s extglob\nls @(README|AGENTS).md",
@@ -1072,6 +1090,27 @@ def test_an_extglob_refusal_names_the_group_cut_to_forty_characters(guard, lengt
     reason = guard.decide(f"/usr/bin/g{group}t diff --no-index /dev/null .env", _ROOT)
     shown = group if length <= 40 else group[:37] + "..."
     assert reason is not None and reason.startswith(f"`{shown}` is an extglob pattern"), reason
+
+
+def test_a_continuation_refusal_says_the_pair_was_taken_out(guard):
+    reason = guard.decide("bash -c 'gi\\\nt diff --no-index /dev/null .env'", _ROOT)
+    assert reason is not None and reason.startswith("a backslash-newline is taken out"), reason
+    assert "--no-index" in reason
+
+
+def test_a_command_refused_as_typed_keeps_its_own_reason(guard):
+    command = "git diff --no-index /dev/null .env \\\n  HEAD"
+    reason = guard.decide(command, _ROOT)
+    assert reason == guard._decide_extglob(command, _ROOT)
+
+
+def test_a_command_with_no_continuation_is_read_once(guard, monkeypatch):
+    # The second reading costs a whole decision out of the shared budget.
+    calls = []
+    real = guard._decide_extglob
+    monkeypatch.setattr(guard, "_decide_extglob", lambda c, d: calls.append(c) or real(c, d))
+    assert guard.decide("git status --short", _ROOT) is None
+    assert calls == ["git status --short"]
 
 
 def test_operator_characters_join_only_when_adjacent(guard):

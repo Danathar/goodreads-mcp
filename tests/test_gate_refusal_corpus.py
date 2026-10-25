@@ -51,7 +51,7 @@ OPTIONAL_FIELDS = {"wraps"}
 
 # SHA-256 of the canonical tests/fixtures/gate-refusal-corpus.json in
 # Danathar/atomic-image-builder. Copy the file from there; never edit it here.
-CANONICAL_SHA256 = "05e29d13f2f2ca116e0f3137842184bf90a18add6ae48fe4c18b5b5e19ce3fd8"
+CANONICAL_SHA256 = "4de5c91334b06c013d0fa93430610301ea8d6844cb0531622b7a6164978b5fb3"
 
 
 def allow_prefixes(settings: dict) -> list[str]:
@@ -130,7 +130,9 @@ def shell_words(text: str) -> list[tuple[str, bool]]:
 
     Each word comes back with its quotes and backslashes removed, `$'...'`
     decoded and `$"..."` read as `"..."`, plus whether any of it was quoted.
-    An unterminated quote runs to the end of the text.
+    An unterminated quote runs to the end of the text. A backslash-newline
+    outside single quotes is dropped, as bash drops it before it reads a
+    word, so `gi\\<newline>t` is `git`.
     """
     words: list[tuple[str, bool]] = []
     word, quoted, started, i = "", False, False, 0
@@ -141,6 +143,9 @@ def shell_words(text: str) -> list[tuple[str, bool]]:
                 words.append((word, quoted))
             word, quoted, started = "", False, False
             i += 1
+            continue
+        if text.startswith("\\\n", i):
+            i += 2
             continue
         started = True
         if text.startswith("$'", i):
@@ -155,6 +160,9 @@ def shell_words(text: str) -> list[tuple[str, bool]]:
         elif char == '"':
             i += 1
             while i < len(text) and text[i] != '"':
+                if text.startswith("\\\n", i):
+                    i += 2
+                    continue
                 if text[i] == "\\" and text[i + 1 : i + 2] in ('"', "\\", "$", "`"):
                     i += 1
                 word += text[i : i + 1]
