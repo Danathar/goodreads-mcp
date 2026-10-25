@@ -43,6 +43,42 @@ Tool calls run in worker threads so the server can answer pings mid-call
 (`OffLoopFastMCP` in `server.py`, #92); `client.MAX_IN_FLIGHT` is what keeps
 parallel calls from becoming parallel load. Raise it only with a reason.
 
+## Findings about the Bash guard hook: what is in scope
+
+The Bash guard (`.claude/hooks/guard-bash.py`) catches **mistakes by an agent
+that is following these rules**. It covers only the commands
+`.claude/settings.json` allows without a prompt (`pytest`, `git status`,
+`git diff`, `git log`): it refuses the arguments, redirections, assignments and
+wrappers that make them run outside code or read or write files past the deny
+rules. Every other command is left to the permission rules. The guard is not a
+sandbox against an agent that is trying to get around it. A shell can spell a
+command in endless ways, and a reader in a hook cannot keep up with all of
+them. Do not file, and do not fix unprompted, findings of this kind:
+
+- **Disguised spellings.** A blocked command gets through only when its name
+  or arguments are written in a form nobody types in ordinary work: quote
+  marks inside a word (`g"i"t`), brace, wildcard or extended-glob names
+  (`{git,}`, `g?t`, `g@(i)t`), backslash-newline splits, `$'...'` escapes,
+  variables or command substitution that build the name, or the same tricks
+  inside a command string handed to another shell or wrapper program.
+
+These are still in scope. File them as usual:
+
+- **The hook fails open.** It crashes, times out, or is missing a tool, and
+  the command runs unchecked.
+- **An ordinary spelling gets through.** The command is written the way an
+  agent would type it doing normal work: the plain name, its full path
+  (`/usr/bin/git`), a documented short option or alias (`pytest -p NAME`), or
+  the plain command behind a wrapper program (`timeout`, `xargs`, `flock`,
+  `watch`). Wrapped commands stay in scope under the ruling on
+  Danathar/atomic-image-builder#772.
+- **A regression.** A case the hook's tests already cover stops being
+  refused.
+- **The hook blocks normal work it should allow.**
+
+This is a standing ruling, not a gap to report: an agent that has to disguise
+a command to run it is already breaking the rules in this file.
+
 ## The data surfaces
 
 In rough order of robustness:
