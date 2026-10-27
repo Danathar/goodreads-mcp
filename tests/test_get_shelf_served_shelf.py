@@ -201,6 +201,38 @@ def test_get_shelf_with_an_empty_name_lists_every_shelf(monkeypatch):
     ]
 
 
+@pytest.mark.parametrize("shelf", ["#ALL#", "#ALL# "])
+def test_get_shelf_lists_every_shelf_for_goodreads_own_all_name(shelf, monkeypatch):
+    """'#ALL#' is Goodreads' name for every shelf; it is served titled 'all' (#419)."""
+    items = _get_shelf(ALL_FEED, shelf, monkeypatch)
+    assert [i["book_id"] for i in items] == ["250252723", "247586942"]
+
+
+@pytest.mark.parametrize("shelf", ["read ", "read   "])
+def test_get_shelf_ignores_trailing_whitespace_in_a_shelf_name(shelf, monkeypatch):
+    """Goodreads trims the right side of the name, so 'read ' is 'read' (#419)."""
+    items = _get_shelf(READ_FEED, shelf, monkeypatch)
+    assert [i["book_id"] for i in items] == ["10081041", "22921276"]
+
+
+def test_get_shelf_sends_the_shelf_name_to_goodreads_unchanged(monkeypatch):
+    seen = {}
+
+    def fake_get(url, **kw):
+        seen.update(kw["params"])
+        return httpx.Response(200, text=READ_FEED)
+
+    monkeypatch.setattr(server.gr, "get", fake_get)
+    server.get_shelf("read ", user_id="1")
+    assert seen["shelf"] == "read "
+
+
+def test_get_shelf_still_refuses_a_leading_space(monkeypatch):
+    """Goodreads does not trim the left side: ' read' is the unknown-name fallback."""
+    with pytest.raises(ValueError, match="no shelf named ' read'"):
+        _get_shelf(FALLBACK_FEED, " read", monkeypatch)
+
+
 def test_get_shelf_refuses_all_as_a_shelf_name(monkeypatch):
     """'all' is not a shelf name; Goodreads serves it as the unknown-name fallback."""
     with pytest.raises(ValueError, match="no shelf named 'all'"):
