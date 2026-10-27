@@ -1277,8 +1277,9 @@ def get_shelf(
     Common shelves: 'read', 'currently-reading', 'to-read', plus any custom
     shelf name. Names are case-sensitive and must match a shelf the user has
     (list_shelves gives them); any other name raises ValueError. An empty
-    name lists every shelf. RSS pages hold ~100 items; pass page=2,3,... for
-    more (pages start at 1). Defaults to the configured GOODREADS_USER_ID.
+    name, or '#ALL#', lists every shelf. RSS pages hold ~100 items; pass
+    page=2,3,... for more (pages start at 1). Defaults to the configured
+    GOODREADS_USER_ID.
     Raises LoginRequired for a private profile, whose feed is empty.
 
     Each item has title, author, book_id, isbn, average_rating (float),
@@ -1297,8 +1298,13 @@ def get_shelf(
     served, items = gr.parse_shelf_rss(resp.text)
     # For a name the user has no shelf by, Goodreads answers 200 with the
     # whole library (#204); only the channel title says which shelf it served.
-    # An empty name asks for every shelf, which the feed titles "all".
-    if served is not None and served != (shelf or "all"):
+    # An empty name and Goodreads' own '#ALL#' both ask for every shelf, which
+    # the feed titles "all" (#419). Goodreads trims trailing whitespace from the
+    # name but not leading, so only the right side is stripped before comparing.
+    expected = shelf.rstrip()
+    if expected in ("", "#ALL#"):
+        expected = "all"
+    if served is not None and served != expected:
         raise ValueError(
             f"User {uid} has no shelf named {shelf!r}. Shelf names are "
             "case-sensitive; call list_shelves for this user's valid names."
