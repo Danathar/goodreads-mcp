@@ -282,6 +282,56 @@ def test_get_shelf_does_not_check_the_profile_past_page_one(monkeypatch):
     assert paths == ["/review/list_rss/9"]
 
 
+def _client_answering(status: int, monkeypatch) -> list[str]:
+    """Route the real client to a transport that answers every request with
+    `status`, so the error comes from the client's own raise_for_status.
+
+    Returns the paths requested.
+    """
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        return httpx.Response(status, text="<html>Page not found</html>")
+
+    monkeypatch.setattr(
+        server.gr,
+        "_client",
+        httpx.Client(
+            base_url="https://www.goodreads.com",
+            transport=httpx.MockTransport(handler),
+            follow_redirects=True,
+        ),
+    )
+    return paths
+
+
+def test_get_shelf_names_a_feed_that_answers_404(monkeypatch):
+    """#421: the feed is a 404 page for every user since Oct 2026. The caller
+    gets a named error that says the feed is gone, not a bare HTTP status."""
+    paths = _client_answering(404, monkeypatch)
+    with pytest.raises(server.ShelfFeedUnavailable) as excinfo:
+        server.get_shelf("read", user_id="9")
+    message = str(excinfo.value)
+    assert "no longer available (404)" in message
+    assert "/review/list_rss/9" in message
+    assert "#421" in message
+    assert "list_shelves" in message
+    assert isinstance(excinfo.value.__cause__, httpx.HTTPStatusError)
+    # One request, no profile fetch: a 404 is not an empty feed.
+    assert paths == ["/review/list_rss/9"]
+
+
+def test_get_shelf_leaves_other_http_errors_alone(monkeypatch):
+    """Only 404 means the feed is gone. Any other status stays the client's
+    own HTTPStatusError, so it is not misread as #421."""
+    _client_answering(500, monkeypatch)
+    with pytest.raises(httpx.HTTPStatusError) as excinfo:
+        server.get_shelf("read", user_id="9")
+    assert not isinstance(excinfo.value, server.ShelfFeedUnavailable)
+    assert excinfo.value.response.status_code == 500
+
+
 # --------------------------------------------------------------------- main
 
 

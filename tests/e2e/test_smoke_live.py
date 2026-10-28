@@ -245,6 +245,19 @@ def test_compare_books_reports_bad_id_live():
     assert any(b.get("title") == "Project Hail Mary" for b in res["books"])
 
 
+# #421: since Oct 2026 Goodreads answers /review/list_rss/{uid} with 404 for
+# every user, so get_shelf raises ShelfFeedUnavailable. Not strict: these pass
+# again on their own if Goodreads restores the feed. `raises` keeps any other
+# failure (a profile-scrape regression, say) a real failure.
+_FEED_GONE = pytest.mark.xfail(
+    raises=server.ShelfFeedUnavailable,
+    strict=False,
+    reason="shelf RSS feed answers 404 since Oct 2026: "
+    "https://github.com/Danathar/goodreads-mcp/issues/421",
+)
+
+
+@_FEED_GONE
 def test_get_shelf_rss_live():
     # user 1 (Otis Chandler, GR founder) has a large public 'read' shelf
     items = server.get_shelf("read", user_id="1", page=1)
@@ -253,6 +266,7 @@ def test_get_shelf_rss_live():
     assert items[0]["book_id"]
 
 
+@_FEED_GONE
 def test_get_shelf_refuses_an_unknown_shelf_live():
     """#204: the feed answers an unknown name with the whole library; only
     the channel title tells, and get_shelf must read it."""
@@ -317,6 +331,7 @@ def test_a_ping_is_answered_while_a_tool_call_is_in_flight_live():
     )
 
 
+@_FEED_GONE
 def test_list_shelves_live():
     """#91: the only HTML scrape, and the one this suite never covered. The
     review-list page went behind a login and the tool returned [] for

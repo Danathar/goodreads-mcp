@@ -43,6 +43,7 @@ from typing import Any, Callable, Iterator
 from urllib.parse import unquote
 
 import anyio  # mcp's own async layer (it requires anyio>=4.5), not a new dependency
+import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
@@ -1266,6 +1267,17 @@ def compare_books(book_ids: list[str]) -> dict[str, Any]:
     }
 
 
+class ShelfFeedUnavailable(RuntimeError):
+    """Raised when Goodreads answers the shelf RSS feed with HTTP 404.
+
+    Since Oct 2026 `/review/list_rss/{uid}` is a 404 page for every user id
+    (#421), and no other public, unauthenticated surface serves a shelf's
+    books: the review-list page needs a login (#91), its `.xml` form answers
+    401, and AppSync refuses `getUserShelves` to the anonymous key. A named
+    error tells the caller the feed is gone, rather than a bare HTTP status.
+    """
+
+
 @mcp.tool(annotations=_READ_ONLY)
 def get_shelf(
     shelf: str = "to-read",
@@ -1281,6 +1293,8 @@ def get_shelf(
     page=2,3,... for more (pages start at 1). Defaults to the configured
     GOODREADS_USER_ID.
     Raises LoginRequired for a private profile, whose feed is empty.
+    Raises ShelfFeedUnavailable when Goodreads answers the feed with 404,
+    as it has for every user since Oct 2026 (#421).
 
     Each item has title, author, book_id, isbn, average_rating (float),
     my_rating (int 1-5; None when unrated), shelves, date_added and date_read
@@ -1294,7 +1308,17 @@ def get_shelf(
     if page < 1:
         raise ValueError("page must be 1 or greater.")
     uid = _user_id(user_id)
-    resp = gr.get(f"/review/list_rss/{uid}", params={"shelf": shelf, "page": page})
+    try:
+        resp = gr.get(f"/review/list_rss/{uid}", params={"shelf": shelf, "page": page})
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code != 404:
+            raise
+        raise ShelfFeedUnavailable(
+            "Goodreads shelf feed no longer available (404): "
+            f"/review/list_rss/{uid} is not served, as for every user since "
+            "Oct 2026 (#421). This read-only server has no other public source "
+            "for a shelf's books; list_shelves still gives the shelf names."
+        ) from e
     served, items = gr.parse_shelf_rss(resp.text)
     # For a name the user has no shelf by, Goodreads answers 200 with the
     # whole library (#204); only the channel title says which shelf it served.
