@@ -30,7 +30,7 @@ A **read-only** MCP server for Goodreads — built without the Goodreads API, be
 | `book_lists` | GraphQL — paginated Listopia lists a book appears on (title, votes, size); `limit` up to 100 |
 | `popular_books` | GraphQL — most popular books by release `year`, or a single `month` (1–12), ranked; `limit` capped at 50 |
 | `compare_books` | `get_book` for each id (`__NEXT_DATA__` via `.xml`) — ranks 1–10 distinct books by rating with positive/critical share; a repeated id is fetched once; more than 10 ids is refused; a book that fails comes back as an `error` entry |
-| `get_shelf` | shelf RSS feed (stable) — books on a public shelf (rating and year as ints, `None` when absent; dates as `YYYY-MM-DD`; plus `cover`, `pages`, `my_review`); `page` starts at 1, about 100 items per page; `user_id` overrides the configured user; raises `LoginRequired` for a private profile |
+| `get_shelf` | shelf RSS feed (stable) — books on a public shelf (rating and year as ints, `None` when absent; dates as `YYYY-MM-DD`; plus `cover`, `pages`, `my_review`); `page` starts at 1, about 100 items per page; `user_id` overrides the configured user; raises `LoginRequired` for a private profile, and `ShelfFeedUnavailable` while Goodreads answers the feed with 404 (since Oct 2026, [#421](https://github.com/Danathar/goodreads-mcp/issues/421)) |
 | `list_shelves` | best-effort HTML scrape of the public profile page — shelf names; raises `LoginRequired` for a private profile |
 
 Every tool is registered with MCP read-only annotations (read-only, non-destructive, idempotent).
