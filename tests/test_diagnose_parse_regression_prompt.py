@@ -430,6 +430,9 @@ def test_the_waf_alternates_are_the_ones_the_exception_suggests(goodreads):
     assert len(re.split(r",? or |, ", suggested)) == len(alternates)
     for alternate in alternates:
         assert alternate in suggested, f"{alternate!r} is not in {suggested!r}"
+    # The shelf feed answers 404 now; neither copy may send anyone back to it.
+    for copy in (listed, suggested):
+        assert not re.search(r"rss|feed", copy, re.I), f"retired feed named in {copy!r}"
 
 
 def test_step_2_names_the_surfaces_agents_md_lists_in_order():

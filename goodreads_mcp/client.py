@@ -448,7 +448,7 @@ class GoodreadsClient:
                         f"Goodreads returned a WAF JS challenge for {url!r} "
                         "(HTTP 202). This path can't be fetched without a real "
                         "browser; try an alternate endpoint (e.g. the .xml book "
-                        "page, RSS feed, or JSON autocomplete)."
+                        "page or JSON autocomplete)."
                     )
                 if _is_sign_in_page(resp):
                     raise LoginRequired(
