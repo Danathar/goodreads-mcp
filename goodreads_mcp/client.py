@@ -3,17 +3,19 @@
 Goodreads has had no public API since Dec 2020, so everything here rides
 on five unofficial-but-stable read surfaces, in order of robustness:
 
-  1. Shelf RSS feeds   — /review/list_rss/{user_id}?shelf=... (public
-                          shelves; structured XML)
-  2. Search autocomplete — /book/auto_complete?format=json&q=... (JSON)
-  3. Embedded page JSON — book/giveaway pages are Next.js; __NEXT_DATA__
+  1. Search autocomplete — /book/auto_complete?format=json&q=... (JSON)
+  2. Embedded page JSON — book/giveaway pages are Next.js; __NEXT_DATA__
                           carries the full Apollo state. Parse that, not
                           the DOM.
-  4. AppSync GraphQL     — page-level __NEXT_DATA__ carries the anonymous
+  3. AppSync GraphQL     — page-level __NEXT_DATA__ carries the anonymous
                           API key; the _app bundle carries the endpoint.
-  5. Scraped HTML        — list_shelves only, and explicitly best-effort:
+  4. Scraped HTML        — list_shelves only, and explicitly best-effort:
                           shelf *names* have no structured surface. Don't
                           extend this to anything a surface above covers.
+  5. Shelf RSS feeds   — /review/list_rss/{user_id}?shelf=... (public
+                          shelves; structured XML). Answered 404 for every
+                          user since Oct 2026 (#421); get_shelf raises
+                          ShelfFeedUnavailable. Build nothing new on it.
 
 No auth, no cookies, no writes — this server only reads public data.
 

@@ -30,7 +30,7 @@ A **read-only** MCP server for Goodreads — built without the Goodreads API, be
 | `book_lists` | GraphQL — paginated Listopia lists a book appears on (title, votes, size); `limit` up to 100 |
 | `popular_books` | GraphQL — most popular books by release `year`, or a single `month` (1–12), ranked; `limit` capped at 50 |
 | `compare_books` | `get_book` for each id (`__NEXT_DATA__` via `.xml`) — ranks 1–10 distinct books by rating with positive/critical share; a repeated id is fetched once; more than 10 ids is refused; a book that fails comes back as an `error` entry |
-| `get_shelf` | shelf RSS feed (stable) — books on a public shelf (rating and year as ints, `None` when absent; dates as `YYYY-MM-DD`; plus `cover`, `pages`, `my_review`); `page` starts at 1, about 100 items per page; `user_id` overrides the configured user; raises `LoginRequired` for a private profile, and `ShelfFeedUnavailable` while Goodreads answers the feed with 404 (since Oct 2026) |
+| `get_shelf` | shelf RSS feed — books on a public shelf (rating and year as ints, `None` when absent; dates as `YYYY-MM-DD`; plus `cover`, `pages`, `my_review`); `page` starts at 1, about 100 items per page; `user_id` overrides the configured user; raises `LoginRequired` for a private profile, and `ShelfFeedUnavailable` while Goodreads answers the feed with 404 (since Oct 2026) |
 | `list_shelves` | best-effort HTML scrape of the public profile page — shelf names; raises `LoginRequired` for a private profile |
 
 Every tool is registered with MCP read-only annotations (read-only, non-destructive, idempotent).
@@ -107,7 +107,7 @@ The endpoints are unofficial, so verify in this order:
 1. `search_books("project hail mary")` — should just work
 2. `get_book("54493401")` — confirms the `.xml`/WAF workaround; check the histogram is populated
 3. `get_reviews("54493401")` — should return real review text
-4. `get_shelf("to-read")` — checks your `user_id` + RSS
+4. `get_shelf("to-read")` — raises `ShelfFeedUnavailable` while Goodreads answers the shelf feed with 404 (since Oct 2026); that is not a `user_id` problem
 5. `list_shelves()` — best-effort shelf-name scrape
 
 For an end-to-end example that chains the tools, see [prompts/research-a-book.md](https://github.com/Danathar/goodreads-mcp/blob/main/prompts/research-a-book.md).

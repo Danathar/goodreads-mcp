@@ -17,9 +17,10 @@ A goodreads-mcp tool is returning wrong or empty data. Diagnose it.
    Re-run once, and check `git log` on the tool's code path before concluding
    Goodreads moved.
 
-2. Identify which surface the tool uses (shelf RSS, JSON autocomplete,
-   `__NEXT_DATA__`, AppSync GraphQL, or — for `list_shelves` only — a
-   best-effort HTML scrape) — see AGENTS.md.
+2. Identify which surface the tool uses (JSON autocomplete,
+   `__NEXT_DATA__`, AppSync GraphQL, for `list_shelves` only — a
+   best-effort HTML scrape, or, for `get_shelf`, shelf RSS, which Goodreads
+   has answered with 404 since Oct 2026) — see AGENTS.md.
 
 3. Check the usual suspects in order:
    - `WAFChallenge` raised → the path is now WAF-gated. Find an alternate

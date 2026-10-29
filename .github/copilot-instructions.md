@@ -4,8 +4,8 @@ Full guidance lives in [AGENTS.md](../AGENTS.md). The essentials, inline:
 
 - **Read-only MCP server** for public Goodreads data. No login, no cookies, no
   writes, no credentials. Don't suggest write operations — they're out of scope.
-- **Goodreads has no public API** (since Dec 2020). Tools ride shelf RSS, the
-  JSON autocomplete endpoint, the `__NEXT_DATA__` blob on Next.js pages, an
+- **Goodreads has no public API** (since Dec 2020). Tools ride shelf RSS (answered
+  404 since Oct 2026; build nothing new on it), the JSON autocomplete endpoint, the `__NEXT_DATA__` blob on Next.js pages, an
   AppSync GraphQL backend, and — for `list_shelves` only — a best-effort HTML
   scrape of the public profile page `/user/show/{uid}`.
 - **On Next.js book pages, parse `__NEXT_DATA__` / Apollo state, not the
