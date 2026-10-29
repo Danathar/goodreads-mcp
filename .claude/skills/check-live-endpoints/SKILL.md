@@ -37,6 +37,7 @@ moved, rule out:
 | `ValueError` from `graphql_config` | AppSync GraphQL | the discovery page or its `_app` bundle changed shape |
 | `ValueError: No __NEXT_DATA__ blob` | page JSON | page is no longer Next.js, or is WAF-gated |
 | fields present but `None` | page JSON / GraphQL | Apollo state keys or schema fields renamed |
+| `ShelfFeedUnavailable` raised | shelf RSS | the feed answered 404; expected since Oct 2026 (#421), when Goodreads stopped serving it for every user, and the three live feed tests are xfail for it |
 | RSS returns no items | shelf RSS | feed shape changed (a private profile raises `LoginRequired` instead, read off `/user/show/{uid}` when page 1 is empty, #358) |
 | `ValueError: Autocomplete answered with ...` | search autocomplete | the endpoint answered with something other than a JSON list of books |
 | `list_shelves` returns `[]` | scraped HTML | `shelf=`/`tag=` links gone from the bookshelves module of `/user/show/{uid}` |

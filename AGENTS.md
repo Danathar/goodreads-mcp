@@ -83,12 +83,11 @@ a command to run it is already breaking the rules in this file.
 
 In rough order of robustness:
 
-1. **Shelf RSS** — `/review/list_rss/{user_id}?shelf=...`, structured XML
-2. **Search autocomplete** — `/book/auto_complete?format=json&q=...`
-3. **Embedded page JSON** — book pages are Next.js; `__NEXT_DATA__` carries
+1. **Search autocomplete** — `/book/auto_complete?format=json&q=...`
+2. **Embedded page JSON** — book pages are Next.js; `__NEXT_DATA__` carries
    the full Apollo state. **On these pages, parse the blob, never the markup.**
-4. **AppSync GraphQL** — the discovery and review tools
-5. **Scraped HTML** — `list_shelves` only, and explicitly best-effort: it
+3. **AppSync GraphQL** — the discovery and review tools
+4. **Scraped HTML** — `list_shelves` only, and explicitly best-effort: it
    regexes `shelf=` and `tag=` params out of the public profile page
    `/user/show/{uid}` (the review-list page `/review/list/{uid}` went
    login-only in Sep 2026, #91). There's no structured equivalent for shelf
@@ -96,6 +95,11 @@ In rough order of robustness:
    anything that has a surface above it. (`get_shelf` also fetches that page,
    only when page 1 of the feed is empty, and only to look for the
    private-profile marker; it parses nothing out of it, #358.)
+5. **Shelf RSS** — `/review/list_rss/{user_id}?shelf=...`, structured XML.
+   It was the most robust surface until Oct 2026, when Goodreads began
+   answering it with 404 for every user id (#421). `get_shelf` still calls it
+   and raises `ShelfFeedUnavailable` on the 404, so it works again by itself
+   if the feed comes back. Build nothing new on it.
 
 ## Two things that will bite you
 

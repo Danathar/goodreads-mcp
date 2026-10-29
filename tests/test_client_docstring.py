@@ -84,3 +84,17 @@ def test_the_scraped_html_surface_is_named_and_scoped_to_list_shelves():
     assert "list_shelves only" in body
     assert "best-effort" in body
     assert "extend" in body
+
+
+def test_the_retired_shelf_feed_is_ranked_last_in_both_lists():
+    """Goodreads has answered the shelf RSS feed with 404 for every user since
+    Oct 2026 (#421). The lists are "in order of robustness" and steer new tools
+    to the surfaces at the top, so the feed sits last and says why."""
+    _, listed = _docstring_surfaces()
+    assert _key(listed[-1]) == "shelf"
+    assert _key(_agents_surfaces()[-1]) == "shelf"
+    doc = " ".join((client.__doc__ or "").split())
+    assert "404" in doc and "#421" in doc
+    agents = _AGENTS.read_text(encoding="utf-8")
+    section = agents.split("## The data surfaces", 1)[1].split("\n## ", 1)[0]
+    assert "404" in section and "#421" in section

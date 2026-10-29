@@ -406,7 +406,7 @@ def test_a_bare_pytest_run_collects_the_offline_suite():
 def test_the_symptom_table_has_a_row_per_way_a_surface_can_break():
     rows = _table(_sections()["Read the failure by surface"])
     assert rows[0] == ["symptom", "surface", "what happened"]
-    assert len(rows) == 11, "header plus ten symptoms"
+    assert len(rows) == 12, "header plus eleven symptoms"
     assert all(len(row) == 3 for row in rows)
 
 
@@ -426,6 +426,19 @@ def _symptom(fragment: str) -> str:
     matches = [row for row in rows if fragment in row[0]]
     assert len(matches) == 1, f"expected one row mentioning {fragment!r}"
     return matches[0][0]
+
+
+def test_the_shelf_feed_row_names_the_exception_get_shelf_raises_on_404():
+    """Since #421 the live suite's shelf tests fail with ShelfFeedUnavailable,
+    not an empty feed; the table has to name that, as get_shelf does."""
+    row = [r for r in _table(_sections()["Read the failure by surface"])[1:]
+           if r[0] == _symptom("ShelfFeedUnavailable")][0]
+    assert row[1] == "shelf RSS"
+    assert "404" in row[2] and "#421" in row[2]
+    assert issubclass(server.ShelfFeedUnavailable, Exception)
+    assert "ShelfFeedUnavailable when Goodreads answers the feed with 404" in (
+        " ".join((server.get_shelf.__doc__ or "").split())
+    )
 
 
 def test_the_waf_row_names_the_exception_and_status_the_client_actually_uses(

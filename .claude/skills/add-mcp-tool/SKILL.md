@@ -11,8 +11,9 @@ cookies, or writes, say it's out of scope instead of implementing it.
 
 ## Pick the surface
 
-In order of robustness: shelf RSS → JSON autocomplete → `__NEXT_DATA__` →
-AppSync GraphQL. On Next.js book pages parse the embedded JSON, not the
+In order of robustness: JSON autocomplete → `__NEXT_DATA__` → AppSync
+GraphQL. Not shelf RSS: Goodreads has answered that feed with 404 for every
+user since Oct 2026 (#421). On Next.js book pages parse the embedded JSON, not the
 markup, and fetch those pages via the `.xml`-suffixed path — the plain HTML
 page is WAF-gated.
 
