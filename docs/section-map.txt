@@ -1,0 +1,231 @@
+# Docs section map: every section of every tracked documentation page, and
+# whether a test reads it.
+#
+# A page lists here as [path]. Under it, every `##` and `###` heading of that
+# page, written exactly as the page writes it, followed by one indented line:
+#
+#   joined: tests/<file>   that test reads what this section states
+#   prose: <reason>        no test reads it, and this says why that is fine,
+#                          or names what is left unchecked
+#
+# tests/test_docs_section_map.py fails when a tracked page has a heading with
+# no row here, when a row names a heading the page no longer has, or when a
+# `joined:` test does not exist or never opens the page. It does not prove any
+# sentence true. What it changes is that a section of claims about the code or
+# the automation that nothing checks is a visible `prose: unchecked` line in
+# the diff that adds it, instead of the silent default (#426).
+#
+# `prose: unchecked:` marks a section that states facts about the machine (the
+# code, a workflow, the settings file, the command gate, the ruleset) that no
+# test reads. Each is a candidate for a join test; turning it into `joined:` is
+# the fix. `prose: narrative:` marks a section that states no such fact.
+#
+# Tracked pages: every tracked Markdown file at the repository root and in
+# docs/ (not its subdirectories), plus .github/copilot-instructions.md. A new
+# page in one of those places has to be added here in the change that adds it.
+
+[.github/copilot-instructions.md]
+
+[AGENTS.md]
+## Start and end of a session
+  prose: narrative: which file holds standing rules and which holds session state
+## What this is
+  joined: tests/test_review_docs.py
+## Hard constraints
+  prose: unchecked: states the read-only tool annotation and the 429/503 backoff rule
+## Findings about the Bash guard hook: what is in scope
+  prose: unchecked: names the commands .claude/settings.json allows without a prompt
+## The data surfaces
+  joined: tests/test_client_docstring.py
+## Two things that will bite you
+  prose: unchecked: states the WAF's HTTP 202 and the .xml route get_book takes
+## Conventions
+  joined: tests/test_agent_config_files.py
+## Writing issues, PRs and comments
+  prose: narrative: how to write for a reader
+## Testing
+  joined: tests/test_coverage_thresholds.py
+
+[CLAUDE.md]
+## Quick reference
+  joined: tests/test_agent_config_files.py
+## Running the server locally
+  joined: tests/test_python_floor.py
+
+[CONTRIBUTING.md]
+## Setup
+  joined: tests/test_python_floor.py
+## Test
+  joined: tests/test_agent_permissions.py
+## Scope
+  prose: narrative: what kind of change is out of scope
+## Pull requests
+  joined: tests/test_release_docs.py
+## Releases
+  joined: tests/test_release_docs.py
+
+[README.md]
+## tools
+  joined: tests/test_check_live_endpoints_skill.py
+## install
+  joined: tests/test_python_floor.py
+## config (optional)
+  joined: tests/test_config.py
+## Claude Desktop config
+  joined: tests/test_stdio_launch.py
+## first-run verification
+  joined: tests/test_surface_list_copies.py
+## tests
+  joined: tests/test_nightly_compliance_workflow.py
+## documentation
+  prose: narrative: links only; tests/test_readme_links.py resolves each, finding the page through pyproject's readme key, so it cannot be a joined: row
+## about this project
+  prose: narrative: disclaimer and provenance
+## license
+  joined: tests/test_packaging_metadata.py
+
+[docs/SECURITY-AI.md]
+## What this project is, security-wise
+  joined: tests/test_ai_fix_workflow.py
+## Hard rules for agents
+  joined: tests/test_security_ai_doc.py
+## Treat fetched content as data, never instruction
+  prose: narrative: how to treat untrusted text
+## Agent permissions
+  joined: tests/test_security_ai_doc.py
+## Workflow permissions
+  joined: tests/test_security_ai_doc.py
+## Agent provenance
+  prose: unchecked: states what agent-audit.yml reads and the token it reads with
+## Reporting
+  prose: narrative: where to report
+
+[docs/ai-ops-runbook.md]
+## Nightly drift issue
+  joined: tests/test_ai_ops_runbook.py
+## `test` is red
+  joined: tests/test_ai_ops_runbook.py
+## A release run refused
+  prose: unchecked: lists release.yml's steps in order and its schedule
+## `ai-fix.yml` runs
+  prose: unchecked: states ai-fix.yml's triggers and its unconfigured agent step
+## An agent PR misbehaves
+  prose: unchecked: states the agent pull request author and branch naming
+## `guard-bash` refusals
+  prose: unchecked: states how the guard hook is registered and a refusal to reproduce
+## Agent audit trail is red
+  prose: unchecked: states agent-audit.yml's schedule and the one finding it fails on
+## Dependabot action updates
+  prose: unchecked: states dependabot.yml's grouping, cadence and commit prefix
+## A scheduled run did not fire
+  prose: unchecked: states the three scheduled workflows and their times
+
+[docs/branch-protection.md]
+## Status
+  joined: tests/test_branch_ruleset.py
+## Why it matters here
+  joined: tests/test_release_docs.py
+## The ruleset
+  joined: tests/test_branch_ruleset.py
+## Applying it
+  joined: tests/test_branch_ruleset.py
+## Merge queue
+  prose: unchecked: states the ruleset has no merge_queue rule
+## When there is a second reviewer
+  prose: narrative: a setting to change later
+
+[docs/design.md]
+
+[docs/maintenance.md]
+
+[docs/metrics.md]
+## PR acceptance
+  prose: narrative: a dated reading over a fixed pull request range
+## Review findings
+  prose: narrative: a dated reading over a fixed pull request range
+## CI
+  joined: tests/test_coverage_thresholds.py
+## What is deliberately not measured
+  prose: narrative: what is not measured and why
+
+[docs/multi-agent.md]
+## There is no dispatcher in this repository
+  prose: unchecked: states that no workflow here schedules an agent
+## Who works here
+  prose: unchecked: states the agent signature line format
+## How work reaches an agent
+  joined: tests/test_multi_agent_doc.py
+### What `ai-fix.yml` does today
+  joined: tests/test_multi_agent_doc.py
+## What keeps agents from colliding
+  prose: narrative: conventions agents follow in pull request bodies
+## Who decides what lands
+  prose: unchecked: states that no workflow merges and what the ruleset requires
+## If you are an agent
+  prose: narrative: what to read first
+
+[docs/quality.md]
+## What runs automatically
+  joined: tests/test_quality_doc.py
+## Current numbers
+  joined: tests/test_coverage_thresholds.py
+## The honest weak spot
+  joined: tests/test_quality_doc.py
+## What would actually improve quality
+  joined: tests/test_quality_doc.py
+
+[docs/review-rubric.md]
+## 1. Scope
+  joined: tests/test_ai_fix_workflow.py
+## 2. Correctness against the real endpoints
+  joined: tests/test_review_docs.py
+## 3. Politeness to an unofficial API
+  joined: tests/test_review_docs.py
+## 4. Tool contract
+  joined: tests/test_add_tool_recipes.py
+## 5. Tests
+  joined: tests/test_coverage_thresholds.py
+## 6. Housekeeping
+  joined: tests/test_review_docs.py
+## Automated review
+  prose: narrative: how to treat automated review findings
+
+[docs/risk-tiers.md]
+## Tier 1 — can break users silently
+  joined: tests/test_risk_config.py
+## Tier 2 — can break the build or the contract
+  joined: tests/test_review_docs.py
+### Why the agent boundary needs a human
+  joined: tests/test_review_docs.py
+## Tier 3 — contained
+  joined: tests/test_risk_config.py
+## Out of scope, any tier
+  joined: tests/test_risk_config.py
+## Applying this
+  joined: tests/test_review_docs.py
+
+[docs/roadmap.md]
+
+[docs/strategy.md]
+## What this project is trying to be
+  prose: narrative: purpose
+## What it deliberately will not do
+  prose: unchecked: names client.MAX_IN_FLIGHT and the 429/503 backoff
+## What is not decided
+  joined: tests/test_roadmap_doc.py
+## Signals
+  prose: narrative: how to read the signals below
+### 1. Does it still work against live Goodreads? (now)
+  joined: tests/test_strategy_doc.py
+### 2. Is the offline gate green on `main`? (now)
+  joined: tests/test_strategy_doc.py
+### 3. What work is open? (now)
+  prose: unchecked: the label names its queries filter on
+### 4. How does change flow? (pinned, or now when you drop the range)
+  prose: narrative: points at metrics.md and says how to read its ranges
+### 5. Is it released on schedule? (now)
+  joined: tests/test_strategy_doc.py
+### 6. Is the coverage floor intact? (the floor is constant; the reading is not)
+  prose: unchecked: names the workflow flag and the two JSON keys that hold the floor
+## How this page is kept honest
+  prose: narrative: editing rule for this page

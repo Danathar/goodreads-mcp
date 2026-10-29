@@ -10,7 +10,7 @@
 
 > **Thank you, [Shreeya Chand](https://github.com/shreeyachand).** This project is a fork of [`shreeyachand/goodreads-mcp`](https://github.com/shreeyachand/goodreads-mcp), and it would not exist without that work. The core idea of reaching Goodreads without its retired API, and the tool set this server offers, come from Shreeya's project. We're grateful for it, and for the MIT licence that let us build on it. If this server is useful to you, please go star the original.
 
-A **read-only** MCP server for Goodreads — built without the Goodreads API, because there hasn't been one since December 2020. Lets an LLM find and research books, ratings, and reviews. Tools ride on RSS feeds, the JSON autocomplete endpoint, the `__NEXT_DATA__` blob embedded in book pages, and the AppSync GraphQL backend the Goodreads website itself uses. No login, no cookies, no writes — public data only.
+A **read-only** MCP server for Goodreads — built without the Goodreads API, because there hasn't been one since December 2020. Lets an LLM find and research books, ratings, and reviews. Tools ride on the JSON autocomplete endpoint, the `__NEXT_DATA__` blob embedded in book pages, the AppSync GraphQL backend the Goodreads website itself uses, and the shelf RSS feed, which Goodreads has answered with 404 for every user since Oct 2026. No login, no cookies, no writes — public data only.
 
 <!-- Ownership token the official MCP registry checks in the PyPI README
      before it accepts a listing; must match `name` in server.json. Keep it
