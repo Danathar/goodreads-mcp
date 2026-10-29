@@ -24,7 +24,7 @@ A goodreads-mcp tool is returning wrong or empty data. Diagnose it.
 
 3. Check the usual suspects in order:
    - `WAFChallenge` raised → the path is now WAF-gated. Find an alternate
-     endpoint (`.xml` book page, RSS, JSON autocomplete). Do not try to solve
+     endpoint (`.xml` book page, JSON autocomplete). Do not try to solve
      the challenge.
    - `ValueError` from `graphql_config` (such as "GraphQL config discovery
      failed: No AppSync endpoint found in bundle. Legacy pair fallback: No
