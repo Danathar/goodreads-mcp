@@ -106,7 +106,7 @@
 ## `test` is red
   joined: tests/test_ai_ops_runbook.py
 ## A release run refused
-  prose: unchecked: lists release.yml's steps in order and its schedule
+  joined: tests/test_ai_ops_runbook.py
 ## `ai-fix.yml` runs
   prose: unchecked: states ai-fix.yml's triggers and its unconfigured agent step
 ## An agent PR misbehaves
