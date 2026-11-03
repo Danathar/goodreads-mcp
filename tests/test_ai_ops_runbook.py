@@ -10,6 +10,11 @@ This test compares the strings; it does not check that the file exists.
 The runbook's "A release run refused" table is held to `release.yml` the same
 way: the steps it names, their order, the messages it quotes, the schedule and
 the inputs it tells the maintainer to use.
+
+"Dependabot action updates" is held to `.github/dependabot.yml` and to the
+workflows that hold `contents: write`, and "A scheduled run did not fire" to
+the workflows that carry a `schedule:` trigger, their cron times and the
+dispatch inputs its commands pass.
 """
 
 from __future__ import annotations
@@ -165,3 +170,137 @@ def test_the_release_section_names_the_workflow_its_schedule_and_the_tag_step():
     assert re.search(r"^      dry_run:$", workflow, re.M), "release.yml has no dry_run input"
     assert "-f dry_run=true" in section
     assert f"failed after `{_TAG_STEP}`" in section
+
+
+# --------------------------------------------------------------------------
+# "Dependabot action updates": what dependabot.yml asks for
+# --------------------------------------------------------------------------
+#
+# The section tells a maintainer what a normal Dependabot pull request looks
+# like (one a week, grouped, prefixed `ci`) and which workflows' bumps need the
+# upstream release notes read because they can write to the repository. Change
+# the cadence, drop the group, or grant a third workflow `contents: write`, and
+# the runbook describes a different repository with nothing failing.
+
+_DEPENDABOT = _ROOT / ".github" / "dependabot.yml"
+_CADENCE = {"daily": "a day", "weekly": "a week", "monthly": "a month"}
+
+
+def _flat(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def test_the_dependabot_section_states_what_dependabot_yml_asks_for():
+    config = _DEPENDABOT.read_text(encoding="utf-8")
+    section = _flat(_section(_RUNBOOK.read_text(encoding="utf-8"), "Dependabot action updates"))
+    assert section.startswith("[`.github/dependabot.yml`](../.github/dependabot.yml) asks for one grouped pull request ")
+    interval = re.search(r"^      interval: (\w+)\s*$", config, re.M)
+    assert interval and interval.group(1) in _CADENCE, "dependabot.yml no longer sets a schedule interval this test reads"
+    assert f"one grouped pull request {_CADENCE[interval.group(1)]}," in section
+    assert re.search(r'^    groups:\n      [\w-]+:\n        patterns:\n          - "\*"$', config, re.M), (
+        "dependabot.yml no longer groups every action into one pull request"
+    )
+    assert "covering every GitHub Action the workflows `uses:`" in section
+    prefix = re.search(r'^      prefix: "([^"]+)"$', config, re.M)
+    assert prefix, "dependabot.yml no longer sets a commit-message prefix"
+    assert f"with commit prefix `{prefix.group(1)}`." in section
+    assert "(`tests/test_action_pins.py` fails the PR if not)" in section
+    assert (_ROOT / "tests" / "test_action_pins.py").is_file()
+
+
+def _grants_contents_write(path: Path) -> bool:
+    return any(
+        line.split("#", 1)[0].strip() == "contents: write"
+        for line in path.read_text(encoding="utf-8").splitlines()
+    )
+
+
+def test_the_dependabot_section_names_every_workflow_that_can_write_contents():
+    section = _flat(_section(_RUNBOOK.read_text(encoding="utf-8"), "Dependabot action updates"))
+    match = re.search(r"((?:`[\w.-]+\.ya?ml`(?:, | and )?)+) hold `contents: write`", section)
+    assert match, "the section no longer says which workflows hold `contents: write`"
+    named = sorted(re.findall(r"`([\w.-]+\.ya?ml)`", match.group(1)))
+    writers = sorted(p.name for p in _workflow_steps.workflow_files() if _grants_contents_write(p))
+    assert named == writers, f"the workflows that hold `contents: write` are {writers}, the runbook names {named}"
+
+
+# --------------------------------------------------------------------------
+# "A scheduled run did not fire": the scheduled workflows and their times
+# --------------------------------------------------------------------------
+#
+# The section lists the scheduled workflows with their times, then gives a
+# `gh run list`, a `gh workflow enable` and a `gh workflow run` for each. Add a
+# fourth schedule, move a cron, or drop a dispatch input, and the maintainer
+# checks the wrong hour, misses a workflow, or runs a command GitHub refuses.
+
+_COUNT = {"One": 1, "Two": 2, "Three": 3, "Four": 4, "Five": 5}
+
+
+def _scheduled() -> dict[str, list[str]]:
+    """Each workflow with a `schedule:` trigger, and its cron expressions."""
+    found = {}
+    for path in _workflow_steps.workflow_files():
+        text = path.read_text(encoding="utf-8")
+        if re.search(r"^  schedule:\s*$", text, re.M):
+            found[path.name] = [cron for _, cron in re.findall(r"""^\s*- cron: (["'])(.+?)\1""", text, re.M)]
+    return found
+
+
+def _stated_time(cron: str) -> str:
+    """How the runbook words a cron: `daily HH:MM UTC` or `HH:MM UTC on the 1st`."""
+    minute, hour, day, month, weekday = cron.split()
+    clock = f"{int(hour):02d}:{int(minute):02d} UTC"
+    if (day, month, weekday) == ("*", "*", "*"):
+        return f"daily {clock}"
+    assert (day, month, weekday) == ("1", "*", "*"), f"this test does not word the cron {cron!r}"
+    return f"{clock} on the 1st"
+
+
+def _missed_run_section() -> str:
+    return _section(_RUNBOOK.read_text(encoding="utf-8"), "A scheduled run did not fire")
+
+
+def test_the_missed_run_section_lists_every_schedule_at_its_time():
+    scheduled = _scheduled()
+    section = _flat(_missed_run_section())
+    match = re.search(r"^(\w+) workflows are scheduled: (.+?)\. ", section)
+    assert match, "the section no longer opens with the list of scheduled workflows"
+    listed = dict(re.findall(r"`([\w.-]+\.ya?ml)` \(([^)]+)\)", match.group(2)))
+    assert _COUNT.get(match.group(1)) == len(listed), f"the section says {match.group(1)} and lists {sorted(listed)}"
+    assert sorted(listed) == sorted(scheduled), f"the scheduled workflows are {sorted(scheduled)}"
+    for name, crons in scheduled.items():
+        assert len(crons) == 1, f"{name} has {len(crons)} cron lines"
+        assert listed[name] == _stated_time(crons[0]), f"{name} runs at {crons[0]!r}"
+
+
+def test_the_missed_run_commands_cover_every_scheduled_workflow():
+    scheduled = sorted(_scheduled())
+    section = _missed_run_section()
+    assert sorted(re.findall(r"gh run list --workflow ([\w.-]+) --event schedule", section)) == scheduled
+    enable = re.search(r"`gh workflow enable ([\w.-]+)` \(or ((?:`[\w.-]+`(?:, or )?)+)\)", _flat(section))
+    assert enable, "the section no longer gives the `gh workflow enable` command"
+    assert sorted([enable.group(1), *re.findall(r"`([\w.-]+)`", enable.group(2))]) == scheduled
+    dispatched = re.findall(r"^gh workflow run ([\w.-]+) --ref main((?: -f \w+=\S+)*)", section, re.M)
+    assert sorted(name for name, _ in dispatched) == scheduled
+    for name, flags in dispatched:
+        text = (_WORKFLOWS / name).read_text(encoding="utf-8")
+        assert re.search(r"^  workflow_dispatch:", text, re.M), f"{name} cannot be run by hand"
+        for field in re.findall(r"-f (\w+)=", flags):
+            assert re.search(rf"^      {field}:$", text, re.M), f"{name} has no workflow_dispatch input {field!r}"
+
+
+def test_the_missed_run_dispatch_notes_are_the_workflows_own():
+    section = _missed_run_section()
+    drift = _workflow_steps.Workflow(_WORKFLOWS / "nightly-compliance.yml").step("Open or update a drift issue on failure")
+    assert "# live suite; opens no drift issue" in section
+    assert "github.event_name == 'schedule'" in drift.if_, "a dispatched nightly run can now open the drift issue"
+    assert "# read-only; blank since means the last 31 days" in section
+    audit = (_WORKFLOWS / "agent-audit.yml").read_text(encoding="utf-8")
+    assert re.search(r"""if \[ -z "\$SINCE" \]; then\n\s+SINCE="\$\(date -u -d '31 days ago' \+%F\)\"""", audit)
+    assert re.search(r"^  contents: read\n  pull-requests: read\n", audit, re.M), "agent-audit.yml is no longer read-only"
+    workflow = _RELEASE.read_text(encoding="utf-8")
+    name = re.search(r"^name: (.+)$", workflow, re.M).group(1).strip()
+    assert f"**A green `{name}` run that tagged nothing.**" in section
+    assert "[A release run refused](#a-release-run-refused)" in section
+    for step in re.findall(r"`([A-Z][^`]+)` and `([A-Z][^`]+)` rows", section)[0]:
+        _release_job().step(step)
