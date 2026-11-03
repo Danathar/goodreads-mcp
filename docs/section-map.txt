@@ -116,9 +116,9 @@
 ## Agent audit trail is red
   prose: unchecked: states agent-audit.yml's schedule and the one finding it fails on
 ## Dependabot action updates
-  prose: unchecked: states dependabot.yml's grouping, cadence and commit prefix
+  joined: tests/test_ai_ops_runbook.py
 ## A scheduled run did not fire
-  prose: unchecked: states the three scheduled workflows and their times
+  joined: tests/test_ai_ops_runbook.py
 
 [docs/branch-protection.md]
 ## Status
