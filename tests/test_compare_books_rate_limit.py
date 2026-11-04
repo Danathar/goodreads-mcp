@@ -144,7 +144,8 @@ def test_a_404_still_carries_on_to_the_next_book(monkeypatch):
 
 
 def test_the_docstring_tells_a_caller_the_comparison_can_stop_early():
-    doc = server.compare_books.__doc__ or ""
+    # Collapse the wrapping so the check reads the sentence, not the line breaks.
+    doc = " ".join((server.compare_books.__doc__ or "").split())
     assert "slow down" in doc
     assert "not fetched" in doc
 
