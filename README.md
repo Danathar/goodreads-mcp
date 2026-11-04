@@ -29,7 +29,7 @@ A **read-only** MCP server for Goodreads — built without the Goodreads API, be
 | `get_editions` | GraphQL — paginated editions (format, ISBN, publisher, publication date as `publication_date` YYYY-MM-DD plus raw `publication_time` in epoch ms); `limit` up to 100 |
 | `book_lists` | GraphQL — paginated Listopia lists a book appears on (title, votes, size); `limit` up to 100 |
 | `popular_books` | GraphQL — most popular books by release `year`, or a single `month` (1–12), ranked; `limit` capped at 50 |
-| `compare_books` | `get_book` for each id (`__NEXT_DATA__` via `.xml`) — ranks 1–10 distinct books by rating with positive/critical share; a repeated id is fetched once; more than 10 ids is refused; a book that fails comes back as an `error` entry |
+| `compare_books` | `get_book` for each id (`__NEXT_DATA__` via `.xml`) — ranks 1–10 distinct books by rating with positive/critical share; a repeated id is fetched once; more than 10 ids is refused; a book that fails comes back as an `error` entry; if Goodreads answers 429 or 503 the comparison stops there, keeps the books already fetched, and marks the rest as not fetched |
 | `get_shelf` | shelf RSS feed — books on a public shelf (rating and year as ints, `None` when absent; dates as `YYYY-MM-DD`; plus `cover`, `pages`, `my_review`); `page` starts at 1, about 100 items per page; `user_id` overrides the configured user; raises `LoginRequired` for a private profile, and `ShelfFeedUnavailable` while Goodreads answers the feed with 404 (since Oct 2026) |
 | `list_shelves` | best-effort HTML scrape of the public profile page — shelf names; raises `LoginRequired` for a private profile |
 

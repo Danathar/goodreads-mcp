@@ -1217,6 +1217,13 @@ def compare_books(book_ids: list[str]) -> dict[str, Any]:
     search_books etc.); one id returns that book alone. A repeated id is
     fetched once. More than 10 is refused rather than silently trimmed, so
     split the call.
+
+    A book that fails (a bad id, a page Goodreads does not have) comes back as
+    an 'error' entry and the rest are still fetched. If Goodreads asks to slow
+    down (HTTP 429 or 503), the comparison stops there: the books already
+    fetched are ranked as usual, the refused book keeps its 'error', and each
+    book not yet asked for gets an 'error' saying it was not fetched. Wait
+    before comparing those again.
     """
     if not book_ids:
         raise ValueError("Provide at least one book_id to compare.")
@@ -1230,11 +1237,29 @@ def compare_books(book_ids: list[str]) -> dict[str, Any]:
         )
 
     results: list[dict[str, Any]] = []
-    for bid in book_ids:
+    for i, bid in enumerate(book_ids):
         try:
             b = get_book(bid)
         except Exception as e:  # noqa: BLE001 — report per-book, don't abort all
             results.append({"book_id": bid, "error": str(e)})
+            if (
+                isinstance(e, httpx.HTTPStatusError)
+                and e.response.status_code in (429, 503)
+            ):
+                # Same rule as graphql_config: the client gave up on purpose,
+                # so another book is more load, not a retry of the same one.
+                results.extend(
+                    {
+                        "book_id": skipped,
+                        "error": (
+                            "Not fetched: Goodreads asked to slow down "
+                            f"(HTTP {e.response.status_code}), so no more books "
+                            "were requested. Try again later."
+                        ),
+                    }
+                    for skipped in book_ids[i + 1 :]
+                )
+                break
             continue
         hist = b.get("ratings_histogram") or {}
         total = sum(v for v in hist.values() if isinstance(v, int))
