@@ -108,13 +108,13 @@
 ## A release run refused
   joined: tests/test_ai_ops_runbook.py
 ## `ai-fix.yml` runs
-  prose: unchecked: states ai-fix.yml's triggers and its unconfigured agent step
+  joined: tests/test_ai_ops_runbook.py
 ## An agent PR misbehaves
   prose: unchecked: states the agent pull request author and branch naming
 ## `guard-bash` refusals
-  prose: unchecked: states how the guard hook is registered and a refusal to reproduce
+  joined: tests/test_ai_ops_runbook.py
 ## Agent audit trail is red
-  prose: unchecked: states agent-audit.yml's schedule and the one finding it fails on
+  joined: tests/test_ai_ops_runbook.py
 ## Dependabot action updates
   joined: tests/test_ai_ops_runbook.py
 ## A scheduled run did not fire
