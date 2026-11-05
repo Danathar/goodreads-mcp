@@ -26,8 +26,13 @@
       "jobs": {}
     },
     "nightly-compliance.yml": {
-      "workflow": {"contents": "read", "issues": "write"},
-      "jobs": {}
+      "workflow": {"contents": "read"},
+      "jobs": {
+        "report": {
+          "contents": "read",
+          "issues": "write"
+        }
+      }
     },
     "release.yml": {
       "workflow": "{}",

@@ -77,9 +77,17 @@ _EXECUTED = {
     _ISSUE_STEP,
 }
 
-_WORKFLOW = _workflow_steps.Workflow(_NIGHTLY)
-_STEPS = _WORKFLOW.steps
-_step = _WORKFLOW.step
+_WORKFLOW = _workflow_steps.Workflow(_NIGHTLY, job="live")
+_REPORT = _workflow_steps.Workflow(_NIGHTLY, job="report")
+_STEPS = _WORKFLOW.steps + _REPORT.steps
+
+
+def _owner(name: str) -> _workflow_steps.Workflow:
+    return _REPORT if name == _ISSUE_STEP else _WORKFLOW
+
+
+def _step(name: str):
+    return _owner(name).step(name)
 _write_stub = _workflow_steps.write_stub
 _recorder = _workflow_steps.recorder
 _argv = _workflow_steps.argv
@@ -97,7 +105,7 @@ needs_jq = pytest.mark.skipif(
 
 
 def _body(name: str, values: dict[str, str] | None = None) -> str:
-    return _WORKFLOW.body(name, values)
+    return _owner(name).body(name, values)
 
 
 def _bin(tmp_path: Path) -> Path:
@@ -658,7 +666,9 @@ def test_the_issue_points_at_a_triage_skill_that_exists(tmp_path: Path):
 
 def test_the_drift_issue_is_only_opened_by_the_scheduled_run():
     """A `workflow_dispatch` check is someone watching; it must not file an issue."""
-    assert _step(_ISSUE_STEP).if_ == "failure() && github.event_name == 'schedule'"
+    block = "\n".join(_workflow_steps.jobs(_WORKFLOW.text)[0]["report"])
+    assert "    needs: live\n" in block + "\n"
+    assert "    if: failure() && github.event_name == 'schedule'\n" in block + "\n"
 
 
 def test_the_title_the_step_looks_up_is_the_title_it_opens():
@@ -697,14 +707,24 @@ def test_the_nightly_runs_on_a_schedule_and_on_demand():
     assert re.search(r"^  workflow_dispatch:$", _WORKFLOW.text, re.M)
 
 
-def test_the_nightly_may_write_issues_and_nothing_else():
-    """`issues: write` is for the drift issue; a broader grant has no user here."""
-    permissions = re.search(r"^permissions:\n((?:  .*\n)+)", _WORKFLOW.text, re.M)
+def _granted(text: str, indent: str = "") -> dict[str, str]:
+    permissions = re.search(rf"^{indent}permissions:\n((?:{indent}  .*\n)+)", text, re.M)
     assert permissions
-    granted = dict(
-        line.strip().split(": ", 1) for line in permissions.group(1).splitlines() if line.strip()
-    )
-    assert granted == {"contents": "read", "issues": "write"}
+    return dict(line.strip().split(": ", 1) for line in permissions.group(1).splitlines() if line.strip())
+
+
+def test_only_the_report_job_may_write_issues():
+    """`live` runs whatever PyPI resolves today, so it must not hold a write scope."""
+    blocks, _ = _workflow_steps.jobs(_WORKFLOW.text)
+    assert _granted(_WORKFLOW.text) == {"contents": "read"}
+    assert "permissions:" not in "\n".join(blocks["live"])
+    assert _granted("\n".join(blocks["report"]) + "\n", "    ") == {"contents": "read", "issues": "write"}
+
+
+def test_the_live_checkout_leaves_no_token_behind():
+    """A token left in the git config is readable by everything `live` installs."""
+    block = "\n".join(_workflow_steps.jobs(_WORKFLOW.text)[0]["live"])
+    assert "persist-credentials: false" in block
 
 
 def test_concurrent_nightlies_queue_rather_than_cancelling_each_other():
@@ -723,7 +743,7 @@ def test_the_readme_badge_points_at_this_workflow():
 
 def test_every_run_step_in_the_nightly_workflow_is_executed_by_this_file():
     """A new step must be run here, or listed here as deliberately not run."""
-    present = _WORKFLOW.run_step_names()
+    present = _WORKFLOW.run_step_names() | _REPORT.run_step_names()
     assert present == _EXECUTED, (
         "nightly-compliance.yml's run: steps and the set this file executes have diverged; "
         f"unrun: {sorted(present - _EXECUTED)}, stale: {sorted(_EXECUTED - present)}"
