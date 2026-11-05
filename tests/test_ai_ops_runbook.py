@@ -15,12 +15,20 @@ the inputs it tells the maintainer to use.
 workflows that hold `contents: write`, and "A scheduled run did not fire" to
 the workflows that carry a `schedule:` trigger, their cron times and the
 dispatch inputs its commands pass.
+
+"`ai-fix.yml` runs" is held to that workflow's steps and job condition,
+"`guard-bash` refusals" to `.claude/settings.json` and to what the hook prints
+when it is handed the section's own commands, and "Agent audit trail is red" to
+the schedule, the boundary paths, the caps and the exits in `agent-audit.yml`.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
+import subprocess
+import sys
 
 import _workflow_steps
 
@@ -304,3 +312,249 @@ def test_the_missed_run_dispatch_notes_are_the_workflows_own():
     assert "[A release run refused](#a-release-run-refused)" in section
     for step in re.findall(r"`([A-Z][^`]+)` and `([A-Z][^`]+)` rows", section)[0]:
         _release_job().step(step)
+
+
+# --------------------------------------------------------------------------
+# "`ai-fix.yml` runs": what a grey, green or red run means
+# --------------------------------------------------------------------------
+#
+# `tests/test_ai_fix_workflow.py` runs the workflow's steps; nothing read the
+# page that tells a maintainer what those runs mean. The sentence that matters
+# most is "No code is changed by it": wire the agent step up and the section
+# still says so, about a job that holds `contents: write`.
+
+_AI_FIX = _WORKFLOWS / "ai-fix.yml"
+_AI_FIX_STEPS = [
+    "Check requester is a maintainer",
+    "",  # the checkout, which has no name
+    "Acknowledge the request",
+    "Agent step (not configured)",
+]
+
+
+def _ai_fix_section() -> str:
+    return _section(_RUNBOOK.read_text(encoding="utf-8"), "`ai-fix.yml` runs")
+
+
+def test_the_ai_fix_section_names_the_two_requests_the_job_accepts():
+    section = _flat(_ai_fix_section())
+    label, comment = re.search(r"applies the `([^`]+)` label or comments `([^`]+)`", section).groups()
+    text = _AI_FIX.read_text(encoding="utf-8")
+    assert f"github.event.label.name == '{label}'" in text
+    assert f"startsWith(github.event.comment.body, '{comment}')" in text
+    assert f"(the Hive app applies `{label}` to the issues it opens)" in section
+
+
+def test_the_ai_fix_section_says_what_the_job_does_and_it_still_does_only_that():
+    section = _flat(_ai_fix_section())
+    assert "only gates the request, posts an acknowledgement comment and writes a summary" in section
+    assert "No code is changed by it." in section
+    workflow = _workflow_steps.Workflow(_AI_FIX)
+    assert [step.name for step in workflow.steps] == _AI_FIX_STEPS, "the job gained or lost a step; reread the section"
+    agent_step = re.search(r"its agent step is `([^`]+)`", section).group(1)
+    assert workflow.steps[-1].name == agent_step
+    assert "gh issue comment" in workflow.step("Acknowledge the request").run
+    assert "GITHUB_STEP_SUMMARY" in workflow.step(agent_step).run
+
+
+def test_the_ai_fix_grep_finds_the_line_the_section_relies_on():
+    section = _ai_fix_section()
+    pattern, path = re.search(r'^grep -n "([^"]+)" (\S+)$', section, re.M).groups()
+    assert (_ROOT / path) == _AI_FIX
+    assert pattern in _AI_FIX.read_text(encoding="utf-8")
+    assert re.search(r"^  contents: write$", _AI_FIX.read_text(encoding="utf-8"), re.M)
+    assert "That job holds `contents: write`" in _flat(section)
+
+
+def test_the_ai_fix_run_colours_match_the_condition_and_the_gate():
+    section = _flat(_ai_fix_section())
+    text = _AI_FIX.read_text(encoding="utf-8")
+    assert "The event came from a bot" in section
+    assert "github.event.sender.type != 'Bot'" in text
+    stated = re.search(r"someone who is not the (\w+), a (\w+) or a (\w+)\.", section).groups()
+    allowed = re.findall(r"author_association == '(\w+)'", text)
+    assert sorted(word.upper() for word in stated) == sorted(allowed)
+
+    start, end = re.search(r"\*\*Red\*\* with `(.+?) \.\.\. (.+?)`", section).groups()
+    gate = _workflow_steps.Workflow(_AI_FIX).step("Check requester is a maintainer").run
+    assert re.search(rf"{re.escape(start)}.*{re.escape(end)}", gate), "the refusal no longer reads as the runbook quotes it"
+    assert "collaborators/<actor>/permission --jq .permission" in section
+    assert "collaborators/$ACTOR/permission" in gate and "--jq '.permission'" in gate
+
+
+# --------------------------------------------------------------------------
+# "`guard-bash` refusals": how the hook is wired and what it prints
+# --------------------------------------------------------------------------
+#
+# The section gives a maintainer a command to reproduce a refusal and a list of
+# what the hook refuses. These tests hand the hook the section's own commands.
+
+_SETTINGS = _ROOT / ".claude" / "settings.json"
+_GUARD = _ROOT / ".claude" / "hooks" / "guard-bash.py"
+
+# One command for each thing the section tells an agent to rewrite away.
+_REFUSED_CONSTRUCTS = {
+    "a path outside `tests/`": ("pytest /etc/passwd", "outside tests/"),
+    "a loader option": ("pytest -p evil tests", "pytest plugin"),
+    "a redirection": ("pytest tests > out", "redirection"),
+    "a variable assignment in front of the verb": ("FOO=1 pytest tests", "`FOO=...` in front of `pytest`"),
+}
+
+
+def _guard_section() -> str:
+    return _section(_RUNBOOK.read_text(encoding="utf-8"), "`guard-bash` refusals")
+
+
+def _ask_guard(stdin: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(_GUARD)], input=stdin, capture_output=True, text=True, cwd=_ROOT, timeout=30, check=False
+    )
+
+
+def _denial(result: subprocess.CompletedProcess[str]) -> str:
+    assert result.returncode == 0, "the section says the hook exits 0 either way"
+    output = json.loads(result.stdout)["hookSpecificOutput"]
+    assert output["hookEventName"] == "PreToolUse"
+    assert output["permissionDecision"] == "deny"
+    return output["permissionDecisionReason"]
+
+
+def _command(command: str) -> str:
+    return json.dumps({"tool_input": {"command": command}, "cwd": "."})
+
+
+def test_the_guard_is_registered_where_the_section_says():
+    section = _flat(_guard_section())
+    assert "is registered as a `PreToolUse` hook on `Bash` in" in section
+    settings = json.loads(_SETTINGS.read_text(encoding="utf-8"))
+    commands = [
+        hook["command"]
+        for entry in settings["hooks"]["PreToolUse"]
+        if entry["matcher"] == "Bash"
+        for hook in entry["hooks"]
+    ]
+    assert any(".claude/hooks/guard-bash.py" in command for command in commands), commands
+
+
+def test_the_guard_reproduction_prints_the_denial_the_section_describes():
+    section = _guard_section()
+    payload, script = re.search(r"^echo '(\{.+\})' \| python3 (\S+)$", section, re.M).groups()
+    assert (_ROOT / script) == _GUARD
+    reason = _denial(_ask_guard(payload))
+    flat = _flat(section)
+    assert 'prints a JSON `permissionDecision: "deny"`' in flat
+    stated = re.search(r"\(here, `([^`]+)` (imports a module as a pytest plugin)\)", flat).groups()
+    assert stated[0] in reason and stated[1] in reason
+
+
+def test_the_section_s_own_pytest_command_is_allowed_and_prints_nothing():
+    section = _guard_section()
+    command = re.search(r"^(pytest \S+ -q)$", section, re.M).group(1)
+    result = _ask_guard(_command(command))
+    assert "An allowed command prints nothing." in _flat(section)
+    assert (result.returncode, result.stdout) == (0, "")
+
+
+def test_every_construct_the_section_names_is_refused():
+    section = _flat(_guard_section())
+    listed = re.search(r"without the construct it names \((.+?)\)\.", section).group(1)
+    assert listed == "a path outside `tests/`, a loader option, a redirection, a variable assignment in front of the verb"
+    for construct, (command, words) in _REFUSED_CONSTRUCTS.items():
+        assert construct in listed
+        assert words in _denial(_ask_guard(_command(command))), command
+
+
+def test_the_failed_closed_message_is_the_hook_s_own():
+    section = _flat(_guard_section())
+    assert "a message says `guard-bash.py failed (...)`, the hook failed closed" in section
+    assert _denial(_ask_guard("pytest {")).startswith("guard-bash.py failed (")
+
+
+def test_the_table_of_spellings_is_in_the_file_the_section_names():
+    section = _flat(_guard_section())
+    path = re.search(r"The table of denied and allowed spellings is in `([^`]+)`", section).group(1)
+    text = (_ROOT / path).read_text(encoding="utf-8")
+    assert re.search(r"^_DENIED = \[$", text, re.M) and re.search(r"^_PERMITTED = \[$", text, re.M)
+    assert f"pytest {path} -q" in _guard_section()
+
+
+# --------------------------------------------------------------------------
+# "Agent audit trail is red": when the audit runs and what fails it
+# --------------------------------------------------------------------------
+#
+# `tests/test_agent_audit_workflow.py` runs the job's jq. This reads the page
+# that tells a maintainer what a red run can mean, which is only useful if it
+# lists every way the run can go red.
+
+_AUDIT = _WORKFLOWS / "agent-audit.yml"
+_AUDIT_STEP = "Audit merged agent pull requests"
+
+
+def _audit_section() -> str:
+    return _flat(_section(_RUNBOOK.read_text(encoding="utf-8"), "Agent audit trail is red"))
+
+
+def _audit_body() -> str:
+    return _workflow_steps.Workflow(_AUDIT).step(_AUDIT_STEP).run
+
+
+def test_the_audit_section_states_the_schedule_and_the_hand_run():
+    section = _audit_section()
+    (cron,) = _scheduled()["agent-audit.yml"]
+    assert f"runs monthly ({_stated_time(cron)}) or by hand" in section
+    assert re.search(r"^  workflow_dispatch:", _AUDIT.read_text(encoding="utf-8"), re.M)
+
+
+def test_the_audit_section_names_the_boundary_the_job_tests():
+    section = _audit_section()
+    body = _audit_body()
+    assert "touched `.claude/settings.json` or `.claude/hooks/**`" in section
+    assert r'def boundary: test("^(\\.claude/settings\\.json$|\\.claude/hooks/)");' in body
+    assert "was merged by a bot, an app or an unknown account" in section
+    assert 'endswith("[bot]") or startswith("app/")' in body
+    assert "(.mergedBy != null) and (.mergedBy.is_bot | not)" in body
+
+
+def test_the_audit_fails_for_the_one_finding_the_section_names():
+    section = _audit_section()
+    assert "It fails for one finding:" in section
+    assert "are listed in the summary but do not fail it" in section
+    body = _audit_body()
+    assert len(re.findall(r"\bexit 1\b", body)) == 1
+    assert 'select((.boundary | length) > 0 and (.merged_by_human | not))' in body
+
+
+def test_the_audit_section_lists_every_way_the_step_stops_with_exit_2():
+    section = _audit_section()
+    body = _audit_body()
+    stated = re.search(r"It also stops with exit 2 when (.+?)\. ```", section).group(1)
+    assert "`since` is not a real `YYYY-MM-DD` date" in stated
+    limit = re.search(r"^\s*limit=(\d+)$", body, re.M).group(1)
+    assert f"the window holds {limit} or more merged pull requests" in stated
+    commits, files = re.search(r"reaches GitHub\'s (\d+)-commit or (\d+)-file list cap", stated).groups()
+    assert f'"$(jq length <<<"$commits")" -ge {commits}' in body
+    assert f'"$(jq length <<<"$files")" -ge {files}' in body
+    # Two checks of `since`, the window cap, and the per-pull-request cap.
+    assert len(re.findall(r"\bexit 2\b", body)) == 4, "a new way to stop needs a line in the section"
+
+
+def test_the_audit_section_states_the_merge_commit_rule_the_job_applies():
+    section = _audit_section()
+    body = _audit_body()
+    assert "only on a pull request into `main`" in section
+    assert '$base == "main"' in body
+    assert "only when every parent after the first is outside the pull request\'s own commits" in section
+    assert "all(.parents[1:][]; IN($own[]) | not)" in body
+
+
+def test_the_audit_advice_uses_inputs_and_steps_that_exist():
+    section = _audit_section()
+    assert "re-run with a later `since`" in section
+    assert "The workflow takes no end date." in section
+    text = _AUDIT.read_text(encoding="utf-8")
+    inputs = re.search(r"^    inputs:\n((?:      .*\n)+)", text, re.M).group(1)
+    assert re.findall(r"^      (\w+):$", inputs, re.M) == ["since"]
+    assert "[An agent PR misbehaves](#an-agent-pr-misbehaves), step 5" in section
+    misbehaves = _section(_RUNBOOK.read_text(encoding="utf-8"), "An agent PR misbehaves")
+    assert re.search(r"^5\. \*\*Confirm `main` could not have been written to", misbehaves, re.M)
+    assert "look at what merged recently" in _flat(misbehaves)
