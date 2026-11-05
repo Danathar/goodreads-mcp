@@ -19,7 +19,6 @@ concurrency:
 
 permissions:
   contents: read
-  issues: write
 
 jobs:
   live:
@@ -27,6 +26,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Python 3.11
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -78,10 +79,36 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Open or update a drift issue on failure
+      - name: Keep the log for the report job
         if: failure() && github.event_name == 'schedule'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: live-log
+          path: live.log
+          if-no-files-found: ignore
+          retention-days: 1
+
+  # The only job that can write issues. `live` installs whatever PyPI resolves
+  # today and runs it, so the write scope stays out of that job.
+  report:
+    needs: live
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Fetch the live log
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: live-log
+
+      - name: Open or update a drift issue on failure
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           TITLE: "Nightly live check failing — Goodreads may have changed"
         run: |
           body=$(printf 'The nightly live suite failed on %s.\n\nThis usually means Goodreads changed something upstream, not that a commit broke.\nTriage with the `check-live-endpoints` skill, which maps each symptom to the surface that broke.\n\nRun: %s/%s/actions/runs/%s\n\nLast output:\n\n```\n%s\n```\n' \

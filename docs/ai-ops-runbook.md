@@ -31,8 +31,9 @@ ones that change something say so.
 
 **What it is.** [`nightly-compliance.yml`](../.github/workflows/nightly-compliance.yml)
 runs the live suite (`pytest tests/e2e`) against real Goodreads at 07:00 UTC
-every day. When it fails on a scheduled run, its last step opens an issue, or
-comments on the open one:
+every day. When it fails on a scheduled run, a separate `report` job, the only
+one that may write issues and one that runs no installed code, opens an issue,
+or comments on the open one:
 
 > Title: `Nightly live check failing — Goodreads may have changed`
 

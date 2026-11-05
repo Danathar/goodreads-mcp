@@ -299,9 +299,9 @@ def test_the_missed_run_commands_cover_every_scheduled_workflow():
 
 def test_the_missed_run_dispatch_notes_are_the_workflows_own():
     section = _missed_run_section()
-    drift = _workflow_steps.Workflow(_WORKFLOWS / "nightly-compliance.yml").step("Open or update a drift issue on failure")
+    drift = "\n".join(_workflow_steps.jobs((_WORKFLOWS / "nightly-compliance.yml").read_text(encoding="utf-8"))[0]["report"])
     assert "# live suite; opens no drift issue" in section
-    assert "github.event_name == 'schedule'" in drift.if_, "a dispatched nightly run can now open the drift issue"
+    assert "github.event_name == 'schedule'" in drift, "a dispatched nightly run can now open the drift issue"
     assert "# read-only; blank since means the last 31 days" in section
     audit = (_WORKFLOWS / "agent-audit.yml").read_text(encoding="utf-8")
     assert re.search(r"""if \[ -z "\$SINCE" \]; then\n\s+SINCE="\$\(date -u -d '31 days ago' \+%F\)\"""", audit)
