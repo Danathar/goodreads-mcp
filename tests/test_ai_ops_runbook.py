@@ -20,6 +20,12 @@ dispatch inputs its commands pass.
 "`guard-bash` refusals" to `.claude/settings.json` and to what the hook prints
 when it is handed the section's own commands, and "Agent audit trail is red" to
 the schedule, the boundary paths, the caps and the exits in `agent-audit.yml`.
+
+"An agent PR misbehaves" is held to the app login and the signature line
+`agent-audit.yml` selects agent pull requests by, to `.github/rulesets/main.json`,
+to the hold and Tier 2 rules it cites, and to the claim that no code here reads
+the pause label. Its listing command is run over sample pull requests. The
+`<role>/<slug>` branch form is Hive's and nothing in this repository reads it.
 """
 
 from __future__ import annotations
@@ -27,8 +33,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
+
+import pytest
 
 import _workflow_steps
 
@@ -558,3 +567,133 @@ def test_the_audit_advice_uses_inputs_and_steps_that_exist():
     misbehaves = _section(_RUNBOOK.read_text(encoding="utf-8"), "An agent PR misbehaves")
     assert re.search(r"^5\. \*\*Confirm `main` could not have been written to", misbehaves, re.M)
     assert "look at what merged recently" in _flat(misbehaves)
+
+
+# --------------------------------------------------------------------------
+# "An agent PR misbehaves": who opens agent pull requests, and what stops one
+# --------------------------------------------------------------------------
+#
+# The section tells a maintainer how to find agent pull requests and what the
+# ruleset will and will not stop. Both are only useful if they match the login
+# and signature the audit selects by and the rules the committed ruleset holds.
+
+_RULESET = _ROOT / ".github" / "rulesets" / "main.json"
+
+
+def _misbehaves_section() -> str:
+    return _section(_RUNBOOK.read_text(encoding="utf-8"), "An agent PR misbehaves")
+
+
+def _audit_logins() -> list[str]:
+    match = re.search(r"\(\.author\.login \| IN\(([^)]*)\)\)", _audit_body())
+    assert match, "agent-audit.yml no longer selects the Hive app by login in the form this test reads"
+    return re.findall(r'"([^"]+)"', match.group(1))
+
+
+def test_the_misbehaving_pr_section_names_the_app_the_audit_selects():
+    section = _flat(_misbehaves_section())
+    gh_login, rest_login = _audit_logins()
+    assert gh_login.startswith("app/") and rest_login == gh_login.removeprefix("app/") + "[bot]"
+    assert f"opened by the Hive GitHub App (author `{gh_login}`) or by `Danathar`" in section
+    assert f"gh pr list --author {gh_login} --state open" in section
+    assert f"the Hive app (`{gh_login.removeprefix('app/')}`)" in section
+
+
+def test_the_misbehaving_pr_section_states_the_signature_the_audit_reads():
+    section = _flat(_misbehaves_section())
+    body = _audit_body()
+    assert "each body ends with a `— hive: agent=...` line" in section
+    assert 'startswith("— hive:")' in body
+    assert 'test("(^| )agent=[^ ]+")' in body
+    assert "it is what `agent-audit.yml` reads when the author alone cannot tell" in section
+    assert "The first command leaves out the agent pull requests opened under `Danathar`." in section
+    assert re.search(r"\(\.author\.login \| IN\([^)]*\)\)\s+or \(signature != null\)", body)
+
+
+def _listing_filter() -> tuple[list[str], str]:
+    match = re.search(
+        r"^gh pr list --state open --json ([a-zA-Z,]+) --jq '([^']+)'$", _misbehaves_section(), re.M
+    )
+    assert match, "the section no longer lists open agent pull requests by their signature line"
+    return match.group(1).split(","), match.group(2)
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="runs the section's --jq filter with jq")
+def test_the_signature_listing_finds_agent_prs_under_either_login():
+    fields, jq_filter = _listing_filter()
+    prs = [
+        {"number": 1, "author": {"login": "Danathar"}, "headRefName": "docs/x",
+         "body": "Why.\n\n— hive: agent=docs backend=claude model=m"},
+        {"number": 2, "author": {"login": "app/danathar-atomic-hive"}, "headRefName": "quality/test-y",
+         "body": "— hive: agent=quality backend=claude model=m\n\nmore text"},
+        {"number": 3, "author": {"login": "dependabot[bot]"}, "headRefName": "dependabot/x", "body": "Bumps x"},
+        {"number": 4, "author": {"login": "Danathar"}, "headRefName": "main-fix", "body": None},
+        {"number": 5, "author": {"login": "Danathar"}, "headRefName": "notes",
+         "body": "Quotes `— hive: agent=` inside a line"},
+        {"number": 6, "author": {"login": "Danathar"}, "headRefName": "notes-2",
+         "body": "Text.\n\n— hive: note, not a signature"},
+    ]
+    for pr in prs:
+        assert set(pr) == set(fields), "the sample must carry exactly the fields the command asks gh for"
+    result = subprocess.run(
+        ["jq", "-c", jq_filter], input=json.dumps(prs), capture_output=True, text=True, check=True
+    )
+    listed = [json.loads(line) for line in result.stdout.splitlines()]
+    assert listed == [
+        {"number": 1, "author": "Danathar", "branch": "docs/x"},
+        {"number": 2, "author": "app/danathar-atomic-hive", "branch": "quality/test-y"},
+    ]
+
+
+def test_the_misbehaving_pr_section_states_what_the_ruleset_requires():
+    section = _flat(_misbehaves_section())
+    ruleset = json.loads(_RULESET.read_text(encoding="utf-8"))
+    rules = {rule["type"]: rule.get("parameters", {}) for rule in ruleset["rules"]}
+    assert "the ruleset on `main` requires `test` and no approval, so the label alone does not block a merge" in section
+    contexts = [check["context"] for check in rules["required_status_checks"]["required_status_checks"]]
+    assert contexts == ["test"]
+    assert rules["pull_request"]["required_approving_review_count"] == 0
+    assert ruleset["conditions"]["ref_name"]["include"] == ["~DEFAULT_BRANCH"]
+    assert f'lists `{ruleset["name"]}` with `"enforcement": "{ruleset["enforcement"]}"`' in section
+    command = "gh api repos/Danathar/goodreads-mcp/branches/main --jq .protected"
+    assert f"`{command}` prints `true`" in section
+    assert command in (_ROOT / "docs" / "branch-protection.md").read_text(encoding="utf-8")
+
+
+def test_the_hold_and_auto_merge_claims_are_maintenance_md_s():
+    section = _flat(_misbehaves_section())
+    maintenance = _flat((_ROOT / "docs" / "maintenance.md").read_text(encoding="utf-8"))
+    assert "At ACMM L6 non-outreach agent PRs auto-merge when checks pass" in section
+    assert "Non-outreach agent pull requests carry no level hold and merge once their checks pass" in maintenance
+    assert "The `hold` label (applied to outreach PRs, see maintenance.md) is a marker" in section
+    assert "outreach pull requests remain held for human review" in maintenance
+
+
+def test_no_code_here_reads_the_pause_label():
+    section = _flat(_misbehaves_section())
+    (label,) = set(re.findall(r"`(hive-pause/[a-z-]+)`", section))
+    assert f"`gh pr edit <number> --add-label {label}`" in section
+    assert "this repository has no code that reads the label" in section
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=_ROOT, capture_output=True, text=True, check=True
+    ).stdout.splitlines()
+    readers = [
+        name
+        for name in tracked
+        if not name.endswith(".md")
+        and name != Path(__file__).relative_to(_ROOT).as_posix()
+        and (_ROOT / name).is_file()
+        and "hive-pause" in (_ROOT / name).read_text(encoding="utf-8", errors="replace")
+    ]
+    assert readers == [], f"{readers} mention the pause label; the section says nothing here reads it"
+
+
+def test_the_boundary_paths_are_risk_tiers_tier_2():
+    section = _flat(_misbehaves_section())
+    assert "A PR that touches `.claude/settings.json` or `.claude/hooks/**` is a change to the agent permission boundary" in section
+    assert "([risk-tiers.md](risk-tiers.md), Tier 2)" in section
+    tiers = (_ROOT / "docs" / "risk-tiers.md").read_text(encoding="utf-8")
+    tier_2 = re.search(r"^## Tier 2\b(.*?)(?=^## )", tiers, re.M | re.S).group(1)
+    covers = _flat(re.search(r"^Covers:(.*?)\n\n", tier_2, re.M | re.S).group(1))
+    assert "`.claude/settings.json`" in covers
+    assert "`.claude/hooks/**`" in covers

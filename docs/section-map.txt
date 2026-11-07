@@ -110,7 +110,7 @@
 ## `ai-fix.yml` runs
   joined: tests/test_ai_ops_runbook.py
 ## An agent PR misbehaves
-  prose: unchecked: states the agent pull request author and branch naming
+  joined: tests/test_ai_ops_runbook.py
 ## `guard-bash` refusals
   joined: tests/test_ai_ops_runbook.py
 ## Agent audit trail is red

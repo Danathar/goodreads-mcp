@@ -221,6 +221,14 @@ gh pr list --author app/danathar-atomic-hive --state open
 gh pr view <number> --json author,headRefName,labels --jq '{author: .author.login, branch: .headRefName, labels: [.labels[].name]}'
 ```
 
+The first command leaves out the agent pull requests opened under `Danathar`.
+The signature line marks both kinds, and it is what `agent-audit.yml` reads
+when the author alone cannot tell:
+
+```bash
+gh pr list --state open --json number,author,headRefName,body --jq '.[] | select((.body // "") | split("\n") | any(startswith("— hive: agent="))) | {number, author: .author.login, branch: .headRefName}'
+```
+
 Stop it, smallest step first:
 
 1. **Do not merge.** At ACMM L6 non-outreach agent PRs auto-merge when checks
