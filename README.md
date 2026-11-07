@@ -2,7 +2,7 @@
 [![Nightly compliance](https://github.com/Danathar/goodreads-mcp/actions/workflows/nightly-compliance.yml/badge.svg?branch=main)](https://github.com/Danathar/goodreads-mcp/actions/workflows/nightly-compliance.yml)
 [![Ask DeepWiki](https://img.shields.io/badge/Ask-DeepWiki-1f6feb)](https://deepwiki.com/Danathar/goodreads-mcp)
 [![Maintenance assisted by Hivecommons Hive](https://img.shields.io/badge/maintenance%20assisted%20by-Hivecommons%20Hive-1f6feb)](https://github.com/hivecommons/hive)
-[![ACMM L6 Fully Autonomous](https://img.shields.io/badge/ACMM-L6%20Fully%20Autonomous-2da44e)](https://github.com/Danathar/goodreads-mcp/blob/main/docs/maintenance.md)
+[![ACMM L6 Autonomous](https://img.shields.io/badge/ACMM-L6%20Autonomous-2da44e)](https://github.com/Danathar/goodreads-mcp/blob/main/docs/maintenance.md)
 [![AI assisted](https://img.shields.io/badge/AI-assisted-d29922)](https://github.com/Danathar/goodreads-mcp#about-this-project)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](https://github.com/Danathar/goodreads-mcp/blob/main/LICENSE)
 
