@@ -367,7 +367,7 @@ def test_only_a_failed_push_or_scheduled_run_gets_a_job():
     condition = re.search(r"^    if: (.+)$", _WORKFLOW.text, re.M)
     assert condition
     assert condition.group(1).split(" && ") == [
-        "github.event.workflow_run.conclusion == 'failure'",
+        "contains(fromJSON('[\"failure\", \"timed_out\", \"startup_failure\"]'), github.event.workflow_run.conclusion)",
         "(github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'schedule')",
     ]
 

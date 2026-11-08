@@ -49,7 +49,9 @@ jobs:
     # main is a red main.
     # A scheduled run is the other case: nobody watches it. Each step below
     # picks one of the two.
-    if: github.event.workflow_run.conclusion == 'failure' && (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'schedule')
+    # A run that hit its time limit or never started is as red as a failure;
+    # cancelled stays out, since it usually means a newer run replaced it.
+    if: contains(fromJSON('["failure", "timed_out", "startup_failure"]'), github.event.workflow_run.conclusion) && (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'schedule')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
