@@ -14,6 +14,7 @@ from goodreads_mcp.client import (
     _is_waf_challenge,
     parse_appsync_config,
     parse_appsync_endpoint,
+    parse_int,
     parse_page_api_key,
     parse_rating,
 )
@@ -397,6 +398,28 @@ def test_parse_shelf_rss_missing_fields_default_empty():
 )
 def test_parse_rating(value, expected):
     assert parse_rating(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("2019", 2019),
+        (" 352 ", 352),
+        ("0", 0),
+        ("", None),
+        ("1.5", None),
+        ("-3", None),
+        # str.isdigit() accepts these, but int() rejects the first and reads
+        # the second as 12: a feed count is ASCII digits or it is no count.
+        ("\u00b2", None),
+        ("\u0661\u0662", None),
+        (None, None),
+        (True, None),
+        (False, None),
+    ],
+)
+def test_parse_int(value, expected):
+    assert parse_int(value) == expected
 
 
 # ----------------------------------------------------------------- next_data
