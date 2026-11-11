@@ -16,11 +16,13 @@ workflow, script or config here schedules an agent. [Hive](https://github.com/hi
 does that from outside, through a GitHub App, and its dashboard is not part of
 this repository. [`maintenance.md`](maintenance.md) describes the arrangement.
 
-Two workflows here concern agents, and neither runs one.
+Three workflows here concern agents, and none runs one.
 [`ai-fix.yml`](../.github/workflows/ai-fix.yml) takes a request for an agent
 fix, covered below. [`agent-audit.yml`](../.github/workflows/agent-audit.yml)
 reads back, once a month, which merged pull requests an agent wrote and who
 merged them ([`ai-ops-runbook.md`](ai-ops-runbook.md#agent-audit-trail-is-red)).
+[`agent-signature.yml`](../.github/workflows/agent-signature.yml) checks an
+open agent pull request for the signature line that audit reads.
 Everything else an agent does arrives as an ordinary issue, comment, branch or
 pull request.
 

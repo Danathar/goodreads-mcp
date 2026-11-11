@@ -23,6 +23,7 @@ what's known-weak, and where the real risk sits.
 | release refused unless the run is on `main`, the commit is on `main`, `test` passed on it and no run of `test` is red or unfinished (no other check counts), and the version is CalVer, untagged and newer than the last release | `release.yml` | yes, at release |
 | one tracking issue opened, or commented on, when `CI` fails on a push to `main`, and one per workflow when a scheduled `Release MCPB` or `Agent audit trail` run fails (open issues listed, exact title and Actions-bot author; never closed automatically) | `auto-issues.yml` | no, notification only |
 | live suite against the real Goodreads endpoints, daily at 07:00 UTC, retried before it counts as a failure; a failed scheduled run opens, or comments on, one drift issue | `nightly-compliance.yml` | no, notification only |
+| an open agent pull request (opened by the Hive app, or on an `ai-fix/` branch) has a `— hive:` signature line naming agent, backend and model, by the same test the monthly audit below uses (`tests/test_agent_signature_workflow.py` holds the two copies equal) | `agent-signature.yml` | yes, as a red check; not yet one the ruleset requires |
 | monthly read-back of merged agent pull requests; the run fails only when one that touched `.claude/settings.json` or `.claude/hooks/**` was merged by a bot, an app or an unknown account | `agent-audit.yml` | no, report only |
 | automated code review | Codex, every PR | advisory |
 | offline tests on source edit | `.claude/settings.json` hook | advisory, local |

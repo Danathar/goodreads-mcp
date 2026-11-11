@@ -1,0 +1,63 @@
+---
+name: Agent PR signature
+
+# Checks, while an agent pull request is still open, that its body carries the
+# signature line `agent-audit.yml` looks for once a month after the merge:
+# `— hive: agent=<role> backend=<backend> model=<model> ...`. The monthly audit
+# can only report a missing line, because a merged pull request's text is out
+# of reach by then. Here the line can still be added before the merge.
+#
+# It runs on agent pull requests only: those opened by the Hive app
+# (`danathar-atomic-hive[bot]`, the webhook spelling of `app/danathar-atomic-hive`)
+# and those on an `ai-fix/` branch. On any other pull request the job is skipped.
+#
+# The signature test is the audit's own `def signature:` jq function, copied
+# word for word. tests/test_agent_signature_workflow.py fails when the two
+# copies differ, so this check and the audit cannot disagree about what a
+# signature is.
+#
+# Advisory: no ruleset requires the `signature` check yet. It is meant to
+# become required once it has run clean for a month.
+#
+# It never writes and reads nothing but the event payload: the token has no
+# permissions, nothing is checked out, and no action runs, so there is nothing
+# to pin. The body reaches the script through an environment variable, never
+# through `${{ }}` in the script, so text in a pull request body is never run.
+# `pull_request` (not `pull_request_target`) runs with the pull request's own
+# copy of this file and no secrets.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions: {}
+
+jobs:
+  signature:
+    if: >-
+      github.event.pull_request.user.login == 'danathar-atomic-hive[bot]'
+      || startsWith(github.event.pull_request.head.ref, 'ai-fix/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check the pull request body for a signature line
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+
+          # The same function as agent-audit.yml; keep the two identical.
+          found="$(jq -n --arg body "${PR_BODY:-}" '
+            def signature:
+              (.body // "") | split("\n")
+              | map(select(startswith("— hive:")
+                  and test("(^| )agent=[^ ]+")
+                  and test("(^| )backend=[^ ]+")
+                  and test("(^| )model=[^ ]+")))
+              | first;
+            {body: $body} | signature != null')"
+          if [ "$found" = true ]; then
+            echo "The pull request body has a signature line."
+            exit 0
+          fi
+          echo "::error::The pull request body has no signature line. Add one line that starts with '— hive:' and names agent=, backend= and model=, e.g. '— hive: agent=<role> backend=<backend> model=<model>'. The monthly agent-audit.yml reads it."
+          exit 1
