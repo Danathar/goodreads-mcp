@@ -70,6 +70,11 @@ _CANCEL_POLL = 0.1
 # more is raised at once: giving up is politer than retrying early (#356).
 MAX_RETRY_AFTER = 30.0
 
+# The statuses with which Goodreads asks the client to slow down. `_request`
+# backs off on them; once it gives up and raises, a caller must send nothing
+# more for that call (#437). `is_rate_limited` is how a caller recognises it.
+RATE_LIMIT_STATUSES = (429, 503)
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -169,6 +174,14 @@ def _retry_after(resp: httpx.Response) -> float:
     if when.tzinfo is None:  # "-0000" parses naive; HTTP-dates are GMT
         when = when.replace(tzinfo=timezone.utc)
     return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
+def is_rate_limited(exc: BaseException) -> bool:
+    """True for the error `_request` raises when Goodreads asked it to slow
+    down and it gave up: another request now is more load, not a retry."""
+    return isinstance(exc, httpx.HTTPStatusError) and (
+        exc.response.status_code in RATE_LIMIT_STATUSES
+    )
 
 
 def _describe_graphql_error(error: dict[str, Any]) -> str:
@@ -438,7 +451,7 @@ class GoodreadsClient:
                 self._in_flight.release()
             retry_after = _retry_after(resp)
             if (
-                resp.status_code not in (429, 503)
+                resp.status_code not in RATE_LIMIT_STATUSES
                 or attempt == self.max_retries
                 or retry_after > MAX_RETRY_AFTER
             ):
@@ -505,9 +518,9 @@ class GoodreadsClient:
                 try:
                     page = self.get(path).text
                 except (WAFChallenge, LoginRequired, httpx.HTTPStatusError) as e:
+                    if is_rate_limited(e):
+                        raise  # another page is more load
                     if isinstance(e, httpx.HTTPStatusError):
-                        if e.response.status_code in (429, 503):
-                            raise  # rate limited: another page is more load
                         misses.append(f"{path}: HTTP {e.response.status_code}")
                     else:
                         misses.append(f"{path}: {type(e).__name__}")

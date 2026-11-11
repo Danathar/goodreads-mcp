@@ -32,8 +32,9 @@ so adding a twelfth tool with a tighter cap puts it on the list and turns every
 doc that states the number red until it is named.
 
 The claims are checked against the code, never against a second copy of the
-claim: status codes come out of the comparison that tests them, the profile
-path out of `list_shelves`' own f-string, the cap set out of the constants.
+claim: status codes come out of the client constant `_request` tests, the
+profile path out of `list_shelves`' own f-string, the cap set out of the
+constants.
 And the backtick vocabulary of both files is partitioned exhaustively below
 (`_CLAIMS`): a token added to either file belongs to one of the five kinds or
 these tests fail, which is what stops a new unchecked claim from arriving
@@ -48,6 +49,8 @@ from pathlib import Path
 import re
 
 import pytest
+
+from goodreads_mcp.client import RATE_LIMIT_STATUSES
 
 _ROOT = Path(__file__).resolve().parent.parent
 _AGENTS = _ROOT / "AGENTS.md"
@@ -510,8 +513,8 @@ def test_the_backoff_codes_are_the_ones_the_client_retries(rel: str) -> None:
     stated = set()
     for a, b in re.findall(r"\b(\d{3})/(\d{3})\b", _squashed(rel)):
         stated |= {int(a), int(b)}
-    retried = _status_codes_in("_request", _CLIENT_PY)
-    assert stated == retried, f"{rel} says {stated}, _request retries {retried}"
+    retried = set(RATE_LIMIT_STATUSES)
+    assert stated == retried, f"{rel} says {stated}, the client retries {retried}"
 
 
 @pytest.mark.parametrize("rel", _DERIVED)

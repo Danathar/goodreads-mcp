@@ -53,6 +53,7 @@ from .client import (
     GraphQLError,
     LoginRequired,
     ToolCall,
+    is_rate_limited,
     parse_rating,
 )
 from .config import load_user_id
@@ -1242,10 +1243,7 @@ def compare_books(book_ids: list[str]) -> dict[str, Any]:
             b = get_book(bid)
         except Exception as e:  # noqa: BLE001 — report per-book, don't abort all
             results.append({"book_id": bid, "error": str(e)})
-            if (
-                isinstance(e, httpx.HTTPStatusError)
-                and e.response.status_code in (429, 503)
-            ):
+            if is_rate_limited(e):
                 # Same rule as graphql_config: the client gave up on purpose,
                 # so another book is more load, not a retry of the same one.
                 results.extend(
