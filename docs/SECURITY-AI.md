@@ -198,6 +198,10 @@ signature, how many commits carry a `Signed-off-by` trailer, and any change to
 pull request touching those paths that a bot or app merged, because the rule
 above says a human merges them. A missing signature or trailer is reported and
 not failed, since nothing in this repository makes either a requirement.
+`agent-signature.yml` checks the signature earlier, while an agent pull request
+(opened by the Hive app, or on an `ai-fix/` branch) is still open and its body
+can still be fixed. It uses the audit's own test and needs no token. It is a
+red check, not yet a required one.
 
 ## Reporting
 

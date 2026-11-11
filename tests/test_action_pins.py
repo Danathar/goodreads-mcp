@@ -33,6 +33,7 @@ _USES = re.compile(r"^\s*(?:- )?uses:")
 # so a workflow that merely lost its `uses:` lines still fails the scan below.
 _NO_ACTIONS = {
     "agent-audit.yml": "reads pull requests with the runner's gh and jq; nothing is checked out, so no action runs",
+    "agent-signature.yml": "reads the event's pull request body with the runner's jq; nothing is checked out, so no action runs",
     "auto-issues.yml": "one gh call on the runner's preinstalled CLI; nothing is checked out, so no action runs",
 }
 
