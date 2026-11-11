@@ -26,6 +26,8 @@ from goodreads_mcp.client import (
     GoodreadsClient,
     GraphQLError,
     LoginRequired,
+    WAFChallenge,
+    is_rate_limited,
     parse_appsync_endpoint,
     parse_page_api_key,
 )
@@ -74,6 +76,33 @@ def test_request_gives_up_after_max_retries_and_raises(monkeypatch):
     assert excinfo.value.response.status_code == 503
     # The last attempt must raise_for_status() rather than sleep and loop.
     assert len(attempts) == client.max_retries + 1 == 4
+
+
+@pytest.mark.parametrize("status", [400, 403, 404, 408, 429, 500, 502, 503, 504])
+def test_the_statuses_retried_are_the_ones_callers_stop_on(monkeypatch, status):
+    """`_request` backs off on a status exactly when the error it gives up with
+    is one `is_rate_limited` tells callers to stop on. graphql_config and
+    compare_books used to spell (429, 503) out again by hand, so a change to
+    the retry set could leave them requesting more after the client gave up."""
+    monkeypatch.setattr("goodreads_mcp.client.time.sleep", lambda s: None)
+    attempts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(status)
+        return httpx.Response(status, text="refused")
+
+    with pytest.raises(httpx.HTTPStatusError) as excinfo:
+        _client(handler, max_retries=1).get("/anything")
+
+    retried = len(attempts) == 2
+    assert retried == is_rate_limited(excinfo.value) == (status in (429, 503))
+
+
+@pytest.mark.parametrize(
+    "error", [WAFChallenge("challenge"), LoginRequired("sign in"), ValueError("x")]
+)
+def test_errors_without_a_status_are_not_rate_limits(error):
+    assert not is_rate_limited(error)
 
 
 def test_a_default_client_gives_up_after_three_retries(monkeypatch):

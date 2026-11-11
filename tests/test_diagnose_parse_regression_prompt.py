@@ -414,7 +414,7 @@ def test_a_single_rotation_self_heals_so_it_is_not_a_symptom(goodreads):
 
 def test_the_rate_limit_statuses_are_the_ones_request_retries():
     named = {int(s) for s in re.findall(r"\((\d{3})/(\d{3}) exhausting", _step(1))[0]}
-    assert named == _compared_statuses(_function(_CLIENT_PY, "_request"))
+    assert named == set(client_mod.RATE_LIMIT_STATUSES)
 
 
 # --------------------------------------------------- the WAF and surfaces

@@ -621,25 +621,10 @@ def test_the_list_shelves_row_is_true_of_a_page_with_no_shelf_links(monkeypatch)
 
 
 def test_the_rate_limiting_note_names_the_statuses_the_client_backs_off_on():
-    """`429/503` in the prose against the tuple `_request` compares against."""
+    """`429/503` in the prose against the statuses `_request` backs off on."""
     prose = _body().split("## Read the failure", 1)[0]
     noted = {int(s) for s in re.findall(r"\b(\d{3})\b", prose)}
-
-    tree = _client_tree()
-    request = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "_request"
-    )
-    literals = {
-        elt.value
-        for node in ast.walk(request)
-        if isinstance(node, ast.Compare)
-        and isinstance(node.ops[0], ast.NotIn)
-        and isinstance(node.comparators[0], ast.Tuple)
-        for elt in node.comparators[0].elts
-    }
-    assert noted == literals
+    assert noted == set(client_mod.RATE_LIMIT_STATUSES)
 
 
 def test_exhausted_retries_surface_as_the_error_the_note_describes(mock_goodreads):
