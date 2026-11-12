@@ -45,6 +45,8 @@
   prose: narrative: how to write for a reader
 ## Testing
   joined: tests/test_coverage_thresholds.py
+## Owner's standing decisions
+  prose: narrative: a standing ruling on which owner questions agents decide themselves
 
 [CLAUDE.md]
 ## Quick reference
