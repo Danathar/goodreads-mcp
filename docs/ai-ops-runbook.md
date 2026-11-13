@@ -325,7 +325,9 @@ audited. The workflow takes no end date.
 [`.github/dependabot.yml`](../.github/dependabot.yml) asks for one grouped pull
 request a week, covering every GitHub Action the workflows `uses:`, with commit
 prefix `ci`. Every `uses:` is pinned to a 40-character SHA with a `# vN`
-comment, and Dependabot moves both together.
+comment, and Dependabot moves both together. It proposes an action release only
+once the release is three days old (`cooldown`), so a compromised release has
+time to be found and pulled before it can merge.
 
 **No pull request ever appears?** This repository is a fork, and GitHub does not
 run Dependabot version updates on a fork until they are enabled in the fork

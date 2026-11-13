@@ -130,6 +130,43 @@ def test_dependabot_proposes_bumps_for_the_pinned_actions():
     assert entry.get("open-pull-requests-limit") != "0", "a limit of 0 turns version updates off"
 
 
+_MIN_COOLDOWN_DAYS = 3
+
+
+def _actions_cooldown(text: str) -> dict[str, str]:
+    """The github-actions entry's `cooldown:` keys; {} when it sets none."""
+    block = re.search(r"^  - package-ecosystem: \"?github-actions\"?\n((?:(?:    .*|\s*#.*|\s*)\n)*)", text + "\n", re.M)
+    assert block, "dependabot.yml has no github-actions entry"
+    cooldown = re.search(r"^    cooldown:\n((?:      .*\n|\s*#.*\n)*)", block.group(1), re.M)
+    if not cooldown:
+        return {}
+    return dict(re.findall(r"^      ([a-z-]+):[ ]*(.*?)\s*$", cooldown.group(1), re.M))
+
+
+def test_dependabot_waits_before_taking_a_new_action_release():
+    # A compromised action release is usually found and pulled within days.
+    # Dependabot pull requests merge soon after CI goes green, and release.yml
+    # and ai-fix.yml hold `contents: write`, so a release has to age first.
+    cooldown = _actions_cooldown(_DEPENDABOT.read_text(encoding="utf-8"))
+    days = {k: v for k, v in cooldown.items() if k.endswith("-days")}
+    assert "default-days" in days, "dependabot.yml's github-actions entry needs a cooldown with default-days"
+    for key, value in days.items():
+        assert value.isdigit() and int(value) >= _MIN_COOLDOWN_DAYS, f"cooldown {key} is {value!r}, under {_MIN_COOLDOWN_DAYS} days"
+    # include narrows the wait to the listed actions and exclude exempts some.
+    assert not {"include", "exclude"} & cooldown.keys(), "the cooldown must cover every action"
+
+
+def test_the_cooldown_reader_sees_only_the_actions_entry():
+    text = (
+        "version: 2\nupdates:\n"
+        "  - package-ecosystem: github-actions\n    directory: /\n    schedule:\n      interval: weekly\n"
+        "  - package-ecosystem: pip\n    directory: /\n    cooldown:\n      default-days: 7\n"
+    )
+    assert _actions_cooldown(text) == {}
+    text = text.replace("      interval: weekly\n", "      interval: weekly\n    cooldown:\n      default-days: 1\n      exclude:\n")
+    assert _actions_cooldown(text) == {"default-days": "1", "exclude": ""}
+
+
 def test_the_dependabot_parser_keeps_entries_apart_and_skips_nested_keys():
     text = (
         "version: 2\nupdates:\n"

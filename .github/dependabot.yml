@@ -17,6 +17,14 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Wait three days after an action is released before proposing it. A
+    # compromised release is usually found and pulled within days, and these
+    # pull requests merge soon after CI goes green, so without the wait a bad
+    # release could reach release.yml or ai-fix.yml, which hold
+    # `contents: write`. tests/test_action_pins.py fails if this is removed
+    # or shortened.
+    cooldown:
+      default-days: 3
     # One pull request a week for all actions, not one per action, so the
     # bumps are reviewed rather than waved through.
     groups:
