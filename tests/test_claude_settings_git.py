@@ -37,7 +37,13 @@ def _base_env(home: Path) -> dict:
 
 def _git(cwd: Path, env: dict, *args: str, check: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=cwd, env=env, capture_output=True, text=True, check=check
+        ["git", *args],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",  # a diff that reaches a committed pack file prints binary
+        check=check,
     )
 
 
@@ -58,6 +64,12 @@ def _planted_clone(tmp: Path, marker: Path) -> Path:
     (evil / "info").mkdir(exist_ok=True)
     (evil / "info" / "attributes").write_text("* diff=x\n")
     _git(evil, env, "config", "diff.x.textconv", f"touch '{marker}'; cat", check=True)
+    # A bare clone packs its refs, leaving `refs/` empty, and git does not track
+    # empty directories: without a loose ref the committed copy has no `refs/`,
+    # so git does not see a repository there and falls through to the clone.
+    ref = _git(evil, env, "symbolic-ref", "HEAD", check=True).stdout.strip()
+    head = _git(evil, env, "rev-parse", "HEAD", check=True).stdout.strip()
+    (evil / ref).write_text(head + "\n")
     _git(src, env, "add", "evil", check=True)
     _git(src, env, *_IDENT, "commit", "-qm", "x", check=True)
     _git(tmp, env, "clone", "-q", str(src), "victim", check=True)
