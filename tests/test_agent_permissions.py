@@ -293,8 +293,8 @@ _DENIED = [
     # folder a branch planted runs its diff textconv program (#462). Refused
     # whatever the subcommand, and with a global option in front, where the
     # verb walk alone never reached the assignment.
-    ("GIT_DIR=evil git -C evil log -p", "names the repository"),
-    ("GIT_WORK_TREE=.. git -C . diff HEAD", "names the repository"),
+    ("GIT_DIR=evil git -C evil log -p", "`GIT_DIR=...` in front of git names"),
+    ("GIT_WORK_TREE=.. git -C . diff HEAD", "`GIT_WORK_TREE=...` in front of git names"),
     ("git --git-dir=evil log -p", "`git --git-dir` names the repository"),
     ("git --git-dir evil log -p", "`git --git-dir` names the repository"),
     ("git --bare log -p", "`git --bare` names the repository"),
