@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -114,3 +115,57 @@ def test_committed_bare_repository_cannot_make_git_log_or_show_run_a_program(
     # The checkout's own repository (.git/, not bare) still works with the setting.
     assert _git(victim, agent_env, "status", "--short").returncode == 0
     assert _git(victim, agent_env, "log", "-1", "--format=%s").stdout.strip() == "x"
+
+
+def _hook_refuses(command: str) -> str | None:
+    """The deny reason the guard hook prints for `command`, or None."""
+    hook = _ROOT / ".claude" / "hooks" / "guard-bash.py"
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+    result = subprocess.run(
+        [sys.executable, str(hook)],
+        input=payload,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    if not result.stdout.strip():
+        return None
+    output = json.loads(result.stdout)["hookSpecificOutput"]
+    assert output["permissionDecision"] == "deny"
+    return output["permissionDecisionReason"]
+
+
+def test_a_named_or_overridden_bare_repository_still_runs_the_program_so_the_hook_refuses_it(
+    tmp_path: Path,
+) -> None:
+    """The settings env alone does not stop these spellings; the guard hook does (#462).
+
+    `safe.bareRepository=explicit` allows a bare repository that is named on
+    the command line (`--git-dir`, `--bare`), and `-c` / `--config-env` set
+    the key at command scope, which wins over the `GIT_CONFIG_*` env. Each
+    command below runs the planted program with only the env block in place,
+    so the hook is what stands in front of it.
+    """
+    marker = tmp_path / "ran"
+    victim = _planted_clone(tmp_path, marker)
+    agent_env = {**_base_env(tmp_path), **_settings_env(), "SBR": "all"}
+
+    for cwd, argv in (
+        (victim, ["--git-dir=evil", "log", "-p", "-1"]),
+        (victim, ["--git-dir", "evil", "show"]),
+        (victim / "evil", ["--bare", "log", "-p", "-1"]),
+        (victim, ["-c", "safe.bareRepository=all", "-C", "evil", "log", "-p", "-1"]),
+        (victim, ["--config-env=safe.bareRepository=SBR", "-C", "evil", "show"]),
+    ):
+        command = "git " + " ".join(argv)
+        _git(cwd, agent_env, *argv)
+        assert marker.exists(), (
+            f"{command} no longer runs the planted program past the settings "
+            "env; this test needs a new route"
+        )
+        marker.unlink()
+
+        reason = _hook_refuses(command)
+        assert reason is not None, f"the guard hook let {command!r} through"
+        assert "--git-dir" in reason or "--bare" in reason or "safe." in reason, reason

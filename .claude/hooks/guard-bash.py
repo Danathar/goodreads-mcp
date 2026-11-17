@@ -98,8 +98,18 @@ not on a guess about what is dangerous:
 * A git global option before the subcommand -- `git -c diff.external=prog
   diff`, `--exec-path`, `--config-env`. These do reach git, and `-c
   diff.external=` is the config spelling of `GIT_EXTERNAL_DIFF`. What stops
-  them is that `Bash(git diff *)` matches a string beginning `git diff `, and
-  a global option puts `git -c` at the front instead.
+  them in the default mode is that `Bash(git diff *)` matches a string
+  beginning `git diff `, and a global option puts `git -c` at the front
+  instead. Bypass and auto modes prompt for nothing, though, and a gate
+  refuses the protected action however it is reached
+  (Danathar/atomic-image-builder#772). So the global options that undo the
+  `safe.bareRepository=explicit` setting in `.claude/settings.json` are
+  refused on every git command (`_check_git_globals`, #462): `--git-dir`,
+  `--work-tree`, `--bare` and a `GIT_DIR=` or `GIT_WORK_TREE=` in front name
+  the repository, which `explicit` allows by design, so a bare repository a
+  branch planted loads its `diff.*.textconv` program again; and `-c safe.*`
+  or `--config-env safe.*` sets the key at command scope, which wins over
+  the settings env. The other global options stay unreachable in this sense.
 * A brace-expanded command name, `{,git} diff`. bash drops the empty
   alternative as an unquoted null word, so this really does run git (checked
   against bash 5.3); the string begins `{,git}` and matches no row.
@@ -1174,6 +1184,75 @@ def _check_git(verb: str, args: list[str], cwd: Path) -> None:
             )
 
 
+# `.claude/settings.json` sets `safe.bareRepository=explicit` through the
+# `GIT_CONFIG_*` env, so git refuses a bare repository it finds by itself: one
+# a branch committed as ordinary files, whose config can name a program
+# (`diff.*.textconv`) for `git log -p` to run. `explicit` allows a repository
+# that is named, and these global options name one (#462): `git --git-dir=evil
+# log -p`, and `git --bare log -p` run inside the folder, both ran the planted
+# program with the setting in place (git 2.47.3). `--work-tree` moves the files
+# git reads out of the checkout. The env spellings go with them. Git matches
+# these option names exactly, not by prefix.
+_GIT_NAMED_REPO = frozenset({"--git-dir", "--work-tree", "--bare"})
+_GIT_NAMED_REPO_ENV = frozenset({"GIT_DIR", "GIT_WORK_TREE"})
+
+# Global options that take the next word as their value when none is
+# attached, so the walk below does not read that value as the subcommand.
+_GIT_GLOBAL_VALUE_NEXT = frozenset(
+    {"-C", "-c", "--namespace", "--config-env", "--super-prefix"}
+)
+
+
+def _check_git_globals(words: list[str], env: list[str]) -> None:
+    """Refuse the git global options that undo `safe.bareRepository` (#462).
+
+    Read on every git command, whatever its subcommand: a global option puts
+    `git -c` or `git --git-dir` at the front, so no allow rule matches in the
+    default mode, but bypass and auto modes prompt for nothing.
+
+    `-c` and `--config-env` set a key at command scope, which wins over the
+    `GIT_CONFIG_*` env, so `git -c safe.bareRepository=all -C evil log -p`
+    ran the planted program too. Any key in the `safe` section is refused,
+    in any case, because git reads section and key names in any case.
+    """
+    for assignment in env:
+        if _ASSIGNMENT_RE.match(assignment).group(1) in _GIT_NAMED_REPO_ENV:
+            raise Denied(
+                f"`{assignment.partition('=')[0]}=...` in front of git names "
+                "the repository, which changes what it loads: "
+                "safe.bareRepository=explicit (.claude/settings.json) allows a "
+                "named bare repository, so one a branch planted would load its "
+                "config and run its diff textconv program. Run git from the "
+                "project without it"
+            )
+    i = 1
+    while i < len(words):
+        _spend()
+        word = words[i]
+        if not word.startswith("-"):
+            return  # the subcommand: what follows is its own, not git's
+        option, eq, value = word.partition("=")
+        if option in _GIT_NAMED_REPO:
+            raise Denied(
+                f"`git {option}` names the repository or work tree: "
+                "safe.bareRepository=explicit (.claude/settings.json) allows a "
+                "named bare repository, so one a branch planted would load its "
+                "config and run its diff textconv program. Run git from the "
+                "project without it"
+            )
+        if option in ("-c", "--config-env"):
+            key = value if eq else next(iter(words[i + 1 :]), "")
+            if key.lower().startswith("safe."):
+                raise Denied(
+                    f"`git {option} {key}` overrides the safe.* setting in "
+                    ".claude/settings.json that stops a committed bare "
+                    "repository from running a program: config set on the "
+                    "command line wins over the settings env. Run git "
+                    "without it"
+                )
+        i += 2 if word in _GIT_GLOBAL_VALUE_NEXT else 1
+
+
 # --------------------------------------------------------------------- driver
 
 
@@ -1385,6 +1464,7 @@ def _check_command(words: list[str], cwd: Path, inherited: list[str] | None = No
     elif name == "pytest":
         verb, args = "pytest", words[1:]
     elif name == "git":
+        _check_git_globals(words, env)
         # `git --no-pager diff` and the like: the verb is the first token that is
         # not an option. A global option with a value (`-C dir`) makes its value
         # look like the verb; that is harmless, because the allow list only
