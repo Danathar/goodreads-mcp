@@ -175,8 +175,12 @@ bug; see [#71](https://github.com/Danathar/goodreads-mcp/issues/71) and the
 
 - Scope `permissions:` to the minimum each job needs.
 - `pull_request_target` grants secrets and write access to a workflow triggered
-  by outside contributors. Use it only for jobs that never check out or execute
-  PR code — the labeler qualifies; anything that runs code does not.
+  by outside contributors. No workflow here uses it, and anything that checks
+  out or executes PR code never may. From 2026-12-02 GitHub also runs it in a
+  public repository only when a repository event policy allows it, and the
+  hive's App cannot create one. The labeler, which runs no PR code, runs on
+  `pull_request` instead and skips pull requests from forks, whose token is
+  read-only there.
 - Gate any workflow that can write to the repo on the actor's collaborator
   permission, as `ai-fix.yml` does.
 - What each workflow's token may do is written down twice: in the workflow, and

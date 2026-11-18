@@ -37,6 +37,8 @@ from pathlib import Path
 
 import pytest
 
+import _workflow_steps
+
 _ROOT = Path(__file__).resolve().parent.parent
 _DOC = _ROOT / "docs" / "SECURITY-AI.md"
 _README = _ROOT / ".claude" / "README.md"
@@ -328,11 +330,33 @@ def test_the_boundary_files_are_tier_2(doc: str):
 # ----------------------------------------------- the rest of the page
 
 
-def test_the_labeler_is_the_pull_request_target_job_that_runs_nothing(doc: str):
-    """"the labeler qualifies": it never checks out or executes PR code."""
-    assert "the labeler qualifies" in _squash(doc)
+def test_no_workflow_is_triggered_by_pull_request_target(doc: str):
+    """ "No workflow here uses it": every `on:` block is read, not one file."""
+    assert "No workflow here uses it" in _squash(doc)
+    for path in _workflow_steps.workflow_files():
+        text = path.read_text(encoding="utf-8")
+        triggers = re.search(r"^on:\n((?:[ \t].*\n|\n)+)", text, re.M)
+        assert triggers, f"{path.name} has no on: block"
+        assert not re.search(r"^  pull_request_target:", triggers.group(1), re.M), path.name
+
+
+def test_the_labeler_runs_on_pull_request_skips_forks_and_runs_nothing(doc: str):
+    """ "runs on `pull_request` instead and skips pull requests from forks".
+
+    A fork's pull request gets a read-only token under `pull_request`, so the
+    labeler could only fail there. The job-level `if:` skips it instead, and
+    the job still never checks out or executes PR code.
+    """
+    page = _squash(doc)
+    assert "The labeler, which runs no PR code, runs on `pull_request` instead" in page
+    assert "skips pull requests from forks" in page
     text = _LABELER.read_text(encoding="utf-8")
-    assert re.search(r"^  pull_request_target:", text, re.M)
+    assert re.search(r"^on:\n  pull_request:\n", text, re.M)
+    assert re.search(
+        r"^  label:\n    if: github\.event\.pull_request\.head\.repo\.full_name == github\.repository$",
+        text,
+        re.M,
+    ), "the label job no longer skips pull requests from forks"
     assert not re.search(r"^\s*(-\s+)?run:", text, re.M), "the labeler runs a shell step"
     uses = re.findall(r"uses:\s*(\S+)", text)
     assert uses and not any(u.startswith("actions/checkout") for u in uses), uses

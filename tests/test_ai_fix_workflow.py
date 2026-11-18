@@ -422,8 +422,11 @@ def test_a_write_capable_workflow_on_an_outsider_event_either_gates_or_runs_noth
 
     An outsider can cause `issues`, `issue_comment` and `pull_request_target`.
     A workflow they can trigger that holds a `write` scope must either gate on
-    the actor's collaborator permission, or execute nothing at all — which is
-    what makes the labeler's `pull_request_target` safe.
+    the actor's collaborator permission, or execute nothing at all.
+    `pull_request_target` stays in the list although no workflow uses it now,
+    so one that brings it back is held to the rule. `pull_request` is not in
+    it: a fork's pull request gets a read-only token there, which is why the
+    labeler moved to it and skips forks.
     """
     outsider = ("issues", "issue_comment", "pull_request_target")
     checked = 0
@@ -448,7 +451,7 @@ def test_a_write_capable_workflow_on_an_outsider_event_either_gates_or_runs_noth
             f"{path.name} runs on an outsider-triggerable event with a write scope, "
             "but neither gates on collaborator permission nor stays code-free"
         )
-    assert checked >= 2, "expected ai-fix.yml and labeler.yml to reach this rule"
+    assert checked >= 1, "expected ai-fix.yml to reach this rule"
 
 
 # --------------------------------------------------------------------------
