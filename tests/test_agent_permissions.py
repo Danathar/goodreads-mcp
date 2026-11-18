@@ -289,6 +289,38 @@ _DENIED = [
     ),
     ("GIT_DIR=/tmp/elsewhere/.git git log -1", "changes what it loads"),
     ("GIT_WORK_TREE=/tmp/elsewhere git status", "changes what it loads"),
+    # A named repository gets past safe.bareRepository=explicit, so a bare
+    # folder a branch planted runs its diff textconv program (#462). Refused
+    # whatever the subcommand, and with a global option in front, where the
+    # verb walk alone never reached the assignment.
+    ("GIT_DIR=evil git -C evil log -p", "`GIT_DIR=...` in front of git names"),
+    ("GIT_WORK_TREE=.. git -C . diff HEAD", "`GIT_WORK_TREE=...` in front of git names"),
+    ("git --git-dir=evil log -p", "`git --git-dir` names the repository"),
+    ("git --git-dir evil log -p", "`git --git-dir` names the repository"),
+    ("git --bare log -p", "`git --bare` names the repository"),
+    ("cd evil && git --bare log -p", "`git --bare` names the repository"),
+    ("git --work-tree=.. diff HEAD", "`git --work-tree` names the repository"),
+    ("git --work-tree .. status", "`git --work-tree` names the repository"),
+    ("git --no-pager --bare log -p", "`git --bare` names the repository"),
+    ("git --git-dir=evil show", "`git --git-dir` names the repository"),
+    # a value-taking global option in front: its value is skipped, not read
+    # as the subcommand, or the walk stops before the option that names it
+    ("git -C . --git-dir=evil log -p", "`git --git-dir` names the repository"),
+    ("git --namespace x --bare log -p", "`git --bare` names the repository"),
+    # `-c` / `--config-env` set config at command scope, which wins over the
+    # GIT_CONFIG_* settings env, so safe.bareRepository=all switches it off.
+    ("git -c safe.bareRepository=all log -p", "overrides the safe.* setting"),
+    ("git -c safe.bareRepository=all -C evil log -p", "overrides the safe.* setting"),
+    ("git -c SAFE.bareRepository=all log -p", "overrides the safe.* setting"),
+    ("git -c safe.directory=* -C evil show", "overrides the safe.* setting"),
+    ("git --config-env=safe.bareRepository=V log -p", "overrides the safe.* setting"),
+    ("git --config-env safe.bareRepository=V log -p", "overrides the safe.* setting"),
+    ("git --config-env=SAFE.BAREREPOSITORY=V log -p", "overrides the safe.* setting"),
+    (
+        "git -c user.name=x -c safe.bareRepository=all log -p",
+        "overrides the safe.* setting",
+    ),
+    ("git -c safe.bareRepository=all", "overrides the safe.* setting"),
     # and its value is shell text like any other word
     ("FOO=$(cat /tmp/x) pytest -q", "cannot see"),
     ("FOO=`cat /tmp/x` pytest -q", "cannot see"),
@@ -677,6 +709,15 @@ _PERMITTED = [
     "GOODREADS_USER_ID=12345678 GOODREADS_LIVE=1 pytest tests/e2e -v",
     "CI=1 pytest -q",
     "TZ=UTC git log -1",
+    # #462: only git's own global options, and only the ones that name the
+    # repository or set a safe.* key, are refused. The same words after the
+    # subcommand are its own, a key that merely contains `safe` is another
+    # section, and a `-C` value that looks like a key is a directory.
+    "git log --oneline -- --bare",
+    "git -c color.ui=never log --oneline -1",
+    "git -c branch.unsafe.merge=x status",
+    "git -C safe.d status",
+    "git -c",
     # An export reaches what bash runs after it and nothing earlier, and an
     # export in a string with no guarded verb in it is not this hook's
     # business at all.
