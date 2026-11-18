@@ -1,7 +1,30 @@
 name: Label PRs
 
+# Adds the path labels in .github/labeler.yml to each pull request. It reads
+# the changed-file list through the API and never checks out or executes PR
+# code.
+#
+# It runs on `pull_request`, not `pull_request_target`. From 2026-12-02 GitHub
+# stops running `pull_request_target` workflows in public repositories unless
+# a repository event policy allows them
+# (https://github.blog/changelog/2026-11-02-pull_request_target-blocked-by-default-december-2).
+# The hive's GitHub App cannot create those policies: it would need the
+# Administration permission, which its owner refused for security reasons. The
+# labeler never needed `pull_request_target` anyway.
+#
+# Under `pull_request`, a pull request from a branch in this repository gets a
+# token with the `permissions:` below, Dependabot's included: its runs start
+# read-only, and the `permissions:` key raises them. A pull request from a fork
+# gets a read-only token, so labelling would fail. The job is skipped for forks
+# instead, which leaves a grey run rather than a red one.
+#
+# The labeler reads .github/labeler.yml from the pull request's merge commit,
+# not from main, so a pull request that changes the config is labelled by its
+# own copy. Only branches in this repository run, and their authors can
+# already write here.
+
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened]
 
 permissions:
@@ -10,11 +33,10 @@ permissions:
 
 jobs:
   label:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      # Safe use of pull_request_target: labeler reads the changed-file list
-      # via the API and never checks out or executes PR code.
       - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
