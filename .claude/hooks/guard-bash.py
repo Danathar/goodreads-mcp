@@ -1198,8 +1198,20 @@ _GIT_NAMED_REPO_ENV = frozenset({"GIT_DIR", "GIT_WORK_TREE"})
 
 # Global options that take the next word as their value when none is
 # attached, so the walk below does not read that value as the subcommand.
+# `--shallow-file` and `--attr-source` were missing: the walk read their value
+# as the subcommand and stopped, so `git --attr-source HEAD --git-dir=evil log
+# -p` and `git --shallow-file x -c safe.bareRepository=all log -p` ran the
+# planted program (#465).
 _GIT_GLOBAL_VALUE_NEXT = frozenset(
-    {"-C", "-c", "--namespace", "--config-env", "--super-prefix"}
+    {
+        "-C",
+        "-c",
+        "--namespace",
+        "--config-env",
+        "--super-prefix",
+        "--shallow-file",
+        "--attr-source",
+    }
 )
 
 
@@ -1572,12 +1584,38 @@ def _turns_on_allexport(words: list[str]) -> bool:
 def _is_bare_assignment(words: list[str]) -> bool:
     """Whether this simple command is assignments and nothing else.
 
-    On its own that sets a shell variable, which no child process sees, so it
-    is not refused; under `set -a` it sets an environment one, and
-    `_turns_on_allexport` is what tells the two apart.
+    For a name that is not in the environment, that sets a shell variable no
+    child process sees; under `set -a` it sets an environment one, and
+    `_turns_on_allexport` is what tells the two apart. A name that is already
+    in the environment is another matter: see `_changes_the_environment`.
     """
 
     return bool(words) and all(_ASSIGNMENT_RE.match(word) for word in words)
+
+
+def _changes_the_environment(words: list[str]) -> str | None:
+    """The name outside `SAFE_ENV` a standalone assignment or `unset` changes.
+
+    bash hands an exported variable's new value to every later command, and
+    drops an unset one from their environment, with no export-family builtin
+    in sight. `.claude/settings.json` exports `GIT_CONFIG_COUNT`, and the
+    session exports `HOME` and `PATH`, so `GIT_CONFIG_COUNT=0; git log -p` and
+    `unset GIT_CONFIG_COUNT; git log -p` switched off
+    `safe.bareRepository=explicit`, and `HOME=planted; git log -p` read a
+    `.gitconfig` a branch committed, each running a planted program (#465).
+    The guard cannot tell which names the shell has exported, so any name
+    outside `SAFE_ENV` counts, as it does for an assignment in front of the
+    verb. `unset -f` names a function, which changes no environment, but it is
+    read the same way: the over-refusing direction, and the safe one.
+    """
+
+    if _is_bare_assignment(words):
+        names = [_ASSIGNMENT_RE.match(word).group(1) for word in words]
+    elif words and words[0] == "unset":
+        names = [word for word in words[1:] if not word.startswith("-")]
+    else:
+        return None
+    return next((name for name in names if name not in SAFE_ENV), None)
 
 
 # The characters that open an extglob group when an unquoted `(` touches them.
@@ -1778,6 +1816,7 @@ def _decide(command: str, cwd: str | os.PathLike[str] | None) -> str | None:
         # `export GIT_EXTERNAL_DIFF=prog; git diff HEAD` is not.
         exported = False
         allexport = False
+        changed = None
         for words in _simple_commands(tokens):
             if exported and _GUARDED_WORD_RE.search(" ".join(words)):
                 raise Denied(
@@ -1792,6 +1831,17 @@ def _decide(command: str, cwd: str | os.PathLike[str] | None) -> str | None:
                     "while the git command carries no assignment at all. Run "
                     "it without the export"
                 )
+            if changed is not None and _GUARDED_WORD_RE.search(" ".join(words)):
+                raise Denied(
+                    f"`{changed}` is assigned or unset earlier in this string, "
+                    "and bash hands the change to every later command when the "
+                    "name is already in the environment: `GIT_CONFIG_COUNT=0` "
+                    "or `unset GIT_CONFIG_COUNT` switches off the "
+                    "safe.bareRepository setting in .claude/settings.json, and "
+                    "`HOME=dir` makes git read dir/.gitconfig. The guard's safe "
+                    f"list is {', '.join(sorted(SAFE_ENV))}. Run the command "
+                    "without it"
+                )
             # Armed after this command has been judged, so the rule stays
             # ordered: an export reaches what bash runs after it, never what
             # ran before it.
@@ -1799,6 +1849,7 @@ def _decide(command: str, cwd: str | os.PathLike[str] | None) -> str | None:
                 exported = True
             if _turns_on_allexport(words):
                 allexport = True
+            changed = changed or _changes_the_environment(words)
             _check_command(words, cwd_path)
     except Denied as exc:
         return str(exc)
