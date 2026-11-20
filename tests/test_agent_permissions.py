@@ -321,17 +321,20 @@ _DENIED = [
         "overrides the safe.* setting",
     ),
     ("git -c safe.bareRepository=all", "overrides the safe.* setting"),
-    # `--shallow-file` and `--attr-source` take the next word as their value
-    # too; read as the subcommand, it stopped the walk before the option that
-    # names the repository or overrides the setting (#465)
-    ("git --shallow-file x --git-dir=evil log -p", "`git --git-dir` names the repository"),
-    ("git --shallow-file x --bare log -p", "`git --bare` names the repository"),
-    (
-        "git --shallow-file x -c safe.bareRepository=all -C evil log -p",
-        "overrides the safe.* setting",
-    ),
+    # `--attr-source` takes the next word as its value too; read as the
+    # subcommand, it stopped the walk before the option that names the
+    # repository or overrides the setting (#465)
     ("git --attr-source HEAD --git-dir=evil log -p", "`git --git-dir` names the repository"),
     ("git --attr-source HEAD -c safe.bareRepository=all log -p", "overrides the safe.* setting"),
+    # `--shallow-file` reads any file and prints a line of it, and its value
+    # hid the options after it the same way (#465)
+    ("git --shallow-file .env log -1", "`git --shallow-file` reads the file"),
+    ("git --shallow-file x --git-dir=evil log -p", "`git --shallow-file` reads the file"),
+    ("git --shallow-file x --bare log -p", "`git --shallow-file` reads the file"),
+    (
+        "git --shallow-file x -c safe.bareRepository=all -C evil log -p",
+        "`git --shallow-file` reads the file",
+    ),
     # A standalone assignment or `unset` changes an exported name for every
     # later command: GIT_CONFIG_COUNT is exported by .claude/settings.json,
     # HOME and PATH by the session (#465)
@@ -942,6 +945,8 @@ _PERMITTED = [
     # after the guarded command, changes nothing it runs (#465)
     "TZ=UTC; git log -1",
     "unset NO_COLOR; git status",
+    "unset FOO; git log -1",
+    "git --attr-source HEAD log -1",
     "git log -1; unset GIT_CONFIG_COUNT",
     "GIT_CONFIG_COUNT=0; echo hi",
     "set -a; echo hi; git diff HEAD",
@@ -1576,15 +1581,15 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "unset GIT_CONFIG_COUNT; git log -p",
     ),
     (
-        "`--shallow-file` taking the next word as its value",
-        '        "--shallow-file",\n',
-        "",
-        "git --shallow-file x --git-dir=evil log -p",
+        "`git --shallow-file`, which reads the file it names",
+        'if option == "--shallow-file":',
+        "if False:",
+        "git --shallow-file .env log -1",
     ),
     (
         "`--attr-source` taking the next word as its value",
-        '        "--attr-source",\n',
-        "",
+        '"--super-prefix", "--attr-source"}',
+        '"--super-prefix"}',
         "git --attr-source HEAD --git-dir=evil log -p",
     ),
 )

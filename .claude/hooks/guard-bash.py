@@ -1198,20 +1198,12 @@ _GIT_NAMED_REPO_ENV = frozenset({"GIT_DIR", "GIT_WORK_TREE"})
 
 # Global options that take the next word as their value when none is
 # attached, so the walk below does not read that value as the subcommand.
-# `--shallow-file` and `--attr-source` were missing: the walk read their value
-# as the subcommand and stopped, so `git --attr-source HEAD --git-dir=evil log
-# -p` and `git --shallow-file x -c safe.bareRepository=all log -p` ran the
-# planted program (#465).
+# `--attr-source` was missing: the walk read its value as the subcommand and
+# stopped, so `git --attr-source HEAD --git-dir=evil log -p` ran the planted
+# program (#465). `--shallow-file` takes the next word too, but it is refused
+# outright below, so the walk never steps over it.
 _GIT_GLOBAL_VALUE_NEXT = frozenset(
-    {
-        "-C",
-        "-c",
-        "--namespace",
-        "--config-env",
-        "--super-prefix",
-        "--shallow-file",
-        "--attr-source",
-    }
+    {"-C", "-c", "--namespace", "--config-env", "--super-prefix", "--attr-source"}
 )
 
 
@@ -1244,6 +1236,14 @@ def _check_git_globals(words: list[str], env: list[str]) -> None:
         if not word.startswith("-"):
             return  # the subcommand: what follows is its own, not git's
         option, eq, value = word.partition("=")
+        if option == "--shallow-file":
+            raise Denied(
+                "`git --shallow-file` reads the file it names as git's list of "
+                "shallow commits and prints a line it cannot parse, so "
+                "`git --shallow-file .env log -1` printed .env's first line "
+                "past the Read(./.env) deny rule; its value also hid the "
+                "options after it from this check (#465). Run git without it"
+            )
         if option in _GIT_NAMED_REPO:
             raise Denied(
                 f"`git {option}` names the repository or work tree: "
@@ -1594,7 +1594,7 @@ def _is_bare_assignment(words: list[str]) -> bool:
 
 
 def _changes_the_environment(words: list[str]) -> str | None:
-    """The name outside `SAFE_ENV` a standalone assignment or `unset` changes.
+    """The name a standalone assignment or `unset` changes for later commands.
 
     bash hands an exported variable's new value to every later command, and
     drops an unset one from their environment, with no export-family builtin
@@ -1603,19 +1603,20 @@ def _changes_the_environment(words: list[str]) -> str | None:
     `unset GIT_CONFIG_COUNT; git log -p` switched off
     `safe.bareRepository=explicit`, and `HOME=planted; git log -p` read a
     `.gitconfig` a branch committed, each running a planted program (#465).
-    The guard cannot tell which names the shell has exported, so any name
-    outside `SAFE_ENV` counts, as it does for an assignment in front of the
-    verb. `unset -f` names a function, which changes no environment, but it is
-    read the same way: the over-refusing direction, and the safe one.
+
+    The guard cannot tell which names the shell has exported, so an assignment
+    to any name outside `SAFE_ENV` counts, as it does in front of the verb.
+    Taking a name away matters only where the guard relies on it being there,
+    which is the `GIT_CONFIG_*` settings env; `unset FOO` changes nothing git
+    loads.
     """
 
     if _is_bare_assignment(words):
         names = [_ASSIGNMENT_RE.match(word).group(1) for word in words]
-    elif words and words[0] == "unset":
-        names = [word for word in words[1:] if not word.startswith("-")]
-    else:
-        return None
-    return next((name for name in names if name not in SAFE_ENV), None)
+        return next((name for name in names if name not in SAFE_ENV), None)
+    if words and words[0] == "unset":
+        return next((word for word in words[1:] if word.startswith("GIT_CONFIG")), None)
+    return None
 
 
 # The characters that open an extglob group when an unquoted `(` touches them.
