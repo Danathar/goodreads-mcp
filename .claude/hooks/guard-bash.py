@@ -1199,7 +1199,10 @@ _GIT_NAMED_REPO_ENV = frozenset({"GIT_DIR", "GIT_WORK_TREE"})
 # Global options that take the next word as their value when none is
 # attached, so the walk below does not read that value as the subcommand.
 _GIT_GLOBAL_VALUE_NEXT = frozenset(
-    {"-C", "-c", "--namespace", "--config-env", "--super-prefix"}
+    {
+        "-C", "-c", "--namespace", "--config-env", "--super-prefix",
+        "--attr-source", "--shallow-file",
+    }
 )
 
 
@@ -1239,6 +1242,13 @@ def _check_git_globals(words: list[str], env: list[str]) -> None:
                 "named bare repository, so one a branch planted would load its "
                 "config and run its diff textconv program. Run git from the "
                 "project without it"
+            )
+        if option == "--shallow-file":
+            raise Denied(
+                "`git --shallow-file` makes git read a file as its shallow "
+                "list, and the error for a line it cannot parse quotes that "
+                "line, so `--shallow-file .env` prints `NAME=value` from the "
+                "file `Read(./.env)` exists to withhold. Run git without it"
             )
         if option in ("-c", "--config-env"):
             key = value if eq else next(iter(words[i + 1 :]), "")
@@ -1548,6 +1558,22 @@ def _exports_a_name(words: list[str]) -> bool:
     return any(not word.startswith("-") for word in words[1:])
 
 
+def _unsets_git_config(words: list[str]) -> bool:
+    """Whether this simple command is `unset` of a `GIT_CONFIG_*` variable.
+
+    `.claude/settings.json` puts `safe.bareRepository=explicit` in the
+    environment through `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_n` and
+    `GIT_CONFIG_VALUE_n`. Removing any of them in an earlier command of the
+    string takes the setting away from the git command after it, so git uses a
+    bare repository it finds by itself and runs the diff textconv program its
+    planted config names.
+    """
+
+    if not words or words[0] != "unset":
+        return False
+    return any(word.startswith("GIT_CONFIG") for word in words[1:])
+
+
 def _turns_on_allexport(words: list[str]) -> bool:
     """Whether this simple command is the `set` that exports later assignments.
 
@@ -1778,7 +1804,17 @@ def _decide(command: str, cwd: str | os.PathLike[str] | None) -> str | None:
         # `export GIT_EXTERNAL_DIFF=prog; git diff HEAD` is not.
         exported = False
         allexport = False
+        config_unset = False
         for words in _simple_commands(tokens):
+            if config_unset and _GUARDED_WORD_RE.search(" ".join(words)):
+                raise Denied(
+                    "`unset GIT_CONFIG_...` earlier in this string removes the "
+                    "safe.bareRepository=explicit setting that "
+                    ".claude/settings.json puts in the environment, so git "
+                    "uses a bare repository it finds by itself and runs the "
+                    "diff textconv program a branch planted in its config. "
+                    "Run git without the unset"
+                )
             if exported and _GUARDED_WORD_RE.search(" ".join(words)):
                 raise Denied(
                     "an export-family name exported earlier in this string "
@@ -1799,6 +1835,8 @@ def _decide(command: str, cwd: str | os.PathLike[str] | None) -> str | None:
                 exported = True
             if _turns_on_allexport(words):
                 allexport = True
+            if _unsets_git_config(words):
+                config_unset = True
             _check_command(words, cwd_path)
     except Denied as exc:
         return str(exc)

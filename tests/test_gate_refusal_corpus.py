@@ -107,7 +107,10 @@ MAX_BRACE_WORDS = 32
 # `!(...)`, which matches no more than `*` does.
 EXTGLOB_GROUP = re.compile(r"[@?*+!]\([^()]*\)")
 # git global options whose value can be the next word (`git -C dir log`).
-GIT_OPTIONS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
+GIT_OPTIONS_WITH_VALUE = {
+    "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env",
+    "--attr-source", "--shallow-file",
+}
 
 
 def ansi_c(text: str, start: int) -> tuple[str, int]:
