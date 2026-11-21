@@ -192,8 +192,8 @@ bug; see [#71](https://github.com/Danathar/goodreads-mcp/issues/71) and the
 ## Agent provenance
 
 Agent pull requests here are opened by the Hive GitHub App
-(`app/danathar-atomic-hive`) and end with a `— hive: agent=… backend=… model=…`
-line; a maintainer-run agent may push under the maintainer's own login, so the
+(`app/danathar-atomic-hive`) and end with a `-- hive: agent=… backend=… model=…`
+line (`— hive:` on pull requests from before 2026-11-18); a maintainer-run agent may push under the maintainer's own login, so the
 signature line is the only mark in that case. `agent-audit.yml` reads that
 record back once a month, with a token that can only read pull requests, and
 lists each merged agent pull request in the run summary with who merged it, its

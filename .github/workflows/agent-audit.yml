@@ -5,13 +5,15 @@ name: Agent audit trail
 #
 # Agent pull requests here are opened by the Hive GitHub App
 # (`app/danathar-atomic-hive`) and end with a signature line,
-# `— hive: agent=<role> backend=<backend> model=<model> ...`; their commits
+# `-- hive: agent=<role> backend=<backend> model=<model> ...` (the hive wrote
+# `— hive:`, with an em dash, until 2026-11-18; both count); their commits
 # carry a Signed-off-by trailer naming the role. Nothing reads that record
 # back after the merge. A maintainer-run agent may push under the maintainer's
 # own login, so the author alone cannot say which merged pull requests an agent
 # wrote; a signature line that names agent, backend and model is the other mark.
-# A bare `— hive:` prefix is not a signature, and "any bot" is not the Hive app
-# (Dependabot opens pull requests here too, and is not an agent in this sense).
+# A bare `-- hive:` or `— hive:` prefix is not a signature, and "any bot" is not
+# the Hive app (Dependabot opens pull requests here too, and is not an agent in
+# this sense).
 #
 # The job lists the pull requests merged in the window, picks out the agent
 # ones, and writes one row per pull request to the run summary: when it merged,
@@ -93,7 +95,7 @@ jobs:
           jq -c '
             def signature:
               (.body // "") | split("\n")
-              | map(select(startswith("— hive:")
+              | map(select((startswith("-- hive:") or startswith("— hive:"))
                   and test("(^| )agent=[^ ]+")
                   and test("(^| )backend=[^ ]+")
                   and test("(^| )model=[^ ]+")))
@@ -126,7 +128,7 @@ jobs:
           jq --arg since "$SINCE" --arg total "$total" --slurpfile details details.json '
             def signature:
               (.body // "") | split("\n")
-              | map(select(startswith("— hive:")
+              | map(select((startswith("-- hive:") or startswith("— hive:"))
                   and test("(^| )agent=[^ ]+")
                   and test("(^| )backend=[^ ]+")
                   and test("(^| )model=[^ ]+")))
@@ -168,7 +170,7 @@ jobs:
                   author: $pr.author.login,
                   merged_by: ($pr.mergedBy.login // "unknown"),
                   merged_by_human: ($pr | human),
-                  signature: ($pr | signature | if . == null then null else ltrimstr("— hive: ") end),
+                  signature: ($pr | signature | if . == null then null else sub("^(--|—) hive: "; "") end),
                   commits: ($d.commits | length),
                   authored: ([$d.commits[] | select(merge($own; $pr.baseRefName) | not)] | length),
                   unsigned: [$d.commits[] | select(merge($own; $pr.baseRefName) | not) | select(.message | test("(^|\n)Signed-off-by: ") | not) | .sha[:7]],
@@ -186,7 +188,7 @@ jobs:
                 report: (
                   [ "### Agent audit trail: pull requests merged since \($since)",
                     "",
-                    "\($rows | length) of the \($total) pull requests merged in the window were written by an agent (opened by the Hive app, or carrying a `— hive:` line naming agent, backend and model).",
+                    "\($rows | length) of the \($total) pull requests merged in the window were written by an agent (opened by the Hive app, or carrying a `-- hive:` or older `— hive:` line naming agent, backend and model).",
                     ""
                   ]
                   + (if ($rows | length) == 0 then [] else

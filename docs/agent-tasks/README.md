@@ -12,19 +12,24 @@ instead (see [`docs/metrics.md`](../metrics.md)).
 
 ## The marks
 
-### 1. The `— hive:` signature line on a PR
+### 1. The `-- hive:` signature line on a PR
 
 Pull requests opened by the Hive agents end their body with one line:
 
 ```text
-— hive: agent=quality backend=claude model=claude-opus-5-5 effort=medium claude=2.1.287
+-- hive: agent=quality backend=claude model=claude-opus-5-5 effort=medium claude=2.1.287
 ```
+
+Since 2026-11-18 (hive v5.322.0) the line starts with two ASCII hyphens.
+Pull requests from before then start it with an em dash, `— hive:`, and that
+spelling still counts everywhere the line is read.
 
 `agent=` is the role (`architect`, `guide`, `quality`, `scanner`, `sec-check`
 appear in this history), `backend=` the harness that ran it, `model=` the model.
 `effort=` and `claude=` (CLI version) are not always present.
 
-Two variants exist, so a bare `— hive:` prefix does not identify a Hive agent:
+Two variants exist, so a bare `-- hive:` or `— hive:` prefix does not identify
+a Hive agent:
 
 - **Role-less signature**, e.g. `— hive: backend=omp model=anthropic/claude-opus-5-5 effort=high`.
   Written on PRs the maintainer (`Danathar`) opened from an agent session. No
@@ -43,7 +48,7 @@ Read it back:
 ```bash
 # one PR: who opened it, and its signature line
 gh pr view <N> --repo Danathar/goodreads-mcp --json author,body \
-  --jq '.author.login, (.body | split("\n") | map(select(startswith("— hive: "))))'
+  --jq '.author.login, (.body | split("\n") | map(select(test("^(--|—) hive: "))))'
 ```
 
 ### 2. The branch name `<prefix>/<slug>`

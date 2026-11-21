@@ -602,8 +602,8 @@ def test_the_misbehaving_pr_section_names_the_app_the_audit_selects():
 def test_the_misbehaving_pr_section_states_the_signature_the_audit_reads():
     section = _flat(_misbehaves_section())
     body = _audit_body()
-    assert "each body ends with a `— hive: agent=...` line" in section
-    assert 'startswith("— hive:")' in body
+    assert "each body ends with a `-- hive: agent=...` line" in section
+    assert 'startswith("-- hive:") or startswith("— hive:")' in body
     assert 'test("(^| )agent=[^ ]+")' in body
     assert "it is what `agent-audit.yml` reads when the author alone cannot tell" in section
     assert "The first command leaves out the agent pull requests opened under `Danathar`." in section
@@ -632,6 +632,10 @@ def test_the_signature_listing_finds_agent_prs_under_either_login():
          "body": "Quotes `— hive: agent=` inside a line"},
         {"number": 6, "author": {"login": "Danathar"}, "headRefName": "notes-2",
          "body": "Text.\n\n— hive: note, not a signature"},
+        {"number": 7, "author": {"login": "app/danathar-atomic-hive"}, "headRefName": "scanner/fix-z",
+         "body": "Why.\r\n\r\n-- hive: agent=scanner backend=claude model=m\r\n"},
+        {"number": 8, "author": {"login": "Danathar"}, "headRefName": "notes-3",
+         "body": "Quotes `-- hive: agent=` inside a line\n\n--- hive: agent=x"},
     ]
     for pr in prs:
         assert set(pr) == set(fields), "the sample must carry exactly the fields the command asks gh for"
@@ -642,6 +646,7 @@ def test_the_signature_listing_finds_agent_prs_under_either_login():
     assert listed == [
         {"number": 1, "author": "Danathar", "branch": "docs/x"},
         {"number": 2, "author": "app/danathar-atomic-hive", "branch": "quality/test-y"},
+        {"number": 7, "author": "app/danathar-atomic-hive", "branch": "scanner/fix-z"},
     ]
 
 

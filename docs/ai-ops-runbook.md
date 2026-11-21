@@ -214,7 +214,8 @@ you rely on this section.
 
 Agent pull requests are opened by the Hive GitHub App (author
 `app/danathar-atomic-hive`) or by `Danathar`, on branches named `<role>/<slug>`,
-and each body ends with a `— hive: agent=...` line. List the open ones:
+and each body ends with a `-- hive: agent=...` line (`— hive: agent=...` on
+pull requests from before 2026-11-18). List the open ones:
 
 ```bash
 gh pr list --author app/danathar-atomic-hive --state open
@@ -226,7 +227,7 @@ The signature line marks both kinds, and it is what `agent-audit.yml` reads
 when the author alone cannot tell:
 
 ```bash
-gh pr list --state open --json number,author,headRefName,body --jq '.[] | select((.body // "") | split("\n") | any(startswith("— hive: agent="))) | {number, author: .author.login, branch: .headRefName}'
+gh pr list --state open --json number,author,headRefName,body --jq '.[] | select((.body // "") | split("\n") | any(test("^(--|—) hive: agent="))) | {number, author: .author.login, branch: .headRefName}'
 ```
 
 Stop it, smallest step first:
