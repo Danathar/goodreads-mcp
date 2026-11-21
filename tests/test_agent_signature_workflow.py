@@ -1,8 +1,9 @@
 """`agent-signature.yml` checks an open agent pull request for the audit's signature line.
 
 `agent-audit.yml` reads, once a month, which merged pull requests an agent
-wrote, and reports any without a `— hive: agent=... backend=... model=...`
-line. By then the body cannot be fixed. `agent-signature.yml` runs the same
+wrote, and reports any without a `-- hive: agent=... backend=... model=...`
+line (`— hive:`, the em dash spelling on pull requests from before 2026-11-18,
+still counts). By then the body cannot be fixed. `agent-signature.yml` runs the same
 test while the pull request is still open.
 
 Pinned here:
@@ -39,6 +40,8 @@ _AUDIT = _WORKFLOWS / "agent-audit.yml"
 _STEP = "Check the pull request body for a signature line"
 
 _SIGNATURE = "— hive: agent=scanner backend=claude model=claude-opus-5-5"
+# The spelling the hive writes since 2026-11-18 (hive v5.322.0).
+_CURRENT = "-- hive: agent=scanner backend=claude model=claude-sonnet-5-5 effort=high claude=2.1.327"
 
 _needs_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="the step shells out to jq")
 
@@ -96,8 +99,12 @@ def _run(tmp_path: Path, body: str | None):
         f"**Summary:** a change.\n\n---\n\nCloses #1\n\n{_SIGNATURE}\n",
         f"Summary\r\n\r\n{_SIGNATURE} effort=medium\r\n",
         f"{_SIGNATURE}",
+        f"**Summary:** a change.\n\nCloses #1\n\n{_CURRENT}\n",
+        f"Summary\r\n\r\n{_CURRENT}\r\n",
+        f"{_CURRENT}",
     ],
-    ids=["unix-newlines", "crlf-and-extra-key", "only-line"],
+    ids=["unix-newlines", "crlf-and-extra-key", "only-line",
+         "current-unix-newlines", "current-crlf", "current-only-line"],
 )
 def test_a_body_with_a_signature_line_passes(tmp_path: Path, body: str):
     result = _run(tmp_path, body)
@@ -116,14 +123,26 @@ def test_a_body_with_a_signature_line_passes(tmp_path: Path, body: str):
         "— hive: subagent=scanner backend=claude model=x\n",
         f"Quoted: {_SIGNATURE}\n",
         f"`{_SIGNATURE}`\n",
+        "-- hive:\n",
+        "-- hive: agent=scanner backend=claude\n",
+        "-- hive: subagent=scanner backend=claude model=x\n",
+        f"Quoted: {_CURRENT}\n",
+        f"`{_CURRENT}`\n",
+        "--- hive: agent=scanner backend=claude model=x\n",
+        "--hive: agent=scanner backend=claude model=x\n",
+        "- hive: agent=scanner backend=claude model=x\n",
+        "\u2013 hive: agent=scanner backend=claude model=x\n",
     ],
     ids=["unset", "empty", "footer-only", "bare-prefix", "no-model", "key-only-ends-in-agent", "not-at-line-start",
-         "in-backticks"],
+         "in-backticks", "current-bare-prefix", "current-no-model", "current-key-only-ends-in-agent",
+         "current-not-at-line-start", "current-in-backticks", "three-hyphens", "no-space", "one-hyphen", "en-dash"],
 )
 def test_a_body_without_a_signature_line_fails(tmp_path: Path, body: str | None):
     result = _run(tmp_path, body)
     assert result.returncode == 1, result.stdout + result.stderr
     assert "::error::" in result.stdout
+    assert "starts with '-- hive:'" in result.stdout
+    assert "The older '— hive:' spelling is still accepted." in result.stdout
 
 
 @_needs_jq

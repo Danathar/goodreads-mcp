@@ -3,9 +3,10 @@ name: Agent PR signature
 
 # Checks, while an agent pull request is still open, that its body carries the
 # signature line `agent-audit.yml` looks for once a month after the merge:
-# `— hive: agent=<role> backend=<backend> model=<model> ...`. The monthly audit
-# can only report a missing line, because a merged pull request's text is out
-# of reach by then. Here the line can still be added before the merge.
+# `-- hive: agent=<role> backend=<backend> model=<model> ...` (`— hive:`, with
+# an em dash, on pull requests from before 2026-11-18; both count). The monthly
+# audit can only report a missing line, because a merged pull request's text is
+# out of reach by then. Here the line can still be added before the merge.
 #
 # It runs on agent pull requests only: those opened by the Hive app
 # (`danathar-atomic-hive[bot]`, the webhook spelling of `app/danathar-atomic-hive`)
@@ -49,7 +50,7 @@ jobs:
           found="$(jq -n --arg body "${PR_BODY:-}" '
             def signature:
               (.body // "") | split("\n")
-              | map(select(startswith("— hive:")
+              | map(select((startswith("-- hive:") or startswith("— hive:"))
                   and test("(^| )agent=[^ ]+")
                   and test("(^| )backend=[^ ]+")
                   and test("(^| )model=[^ ]+")))
@@ -59,5 +60,5 @@ jobs:
             echo "The pull request body has a signature line."
             exit 0
           fi
-          echo "::error::The pull request body has no signature line. Add one line that starts with '— hive:' and names agent=, backend= and model=, e.g. '— hive: agent=<role> backend=<backend> model=<model>'. The monthly agent-audit.yml reads it."
+          echo "::error::The pull request body has no signature line. Add one line that starts with '-- hive:' and names agent=, backend= and model=, e.g. '-- hive: agent=<role> backend=<backend> model=<model>'. The older '— hive:' spelling is still accepted. The monthly agent-audit.yml reads it."
           exit 1

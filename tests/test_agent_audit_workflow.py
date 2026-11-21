@@ -8,8 +8,9 @@ and `gh pr list`-shaped fixtures:
 
 - **Who counts as an agent.** The Hive app (`app/danathar-atomic-hive`, the
   login `gh pr list` returns) or a signature line naming `agent=`, `backend=`
-  and `model=`. Dependabot is also a bot and must not count; a bare `— hive:`
-  prefix is not a signature.
+  and `model=`. Dependabot is also a bot and must not count; a bare `-- hive:`
+  or `— hive:` prefix is not a signature. Both prefixes count: the hive writes
+  `-- hive:` since 2026-11-18 and wrote `— hive:` before.
 - **Pagination.** `gh pr view --json commits,files` stops at 100 without saying
   so, so commits and files come from `gh api --paginate`. The stub serves a
   second page only when `--paginate` is passed, so dropping the flag changes
@@ -60,6 +61,8 @@ pytestmark = pytest.mark.skipif(
 
 _HIVE = "app/danathar-atomic-hive"
 _SIGNATURE = "— hive: agent=quality backend=claude model=claude-opus-5-5 effort=medium"
+# The spelling the hive writes since 2026-11-18 (hive v5.322.0).
+_CURRENT = "-- hive: agent=quality backend=claude model=claude-sonnet-5-5 effort=high claude=2.1.327"
 _HUMAN = {"login": "Danathar", "is_bot": False}
 _APP = {"login": "app/github-actions", "is_bot": True}
 
@@ -278,12 +281,34 @@ def test_a_maintainer_pull_request_with_a_valid_signature_is_selected(tmp_path: 
         "see — hive: agent=quality backend=claude model=x",
         "— hive: subagent=quality backend=claude model=x",
         "— hive: agent=quality backend=claude supermodel=x",
+        "-- hive:",
+        "-- hive: agent=quality backend=claude",
+        "-- hive: agent= backend=claude model=x",
+        "see -- hive: agent=quality backend=claude model=x",
+        "--- hive: agent=quality backend=claude model=x",
+        "--hive: agent=quality backend=claude model=x",
+        "\u2013 hive: agent=quality backend=claude model=x",
     ],
 )
 def test_a_bare_or_partial_signature_does_not_select_a_maintainer_pull_request(tmp_path: Path, line: str):
     _, summary, _ = _audit(tmp_path, [_maintainer(6, f"Body\n\n{line}\n")])
 
     assert _rows(summary) == []
+
+
+def test_the_current_two_hyphen_signature_counts_like_the_em_dash_one(tmp_path: Path):
+    """Since 2026-11-18 the hive writes `-- hive:`; a maintainer pull request is selected by it alone."""
+    maintainer = _maintainer(8, f"Body\r\n\r\n{_CURRENT}\r\n")
+    app = _pr(9, {"login": _HIVE, "is_bot": True}, body=f"Body\n\n{_CURRENT}\n")
+
+    result, summary, _ = _audit(tmp_path, [maintainer, app])
+
+    assert result.returncode == 0, result.stderr
+    rows = _rows(summary)
+    assert len(rows) == 2
+    assert all("| agent=quality backend=claude model=claude-sonnet-5-5 effort=high claude=2.1.327" in row for row in rows)
+    assert "0 without a complete signature line" in summary
+    assert "carrying a `-- hive:` or older `— hive:` line naming agent, backend and model" in summary
 
 
 def test_a_hive_app_pull_request_with_no_valid_signature_is_reported_and_not_failed(tmp_path: Path):
