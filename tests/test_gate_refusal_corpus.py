@@ -51,7 +51,20 @@ OPTIONAL_FIELDS = {"wraps"}
 
 # SHA-256 of the canonical tests/fixtures/gate-refusal-corpus.json in
 # Danathar/atomic-image-builder. Copy the file from there; never edit it here.
-CANONICAL_SHA256 = "86a3ba4c237693b7b4bf9758bae55c7b4a62a19e2176b496be0a166808d2f7cf"
+CANONICAL_SHA256 = "1d2245283c1df1aae2df87bcd43f23bb84dd1b3c7510f192692614d73253fdd5"
+
+# The wrappers `.claude/hooks/guard-bash.py` refuses in front of a guarded
+# command whatever the wrapper's own options are (its `_WRAPPERS`). The
+# JavaScript gates in the other repositories read `env` and `exec` options and
+# allow `env -u FOO git log -1`; this guard does not, by design, so an `allow`
+# row that starts with one of these is not one it can reach
+# (Danathar/goodreads-mcp#467). Every `refuse` row still runs.
+GUARD_REFUSED_WRAPPERS = frozenset(
+    {
+        "env", "command", "exec", "time", "builtin", "nohup", "nice",
+        "timeout", "noglob", "stdbuf", "xargs",
+    }
+)
 
 
 def allow_prefixes(settings: dict) -> list[str]:
@@ -94,7 +107,10 @@ MAX_BRACE_WORDS = 32
 # `!(...)`, which matches no more than `*` does.
 EXTGLOB_GROUP = re.compile(r"[@?*+!]\([^()]*\)")
 # git global options whose value can be the next word (`git -C dir log`).
-GIT_OPTIONS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
+GIT_OPTIONS_WITH_VALUE = {
+    "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env",
+    "--attr-source", "--shallow-file",
+}
 
 
 def ansi_c(text: str, start: int) -> tuple[str, int]:
@@ -270,6 +286,12 @@ def names(words: list[str], prefix: str) -> bool:
         ):
             return True
     return False
+
+
+def starts_with_refused_wrapper(row: dict) -> bool:
+    """Whether an `allow` row begins with a wrapper this guard refuses outright."""
+    words = shell_words(row["command"])
+    return row["verdict"] == ALLOW and bool(words) and words[0][0] in GUARD_REFUSED_WRAPPERS
 
 
 def hook_command(settings: dict) -> str:
@@ -460,6 +482,42 @@ class NameSpellingTests(unittest.TestCase):
                 self.assertTrue(names(inner_words(row), "git diff"))
 
 
+class RefusedWrapperSkipTests(unittest.TestCase):
+    """An `allow` row behind a wrapper this guard refuses is skipped; nothing else is."""
+
+    def test_an_allow_row_behind_a_refused_wrapper_is_skipped(self) -> None:
+        for command in (
+            "env -u FOO git log -1",
+            "env -S -u FOO git log -1",
+            "exec -a name git log -1",
+        ):
+            with self.subTest(command=command):
+                row = {**SAMPLE_ROW, "verdict": ALLOW, "wraps": command.split()[0], "command": command}
+                self.assertTrue(starts_with_refused_wrapper(row))
+
+    def test_a_refuse_row_behind_a_refused_wrapper_still_runs(self) -> None:
+        row = {**SAMPLE_ROW, "wraps": "env", "command": "env -i git log -p"}
+        self.assertFalse(starts_with_refused_wrapper(row))
+
+    def test_an_allow_row_behind_another_wrapper_or_none_still_runs(self) -> None:
+        for command in ("setarch x86_64 git diff HEAD", "git diff", "git log -1 2>&1"):
+            with self.subTest(command=command):
+                row = {**SAMPLE_ROW, "verdict": ALLOW, "command": command}
+                self.assertFalse(starts_with_refused_wrapper(row))
+
+    def test_the_corpus_rows_skipped_here_are_the_three_wrapped_allow_rows(self) -> None:
+        corpus = json.loads(CORPUS.read_text(encoding="utf-8"))
+        skipped = {row["id"] for row in corpus["rows"] if starts_with_refused_wrapper(row)}
+        self.assertEqual(
+            skipped,
+            {
+                "config-removal-allow-other-env-u",
+                "config-removal-allow-env-split-other-u",
+                "config-removal-allow-exec-a-name",
+            },
+        )
+
+
 class CorpusVerdictTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -467,7 +525,11 @@ class CorpusVerdictTests(unittest.TestCase):
         settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
         cls.prefixes = allow_prefixes(settings)
         cls.hook = hook_command(settings)
-        cls.rows = [row for row in cls.corpus["rows"] if applies(row, cls.prefixes)]
+        cls.rows = [
+            row
+            for row in cls.corpus["rows"]
+            if applies(row, cls.prefixes) and not starts_with_refused_wrapper(row)
+        ]
 
     def test_enough_rows_apply_here_to_mean_something(self) -> None:
         # If the allow list stopped covering `git diff`, every row would be
