@@ -31,13 +31,14 @@ pull request.
 Agents leave three marks you can read.
 
 **The signature.** Pull requests that Hive opens end with a line like
-`— hive: agent=quality backend=... model=... effort=...`. List the agents that
+`-- hive: agent=quality backend=... model=... effort=...` (pull requests from
+before 2026-11-18 start it with `— hive:`, an em dash). List the agents that
 signed pull requests from the Hive app, with a count each:
 
 ```bash
 gh pr list -R Danathar/goodreads-mcp --state all --limit 1000 \
   --author app/danathar-atomic-hive --json body \
-  --jq '.[].body | capture("— hive: agent=(?<a>[a-z-]+)").a' | sort | uniq -c
+  --jq '.[].body | capture("(--|—) hive: agent=(?<a>[a-z-]+)").a' | sort | uniq -c
 ```
 
 At the time of writing this prints five roles: `architect`, `guide`,
