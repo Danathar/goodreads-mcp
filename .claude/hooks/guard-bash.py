@@ -1198,11 +1198,12 @@ _GIT_NAMED_REPO_ENV = frozenset({"GIT_DIR", "GIT_WORK_TREE"})
 
 # Global options that take the next word as their value when none is
 # attached, so the walk below does not read that value as the subcommand.
+# `--attr-source` was missing: the walk read its value as the subcommand and
+# stopped, so `git --attr-source HEAD --git-dir=evil log -p` ran the planted
+# program (#465). `--shallow-file` takes the next word too, but it is refused
+# outright below, so the walk never steps over it.
 _GIT_GLOBAL_VALUE_NEXT = frozenset(
-    {
-        "-C", "-c", "--namespace", "--config-env", "--super-prefix",
-        "--attr-source", "--shallow-file",
-    }
+    {"-C", "-c", "--namespace", "--config-env", "--super-prefix", "--attr-source"}
 )
 
 
@@ -1235,6 +1236,14 @@ def _check_git_globals(words: list[str], env: list[str]) -> None:
         if not word.startswith("-"):
             return  # the subcommand: what follows is its own, not git's
         option, eq, value = word.partition("=")
+        if option == "--shallow-file":
+            raise Denied(
+                "`git --shallow-file` reads the file it names as git's list of "
+                "shallow commits and prints a line it cannot parse, so "
+                "`git --shallow-file .env log -1` printed .env's first line "
+                "past the Read(./.env) deny rule; its value also hid the "
+                "options after it from this check (#465). Run git without it"
+            )
         if option in _GIT_NAMED_REPO:
             raise Denied(
                 f"`git {option}` names the repository or work tree: "
@@ -1242,13 +1251,6 @@ def _check_git_globals(words: list[str], env: list[str]) -> None:
                 "named bare repository, so one a branch planted would load its "
                 "config and run its diff textconv program. Run git from the "
                 "project without it"
-            )
-        if option == "--shallow-file":
-            raise Denied(
-                "`git --shallow-file` makes git read a file as its shallow "
-                "list, and the error for a line it cannot parse quotes that "
-                "line, so `--shallow-file .env` prints `NAME=value` from the "
-                "file `Read(./.env)` exists to withhold. Run git without it"
             )
         if option in ("-c", "--config-env"):
             key = value if eq else next(iter(words[i + 1 :]), "")
@@ -1558,22 +1560,6 @@ def _exports_a_name(words: list[str]) -> bool:
     return any(not word.startswith("-") for word in words[1:])
 
 
-def _unsets_git_config(words: list[str]) -> bool:
-    """Whether this simple command is `unset` of a `GIT_CONFIG_*` variable.
-
-    `.claude/settings.json` puts `safe.bareRepository=explicit` in the
-    environment through `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_n` and
-    `GIT_CONFIG_VALUE_n`. Removing any of them in an earlier command of the
-    string takes the setting away from the git command after it, so git uses a
-    bare repository it finds by itself and runs the diff textconv program its
-    planted config names.
-    """
-
-    if not words or words[0] != "unset":
-        return False
-    return any(word.startswith("GIT_CONFIG") for word in words[1:])
-
-
 def _turns_on_allexport(words: list[str]) -> bool:
     """Whether this simple command is the `set` that exports later assignments.
 
@@ -1598,12 +1584,39 @@ def _turns_on_allexport(words: list[str]) -> bool:
 def _is_bare_assignment(words: list[str]) -> bool:
     """Whether this simple command is assignments and nothing else.
 
-    On its own that sets a shell variable, which no child process sees, so it
-    is not refused; under `set -a` it sets an environment one, and
-    `_turns_on_allexport` is what tells the two apart.
+    For a name that is not in the environment, that sets a shell variable no
+    child process sees; under `set -a` it sets an environment one, and
+    `_turns_on_allexport` is what tells the two apart. A name that is already
+    in the environment is another matter: see `_changes_the_environment`.
     """
 
     return bool(words) and all(_ASSIGNMENT_RE.match(word) for word in words)
+
+
+def _changes_the_environment(words: list[str]) -> str | None:
+    """The name a standalone assignment or `unset` changes for later commands.
+
+    bash hands an exported variable's new value to every later command, and
+    drops an unset one from their environment, with no export-family builtin
+    in sight. `.claude/settings.json` exports `GIT_CONFIG_COUNT`, and the
+    session exports `HOME` and `PATH`, so `GIT_CONFIG_COUNT=0; git log -p` and
+    `unset GIT_CONFIG_COUNT; git log -p` switched off
+    `safe.bareRepository=explicit`, and `HOME=planted; git log -p` read a
+    `.gitconfig` a branch committed, each running a planted program (#465).
+
+    The guard cannot tell which names the shell has exported, so an assignment
+    to any name outside `SAFE_ENV` counts, as it does in front of the verb.
+    Taking a name away matters only where the guard relies on it being there,
+    which is the `GIT_CONFIG_*` settings env; `unset FOO` changes nothing git
+    loads.
+    """
+
+    if _is_bare_assignment(words):
+        names = [_ASSIGNMENT_RE.match(word).group(1) for word in words]
+        return next((name for name in names if name not in SAFE_ENV), None)
+    if words and words[0] == "unset":
+        return next((word for word in words[1:] if word.startswith("GIT_CONFIG")), None)
+    return None
 
 
 # The characters that open an extglob group when an unquoted `(` touches them.
@@ -1804,17 +1817,8 @@ def _decide(command: str, cwd: str | os.PathLike[str] | None) -> str | None:
         # `export GIT_EXTERNAL_DIFF=prog; git diff HEAD` is not.
         exported = False
         allexport = False
-        config_unset = False
+        changed = None
         for words in _simple_commands(tokens):
-            if config_unset and _GUARDED_WORD_RE.search(" ".join(words)):
-                raise Denied(
-                    "`unset GIT_CONFIG_...` earlier in this string removes the "
-                    "safe.bareRepository=explicit setting that "
-                    ".claude/settings.json puts in the environment, so git "
-                    "uses a bare repository it finds by itself and runs the "
-                    "diff textconv program a branch planted in its config. "
-                    "Run git without the unset"
-                )
             if exported and _GUARDED_WORD_RE.search(" ".join(words)):
                 raise Denied(
                     "an export-family name exported earlier in this string "
@@ -1828,6 +1832,17 @@ def _decide(command: str, cwd: str | os.PathLike[str] | None) -> str | None:
                     "while the git command carries no assignment at all. Run "
                     "it without the export"
                 )
+            if changed is not None and _GUARDED_WORD_RE.search(" ".join(words)):
+                raise Denied(
+                    f"`{changed}` is assigned or unset earlier in this string, "
+                    "and bash hands the change to every later command when the "
+                    "name is already in the environment: `GIT_CONFIG_COUNT=0` "
+                    "or `unset GIT_CONFIG_COUNT` switches off the "
+                    "safe.bareRepository setting in .claude/settings.json, and "
+                    "`HOME=dir` makes git read dir/.gitconfig. The guard's safe "
+                    f"list is {', '.join(sorted(SAFE_ENV))}. Run the command "
+                    "without it"
+                )
             # Armed after this command has been judged, so the rule stays
             # ordered: an export reaches what bash runs after it, never what
             # ran before it.
@@ -1835,8 +1850,7 @@ def _decide(command: str, cwd: str | os.PathLike[str] | None) -> str | None:
                 exported = True
             if _turns_on_allexport(words):
                 allexport = True
-            if _unsets_git_config(words):
-                config_unset = True
+            changed = changed or _changes_the_environment(words)
             _check_command(words, cwd_path)
     except Denied as exc:
         return str(exc)
