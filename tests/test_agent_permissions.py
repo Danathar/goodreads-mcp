@@ -321,6 +321,31 @@ _DENIED = [
         "overrides the safe.* setting",
     ),
     ("git -c safe.bareRepository=all", "overrides the safe.* setting"),
+    # `--attr-source` takes the next word as its value too; read as the
+    # subcommand, it stopped the walk before the option that names the
+    # repository or overrides the setting (#465)
+    ("git --attr-source HEAD --git-dir=evil log -p", "`git --git-dir` names the repository"),
+    ("git --attr-source HEAD -c safe.bareRepository=all log -p", "overrides the safe.* setting"),
+    # `--shallow-file` reads any file and prints a line of it, and its value
+    # hid the options after it the same way (#465)
+    ("git --shallow-file .env log -1", "`git --shallow-file` reads the file"),
+    ("git --shallow-file x --git-dir=evil log -p", "`git --shallow-file` reads the file"),
+    ("git --shallow-file x --bare log -p", "`git --shallow-file` reads the file"),
+    (
+        "git --shallow-file x -c safe.bareRepository=all -C evil log -p",
+        "`git --shallow-file` reads the file",
+    ),
+    # A standalone assignment or `unset` changes an exported name for every
+    # later command: GIT_CONFIG_COUNT is exported by .claude/settings.json,
+    # HOME and PATH by the session (#465)
+    ("GIT_CONFIG_COUNT=0; git log -p", "assigned or unset earlier"),
+    ("GIT_CONFIG_COUNT= && git -C evil log -p", "assigned or unset earlier"),
+    ("unset GIT_CONFIG_COUNT; git log -p", "assigned or unset earlier"),
+    ("unset -v GIT_CONFIG_COUNT; git -C evil log -p", "assigned or unset earlier"),
+    ("unset GIT_CONFIG_COUNT\ngit log -p", "assigned or unset earlier"),
+    ("HOME=planted; git log -p", "assigned or unset earlier"),
+    ("PATH=.:/usr/bin; git status", "assigned or unset earlier"),
+    ("TZ=UTC HOME=planted; git diff HEAD", "assigned or unset earlier"),
     # and its value is shell text like any other word
     ("FOO=$(cat /tmp/x) pytest -q", "cannot see"),
     ("FOO=`cat /tmp/x` pytest -q", "cannot see"),
@@ -630,6 +655,10 @@ _DENIED = [
     # all -- both reach the verb with no assignment in front of it to find.
     ("export GIT_EXTERNAL_DIFF; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD", "export-family"),
     ("set -a; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD", "export-family"),
+    # The same two with a name on the safe list, so the export rule alone
+    # decides them, not the standalone-assignment rule (#465)
+    ("export TZ; TZ=UTC; git diff HEAD", "export-family"),
+    ("set -a; TZ=UTC; git diff HEAD", "export-family"),
     ("set -o allexport; LD_PRELOAD=/tmp/x.so; pytest -q", "export-family"),
     # a dotted warning category is a module pytest imports before it collects
     # anything: `-W ignore::this.W` prints the Zen of Python first (#117)
@@ -909,9 +938,19 @@ _PERMITTED = [
     # Only `set -a` (or `-o allexport`) makes a bare assignment an export:
     # not `-o pipefail`, not `-e`, not an `a` in another command's options,
     # and under `set -a` a command that assigns nothing exports nothing.
-    "set -o pipefail; X=1; git diff HEAD",
-    "set -e; X=1; git diff HEAD",
-    "ls -la; X=1; git diff HEAD",
+    "set -o pipefail; TZ=UTC; git diff HEAD",
+    "set -e; TZ=UTC; git diff HEAD",
+    "ls -la; TZ=UTC; git diff HEAD",
+    # A standalone assignment or `unset` of a name on the safe list, or one
+    # after the guarded command, changes nothing it runs (#465)
+    "TZ=UTC; git log -1",
+    "unset NO_COLOR; git status",
+    "unset FOO; git log -1",
+    # Names a GIT_CONFIG word without assigning or unsetting it (#466).
+    "echo GIT_CONFIG_COUNT; git log -1",
+    "git --attr-source HEAD log -1",
+    "git log -1; unset GIT_CONFIG_COUNT",
+    "GIT_CONFIG_COUNT=0; echo hi",
     "set -a; echo hi; git diff HEAD",
 ]
 
@@ -1437,13 +1476,13 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "an export-family builtin naming a variable with no value",
         'return any(not word.startswith("-") for word in words[1:])',
         "return any(_ASSIGNMENT_RE.match(word) for word in words[1:])",
-        "export GIT_EXTERNAL_DIFF; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD",
+        "export TZ; TZ=UTC; git diff HEAD",
     ),
     (
         "`set -a`, which exports every assignment after it",
         "if _turns_on_allexport(words):",
         "if False:",
-        "set -a; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD",
+        "set -a; TZ=UTC; git diff HEAD",
     ),
     (
         "a dotted warning category in `-W`",
@@ -1536,6 +1575,24 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "raw_wrapper = _backslash_wrapper(command)",
         "raw_wrapper = None",
         "/usr/bin\\timeout 5 pytest -q",
+    ),
+    (
+        "a standalone assignment or `unset` of a name outside the safe list",
+        "changed = changed or _changes_the_environment(words)",
+        "changed = None",
+        "unset GIT_CONFIG_COUNT; git log -p",
+    ),
+    (
+        "`git --shallow-file`, which reads the file it names",
+        'if option == "--shallow-file":',
+        "if False:",
+        "git --shallow-file .env log -1",
+    ),
+    (
+        "`--attr-source` taking the next word as its value",
+        '"--super-prefix", "--attr-source"}',
+        '"--super-prefix"}',
+        "git --attr-source HEAD --git-dir=evil log -p",
     ),
 )
 
