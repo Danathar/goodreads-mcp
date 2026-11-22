@@ -946,6 +946,8 @@ _PERMITTED = [
     "TZ=UTC; git log -1",
     "unset NO_COLOR; git status",
     "unset FOO; git log -1",
+    # Names a GIT_CONFIG word without assigning or unsetting it (#466).
+    "echo GIT_CONFIG_COUNT; git log -1",
     "git --attr-source HEAD log -1",
     "git log -1; unset GIT_CONFIG_COUNT",
     "GIT_CONFIG_COUNT=0; echo hi",
