@@ -1534,7 +1534,7 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "`set -a`, which exports every assignment after it",
-        "if _turns_on_allexport(words):",
+        "if _turns_on_allexport(head):",
         "if False:",
         "set -a; TZ=UTC; git diff HEAD",
     ),
