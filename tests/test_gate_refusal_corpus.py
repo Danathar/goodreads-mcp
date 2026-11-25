@@ -51,7 +51,7 @@ OPTIONAL_FIELDS = {"wraps"}
 
 # SHA-256 of the canonical tests/fixtures/gate-refusal-corpus.json in
 # Danathar/atomic-image-builder. Copy the file from there; never edit it here.
-CANONICAL_SHA256 = "358a28365d9d6b71ca29a561bce82e47978b3fffb1fd9f59129b8f6223caab46"
+CANONICAL_SHA256 = "74ac2c59c7f35f5e4b03f9898425575e19b805cfeb468aefc15aa84c9591a69d"
 
 # The wrappers `.claude/hooks/guard-bash.py` refuses in front of a guarded
 # command whatever the wrapper's own options are (its `_WRAPPERS`). The
@@ -65,6 +65,16 @@ GUARD_REFUSED_WRAPPERS = frozenset(
         "timeout", "noglob", "stdbuf", "xargs",
     }
 )
+
+
+# `allow` rows this guard refuses on purpose. Each still runs, and is asserted
+# refused, so a change that starts allowing one is seen here
+# (Danathar/goodreads-mcp#467, Danathar/aurora-zfs-simple#523).
+#   comment-allow-apostrophe  `git log -1 # it's the last one`: the lexer reads
+#       no comment character (see the docstring of .claude/hooks/guard-bash.py),
+#       so the apostrophe opens a quote that never closes, and a string with a
+#       guarded word that does not tokenise is refused rather than guessed at.
+OVER_REFUSED = frozenset({"comment-allow-apostrophe"})
 
 
 def allow_prefixes(settings: dict) -> list[str]:
@@ -541,11 +551,25 @@ class CorpusVerdictTests(unittest.TestCase):
             with self.subTest(row=row["id"], command=row["command"]):
                 verdict, result = decide(row["command"], self.hook)
                 self.assertIn(result.returncode, (0, 2), result.stderr)
+                if row["id"] in OVER_REFUSED:
+                    self.assertEqual(row["verdict"], ALLOW, "only an allow row can be over-refused")
+                    self.assertEqual(
+                        verdict,
+                        REFUSE,
+                        f"the corpus allows {row['command']!r} and this guard refuses it "
+                        "on purpose; if it is allowed now, take it off OVER_REFUSED",
+                    )
+                    continue
                 self.assertEqual(
                     verdict,
                     row["verdict"],
                     f"the corpus says {row['verdict']} {row['command']!r}: {row['why']}",
                 )
+
+    def test_every_over_refused_row_is_run(self) -> None:
+        # A listed id the corpus renamed or dropped, or one the allow list
+        # stopped reaching, would sit on the list checking nothing.
+        self.assertLessEqual(OVER_REFUSED, {row["id"] for row in self.rows})
 
 
 if __name__ == "__main__":
