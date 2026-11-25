@@ -346,6 +346,41 @@ _DENIED = [
     ("HOME=planted; git log -p", "assigned or unset earlier"),
     ("PATH=.:/usr/bin; git status", "assigned or unset earlier"),
     ("TZ=UTC HOME=planted; git diff HEAD", "assigned or unset earlier"),
+    # A reserved word, a group or a `command` prefix in front hid the
+    # assignment from the rules that read the first word, and a builtin, a
+    # loop or an arithmetic expression assigns a name with no `NAME=` at all
+    # (#470). Each of these read a `.gitconfig` a branch committed, or
+    # switched off safe.bareRepository, with bash 5.2 and git 2.47.
+    ("if true; then HOME=planted; git log -1; fi", "assigned or unset earlier"),
+    ("{ HOME=planted; git log -1; }", "assigned or unset earlier"),
+    ("command export HOME=planted; git log -1", "export-family"),
+    ("true && builtin export HOME=planted; git log -1", "export-family"),
+    ("while read -r HOME; do git log -1; done < f", "assigned or unset earlier"),
+    ("IFS= read -r HOME < f; git log -1", "assigned or unset earlier"),
+    ("read -p x -a GIT_CONFIG_COUNT < f; git log -p", "assigned or unset earlier"),
+    ("read -aGIT_CONFIG_COUNT < f; git log -p", "assigned or unset earlier"),
+    ("read -t 5 HOME < f; git log -1", "assigned or unset earlier"),
+    ("read -r id HOME < f; git log -1", "assigned or unset earlier"),
+    ("read -pinput HOME < f; git log -1", "assigned or unset earlier"),
+    ("select HOME in planted; do git log -1; done", "assigned or unset earlier"),
+    ("HOME=planted; cd tests && git log -1", "assigned or unset earlier"),
+    ("mapfile -t PATH < f; git status", "assigned or unset earlier"),
+    ("printf -v HOME planted; git log -1", "assigned or unset earlier"),
+    ("printf -vXDG_CONFIG_HOME planted; git log -1", "assigned or unset earlier"),
+    ("for HOME in planted; do git log -1; done", "assigned or unset earlier"),
+    ("getopts h HOME; git log -1", "assigned or unset earlier"),
+    ("let GIT_CONFIG_COUNT=0; git log -p", "assigned or unset earlier"),
+    ("(( GIT_CONFIG_COUNT = 0 )); git log -p", "assigned or unset earlier"),
+    # `git -C dir` runs git from dir, so its operands name files there, and
+    # the value of `-C` used to be read as the subcommand, so nothing after
+    # it was checked (#470)
+    ("git -C /tmp diff -- x .env", "runs git from a directory outside"),
+    ("git -C .. log -1", "runs git from a directory outside"),
+    ("git -C ~ status", "runs git from a directory outside"),
+    ("git -C tests -C .. -C .. log -1", "runs git from a directory outside"),
+    ("git -C tests diff --no-index /dev/null ../.env", "--no-index"),
+    ("git -C tests diff -- x ../../etc/hostname", "outside the repository"),
+    ("git -c color.ui=never diff --output=/tmp/W.txt HEAD", "--output"),
     # and its value is shell text like any other word
     ("FOO=$(cat /tmp/x) pytest -q", "cannot see"),
     ("FOO=`cat /tmp/x` pytest -q", "cannot see"),
@@ -952,6 +987,25 @@ _PERMITTED = [
     "git log -1; unset GIT_CONFIG_COUNT",
     "GIT_CONFIG_COUNT=0; echo hi",
     "set -a; echo hi; git diff HEAD",
+    # A builtin, loop or arithmetic expression that assigns an ordinary name,
+    # a guarded command inside a compound command, and a `-C` or `cd` that
+    # stays inside the checkout change nothing git loads (#470).
+    "read -r line < README.md; git log -1",
+    "while read -r line; do git log -1; done < README.md",
+    "IFS= read -r line < README.md; git status",
+    "read -p HOME line < README.md; git log -1",  # HOME is the prompt
+    "printf %s HOME; git log -1",
+    "if true\nthen\ngit log -1\nfi",
+    "let i=1; git log -1",
+    "(( i = 1 )); git log -1",
+    "for f in a b; do git log -1; done",
+    "printf -v msg x; git status",
+    "if true; then git log -1; fi",
+    "{ TZ=UTC; git log -1; }",
+    "cd tests && git log -1",
+    "git -C tests log -1",
+    "git -C tests diff -- ../README.md",
+    "git -C . status",
 ]
 
 
@@ -1480,7 +1534,7 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "`set -a`, which exports every assignment after it",
-        "if _turns_on_allexport(words):",
+        "if _turns_on_allexport(head):",
         "if False:",
         "set -a; TZ=UTC; git diff HEAD",
     ),
@@ -1578,9 +1632,27 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "a standalone assignment or `unset` of a name outside the safe list",
-        "changed = changed or _changes_the_environment(words)",
+        "changed = changed or _changes_the_environment(head)",
         "changed = None",
         "unset GIT_CONFIG_COUNT; git log -p",
+    ),
+    (
+        "reserved words and prefixes taken off before the first word is read",
+        "while i < len(words) and words[i] in _LEADING_KEYWORDS:",
+        "while False:",
+        "if true; then HOME=planted; git log -1; fi",
+    ),
+    (
+        "a builtin that assigns a name git loads from",
+        "assigned = _assigned_by_builtin(words)",
+        "assigned = []",
+        "printf -v HOME planted; git log -1",
+    ),
+    (
+        "`git -C` with a directory outside the checkout",
+        'if word == "-C":',
+        "if False:",
+        "git -C /tmp diff -- x .env",
     ),
     (
         "`git --shallow-file`, which reads the file it names",
