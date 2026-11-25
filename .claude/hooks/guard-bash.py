@@ -109,7 +109,10 @@ not on a guess about what is dangerous:
   the repository, which `explicit` allows by design, so a bare repository a
   branch planted loads its `diff.*.textconv` program again; and `-c safe.*`
   or `--config-env safe.*` sets the key at command scope, which wins over
-  the settings env. The other global options stay unreachable in this sense.
+  the settings env. `-C` with a directory outside the checkout is refused
+  too, since its operands then name files there, and the subcommand behind
+  any global option is checked as if it stood first (#470). The other global
+  options stay unreachable in this sense.
 * A brace-expanded command name, `{,git} diff`. bash drops the empty
   alternative as an unquoted null word, so this really does run git (checked
   against bash 5.3); the string begins `{,git}` and matches no row.
@@ -185,6 +188,47 @@ _ASSIGNMENT_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?\+?=")
 # `declare -x NAME`) and a half-read option list is a guard that disagrees with
 # bash in some other direction.
 _EXPORT_BUILTINS = frozenset({"export", "declare", "typeset", "readonly"})
+
+# Words that stand in front of a command's name without being the command:
+# the reserved words that open or continue a compound command, and the
+# `command` and `builtin` prefixes. The export and assignment rules read the
+# first word of a simple command, so `then HOME=planted`, `do export X=1` and
+# `command export HOME=planted` hid the assignment from them, and the git
+# command after it read the `.gitconfig` a branch committed (#470).
+_LEADING_KEYWORDS = frozenset(
+    {"if", "then", "else", "elif", "while", "until", "do", "{", "!", "command", "builtin"}
+)
+
+# Builtins that assign the variable they are given, without an `=` in sight:
+# `while read -r HOME; do git log -1; done < f` changes the exported `HOME`
+# for the git command in the loop (#470). The value is the short options
+# that take a value, so the walk does not read that value as a name; for
+# `read`, `-a NAME` names the variable too.
+_ASSIGNING_BUILTINS = {
+    "read": "adinNptu",
+    "mapfile": "dnOsuCc",
+    "readarray": "dnOsuCc",
+}
+
+# Loop headers and builtins that assign the operand at this position:
+# `for NAME in ...`, `select NAME in ...`, `getopts optstring NAME`.
+_NAMED_OPERAND = {"for": 0, "select": 0, "getopts": 1}
+
+# Names a guarded command loads from when they are in its environment. The
+# builtins above assign ordinary loop variables far more often than these
+# (`read -r line`, `let i=1`), so for them the guard asks whether the name
+# is one of these rather than whether it is on `SAFE_ENV`: git reads its
+# config from `HOME` and `XDG_CONFIG_HOME` and its programs from `PATH`, and
+# `GIT_*` names reach it directly. A plain `NAME=value` is still read against
+# `SAFE_ENV`.
+_LOADED_NAMES = frozenset(
+    {"HOME", "PATH", "XDG_CONFIG_HOME", "PAGER", "EDITOR", "VISUAL", "BASH_ENV", "ENV"}
+)
+_LOADED_PREFIXES = ("GIT_", "LD_", "PYTHON", "PYTEST_", "LESS")
+
+# An arithmetic assignment operator standing as a word of its own, as in
+# `(( HOME = 1 ))`, where the name is a word before it.
+_ARITHMETIC_ASSIGN_RE = re.compile(r"^(?:[-+*/%&|^]|<<|>>)?=(?!=)")
 
 # Words that run another command and whose own options this guard does not
 # model. `env GIT_EXTERNAL_DIFF=prog git diff HEAD~1 HEAD` put the assignment
@@ -1207,7 +1251,7 @@ _GIT_GLOBAL_VALUE_NEXT = frozenset(
 )
 
 
-def _check_git_globals(words: list[str], env: list[str]) -> None:
+def _check_git_globals(words: list[str], env: list[str], cwd: Path) -> tuple[int, Path]:
     """Refuse the git global options that undo `safe.bareRepository` (#462).
 
     Read on every git command, whatever its subcommand: a global option puts
@@ -1218,7 +1262,14 @@ def _check_git_globals(words: list[str], env: list[str]) -> None:
     `GIT_CONFIG_*` env, so `git -c safe.bareRepository=all -C evil log -p`
     ran the planted program too. Any key in the `safe` section is refused,
     in any case, because git reads section and key names in any case.
+
+    `-C dir` runs git from `dir`, so its operands are paths there:
+    `git -C /tmp diff -- x .env` printed `/tmp/.env` (#470). A directory
+    outside the checkout is refused, and one inside it is where the
+    subcommand's operands are resolved. Returns the index of the subcommand
+    (`len(words)` when there is none) and the directory git runs in.
     """
+    here = cwd
     for assignment in env:
         if _ASSIGNMENT_RE.match(assignment).group(1) in _GIT_NAMED_REPO_ENV:
             raise Denied(
@@ -1234,8 +1285,19 @@ def _check_git_globals(words: list[str], env: list[str]) -> None:
         _spend()
         word = words[i]
         if not word.startswith("-"):
-            return  # the subcommand: what follows is its own, not git's
+            return i, here  # the subcommand: what follows is its own, not git's
         option, eq, value = word.partition("=")
+        if word == "-C":
+            directory = next(iter(words[i + 1 :]), "")
+            if _is_outside_repo(directory, here):
+                raise Denied(
+                    f"`git -C {directory}` runs git from a directory outside "
+                    "the repository, so its operands name files there: "
+                    "`git -C /tmp diff -- x .env` printed /tmp/.env past the "
+                    "Read(./.env) deny rule. Run git from the project, and "
+                    "read a file with the Read tool"
+                )
+            here = here / directory
         if option == "--shallow-file":
             raise Denied(
                 "`git --shallow-file` reads the file it names as git's list of "
@@ -1263,6 +1325,7 @@ def _check_git_globals(words: list[str], env: list[str]) -> None:
                     "without it"
                 )
         i += 2 if word in _GIT_GLOBAL_VALUE_NEXT else 1
+    return len(words), here
 
 
 # --------------------------------------------------------------------- driver
@@ -1476,16 +1539,15 @@ def _check_command(words: list[str], cwd: Path, inherited: list[str] | None = No
     elif name == "pytest":
         verb, args = "pytest", words[1:]
     elif name == "git":
-        _check_git_globals(words, env)
-        # `git --no-pager diff` and the like: the verb is the first token that is
-        # not an option. A global option with a value (`-C dir`) makes its value
-        # look like the verb; that is harmless, because the allow list only
-        # matches `git <verb>` directly and such a command prompts anyway.
-        rest = [w for w in words[1:] if not w.startswith("-")]
-        if not rest or rest[0] not in _GIT_VERBS:
+        # `git --no-pager diff` and the like: the verb is the first word that
+        # is not a global option or a global option's value. The value of
+        # `-C dir` used to be read as the verb, so `git -C tests diff ...` was
+        # never checked at all; bypass and auto modes prompt for nothing, so
+        # the allow list matching only `git <verb>` is not the boundary (#470).
+        start, cwd = _check_git_globals(words, env, cwd)
+        if start >= len(words) or words[start] not in _GIT_VERBS:
             return
-        verb = rest[0]
-        args = words[words.index(verb) + 1 :]
+        verb, *args = words[start:]
     else:
         _check_unlisted_program(words, env, redirections, cwd)
         return
@@ -1616,7 +1678,75 @@ def _changes_the_environment(words: list[str]) -> str | None:
         return next((name for name in names if name not in SAFE_ENV), None)
     if words and words[0] == "unset":
         return next((word for word in words[1:] if word.startswith("GIT_CONFIG")), None)
+    # A builtin, a loop or an arithmetic expression that assigns a name a
+    # guarded command loads from (#470). Read against `_LOADED_NAMES`, not
+    # `SAFE_ENV`, so `read -r line` and `let i=1` stay ordinary work.
+    assigned = _assigned_by_builtin(words)
+    assigned += [word for word, nxt in zip(words, words[1:]) if _ARITHMETIC_ASSIGN_RE.match(nxt)]
+    for name in assigned:
+        name = re.match(r"[A-Za-z0-9_]*", name).group(0)
+        if name in _LOADED_NAMES or name.startswith(_LOADED_PREFIXES):
+            return name
     return None
+
+
+def _command_words(words: list[str]) -> list[str]:
+    """A simple command's words without its redirections and without the
+    reserved words and prefixes that stand in front of its name (#470).
+
+    `if true; then HOME=planted; git log -1; fi` splits into `then
+    HOME=planted` among others, and the rules that read the first word saw
+    `then` there and nothing to judge.
+    """
+
+    words, _ = _split_redirections(words)
+    i = 0
+    while i < len(words) and words[i] in _LEADING_KEYWORDS:
+        i += 1
+    return words[i:]
+
+
+def _assigned_by_builtin(words: list[str]) -> list[str]:
+    """The names a builtin or loop header in these words assigns (#470).
+
+    `read` and `mapfile` assign their operands, `printf -v NAME` and
+    `getopts optstring NAME` the word named, `for NAME in` and `select NAME
+    in` the loop variable, and `let` every name in its expressions, read as
+    assigned whether or not it is: over-refusing is the safe direction. An
+    assignment in front of the builtin (`IFS= read -r HOME`) is stepped over.
+    """
+
+    while words and _ASSIGNMENT_RE.match(words[0]):
+        words = words[1:]
+    if not words:
+        return []
+    name, args = words[0], words[1:]
+    if name in _NAMED_OPERAND:
+        return [next(iter(args[_NAMED_OPERAND[name] :]), "")]
+    if name == "let":
+        return re.findall(r"[A-Za-z_][A-Za-z0-9_]*", " ".join(args))
+    if name == "printf":
+        # `-v NAME` or `-vNAME`; printf takes no other option.
+        option = "".join(args[:1])
+        return [option[2:] or "".join(args[1:2])] if option.startswith("-v") else []
+    valued = _ASSIGNING_BUILTINS.get(name)
+    if valued is None:
+        return []
+    names: list[str] = []
+    remaining = iter(args)
+    for word in remaining:
+        if not word.startswith("-"):
+            names.append(word)
+            continue
+        # Letters are options until the first that takes a value, which is
+        # the rest of the word or, when nothing is attached, the next word.
+        for k, letter in enumerate(word[1:], start=2):
+            if letter in valued:
+                value = word[k:] or next(remaining, "")
+                if letter == "a":
+                    names.append(value)
+                break
+    return names
 
 
 # The characters that open an extglob group when an unquoted `(` touches them.
@@ -1839,18 +1969,23 @@ def _decide(command: str, cwd: str | os.PathLike[str] | None) -> str | None:
                     "name is already in the environment: `GIT_CONFIG_COUNT=0` "
                     "or `unset GIT_CONFIG_COUNT` switches off the "
                     "safe.bareRepository setting in .claude/settings.json, and "
-                    "`HOME=dir` makes git read dir/.gitconfig. The guard's safe "
+                    "`HOME=dir` makes git read dir/.gitconfig; `read`, "
+                    "`printf -v`, `let` and a `for` loop assign a name too. "
+                    "The guard's safe "
                     f"list is {', '.join(sorted(SAFE_ENV))}. Run the command "
                     "without it"
                 )
             # Armed after this command has been judged, so the rule stays
             # ordered: an export reaches what bash runs after it, never what
             # ran before it.
-            if _exports_a_name(words) or (allexport and _is_bare_assignment(words)):
+            # Read with any `then`, `do`, `{` or `command` in front taken off,
+            # so the rules see the builtin or assignment behind it (#470).
+            head = _command_words(words)
+            if _exports_a_name(head) or (allexport and _is_bare_assignment(head)):
                 exported = True
-            if _turns_on_allexport(words):
+            if _turns_on_allexport(head):
                 allexport = True
-            changed = changed or _changes_the_environment(words)
+            changed = changed or _changes_the_environment(head)
             _check_command(words, cwd_path)
     except Denied as exc:
         return str(exc)
