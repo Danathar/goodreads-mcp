@@ -51,7 +51,7 @@ OPTIONAL_FIELDS = {"wraps"}
 
 # SHA-256 of the canonical tests/fixtures/gate-refusal-corpus.json in
 # Danathar/atomic-image-builder. Copy the file from there; never edit it here.
-CANONICAL_SHA256 = "1d2245283c1df1aae2df87bcd43f23bb84dd1b3c7510f192692614d73253fdd5"
+CANONICAL_SHA256 = "358a28365d9d6b71ca29a561bce82e47978b3fffb1fd9f59129b8f6223caab46"
 
 # The wrappers `.claude/hooks/guard-bash.py` refuses in front of a guarded
 # command whatever the wrapper's own options are (its `_WRAPPERS`). The

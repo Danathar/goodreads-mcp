@@ -381,6 +381,34 @@ _DENIED = [
     ("git -C tests diff --no-index /dev/null ../.env", "--no-index"),
     ("git -C tests diff -- x ../../etc/hostname", "outside the repository"),
     ("git -c color.ui=never diff --output=/tmp/W.txt HEAD", "--output"),
+    # A `cd` or `pushd` that may leave the checkout is the shell's spelling of
+    # `git -C dir`: `cd /tmp && git diff -- x .env` printed /tmp/.env with
+    # git 2.47 (#472)
+    ("cd /tmp && git diff -- x .env", "may move the shell out"),
+    ("cd /tmp; git diff -- x .env", "may move the shell out"),
+    ("(cd /tmp && git diff -- x .env)", "may move the shell out"),
+    ("pushd /tmp && git diff -- x .env", "may move the shell out"),
+    ("cd && git diff -- .netrc .env", "may move the shell out"),
+    ("cd .. && git log -1", "may move the shell out"),
+    ("cd - && git status", "may move the shell out"),
+    ("cd ~ && pytest -q", "may move the shell out"),
+    ("cd $HOME && git log -1", "may move the shell out"),
+    ("cd -P /tmp && git log -1", "may move the shell out"),
+    ("builtin cd /tmp && git log -1", "may move the shell out"),
+    ("CDPATH=/ cd tmp && git log -1", "may move the shell out"),
+    ("cd tests && popd && git log -1", "may move the shell out"),
+    ("cd tests && cd ../.. && git log -1", "may move the shell out"),
+    ("eval 'cd /tmp'; git diff -- x .env", "may move the shell out"),
+    # `command` with an option in front, and a quoted `eval` string, change
+    # the environment of the commands after them as the bare spelling does
+    # (#472)
+    ("command -p unset GIT_CONFIG_COUNT; git log -p", "assigned or unset earlier"),
+    ("command -p export HOME=planted; git log -1", "export-family"),
+    ("eval 'unset GIT_CONFIG_COUNT'; git log -p", "assigned or unset earlier"),
+    ("eval unset GIT_CONFIG_COUNT; git log -p", "assigned or unset earlier"),
+    ("eval -- 'HOME=planted'; git log -1", "assigned or unset earlier"),
+    ("eval 'export HOME=planted'; git log -1", "export-family"),
+    ("eval \"eval 'unset GIT_CONFIG_COUNT'\"; git log -p", "assigned or unset earlier"),
     # and its value is shell text like any other word
     ("FOO=$(cat /tmp/x) pytest -q", "cannot see"),
     ("FOO=`cat /tmp/x` pytest -q", "cannot see"),
@@ -1003,6 +1031,15 @@ _PERMITTED = [
     "if true; then git log -1; fi",
     "{ TZ=UTC; git log -1; }",
     "cd tests && git log -1",
+    # A change into a literal path inside the checkout, and an `eval` or
+    # `command` that changes nothing git loads, stay ordinary work (#472).
+    "cd tests; git status",
+    "cd ./tests && cd ./fixtures && git log -1",
+    "pushd tests && git diff HEAD",
+    "git log -1; cd /tmp",
+    "eval 'TZ=UTC'; git log -1",
+    "eval 'unset FOO'; git status",
+    "command -p unset FOO; git log -1",
     "git -C tests log -1",
     "git -C tests diff -- ../README.md",
     "git -C . status",
@@ -1040,6 +1077,29 @@ def test_the_guard_resolves_paths_against_the_working_directory(guard):
     """`cwd` from the hook payload is where a relative path starts."""
     assert guard.decide("pytest test_parsers.py", _ROOT / "tests") is None
     assert guard.decide("pytest ../goodreads_mcp", _ROOT / "tests") is not None
+
+
+def test_a_command_after_a_cd_is_checked_from_where_the_cd_went(guard, tmp_path):
+    """After `cd sub`, `out/x` is `sub/out/x`, wherever its symlink points (#472)."""
+    probe = _ROOT / "cd-probe.tmp"
+    probe.mkdir()
+    try:
+        (probe / "out").symlink_to(tmp_path)
+        assert guard.decide("git diff -- out/x", _ROOT) is None
+        reason = guard.decide(f"cd ./{probe.name} && git diff -- out/x", _ROOT)
+        assert reason is not None and "outside the repository" in reason
+    finally:
+        (probe / "out").unlink(missing_ok=True)
+        probe.rmdir()
+
+
+def test_too_many_directory_changes_count_as_leaving(guard):
+    """Each `cd` inside adds a directory to check from, so their number is capped (#472)."""
+    within = "cd ./a && " * (guard._MAX_DIRECTORIES - 1) + "git log -1"
+    past = "cd ./a && " * guard._MAX_DIRECTORIES + "git log -1"
+    assert guard.decide(within, _ROOT) is None
+    reason = guard.decide(past, _ROOT)
+    assert reason is not None and "may move the shell out" in reason
 
 
 def _run_guard(payload) -> subprocess.CompletedProcess:
@@ -1665,6 +1725,24 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         '"--super-prefix", "--attr-source"}',
         '"--super-prefix"}',
         "git --attr-source HEAD --git-dir=evil log -p",
+    ),
+    (
+        "a `cd` that may leave the checkout before a guarded command",
+        "if left is not None and",
+        "if False and",
+        "cd /tmp && git diff -- x .env",
+    ),
+    (
+        "the options of `command` taken off before the first word is read",
+        'if words[i - 1] == "command":',
+        "if False:",
+        "command -p unset GIT_CONFIG_COUNT; git log -p",
+    ),
+    (
+        "an `eval` string read as commands of the same shell",
+        'if head[:1] == ["eval"]:',
+        "if False:",
+        "eval 'unset GIT_CONFIG_COUNT'; git log -p",
     ),
 )
 

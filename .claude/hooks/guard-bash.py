@@ -199,6 +199,18 @@ _LEADING_KEYWORDS = frozenset(
     {"if", "then", "else", "elif", "while", "until", "do", "{", "!", "command", "builtin"}
 )
 
+# The builtins that move the shell to another directory for every later
+# command. Every operand check here resolves a path against the working
+# directory, so `cd /tmp && git diff -- x .env` passed as two in-tree operands,
+# then git ran outside any repository, fell back to `--no-index` by itself and
+# printed /tmp/.env (git 2.47, #472). It is the shell's spelling of
+# `git -C /tmp`, which `_check_git_globals` refuses. See `_directory_change`.
+_DIRECTORY_CHANGERS = frozenset({"cd", "pushd", "popd"})
+
+# A change that stays inside adds a directory every later command is checked
+# from; past this many the string counts as having left the checkout.
+_MAX_DIRECTORIES = 8
+
 # Builtins that assign the variable they are given, without an `=` in sight:
 # `while read -r HOME; do git log -1; done < f` changes the exported `HOME`
 # for the git command in the loop (#470). The value is the short options
@@ -1703,7 +1715,47 @@ def _command_words(words: list[str]) -> list[str]:
     i = 0
     while i < len(words) and words[i] in _LEADING_KEYWORDS:
         i += 1
+        # `command -p unset GIT_CONFIG_COUNT` runs `unset`: the options of
+        # `command` (`-p`, `-v`, `-V`, `--`) stand between it and the name it
+        # runs, and stepping over `command` alone left `-p` as the first word
+        # (#472).
+        if words[i - 1] == "command":
+            while i < len(words) and words[i].startswith("-"):
+                i += 1
     return words[i:]
+
+
+def _directory_change(words: list[str], cwd: Path, cdpath: bool) -> Path | str | None:
+    """Where a `cd` or `pushd` in these words moves the shell (#472).
+
+    `words` are a simple command's (see `_command_words`). Returns None when
+    they change no directory, the directory a change stays inside the checkout
+    at, or the change as typed when it may leave the checkout. Anything that
+    cannot be read as one literal path leaves: no operand (HOME), `-`
+    (OLDPWD), an option, `+N`, a `~`, an expansion or a glob, an assignment in
+    front, and every `popd`, which returns to a directory this string does not
+    name. With CDPATH set or named in the string, bash searches it for a
+    relative name that does not start with `./`, so such a name leaves too.
+    A literal path is resolved, symlinks included, against `cwd`.
+    """
+    shown = " ".join(words)
+    assigned = False
+    while words and _ASSIGNMENT_RE.match(words[0]):
+        words, assigned = words[1:], True
+    if not words or words[0] not in _DIRECTORY_CHANGERS:
+        return None
+    if assigned or words[0] == "popd" or len(words) != 2:
+        return shown
+    target = words[1]
+    if (
+        not target
+        or target.startswith(("-", "+", "~"))
+        or any(ch in target for ch in (*_OPAQUE, *_GLOB))
+        or (cdpath and not target.startswith(("/", "./")))
+        or _is_outside_repo(target, cwd)
+    ):
+        return shown
+    return (cwd / target).resolve()
 
 
 def _assigned_by_builtin(words: list[str]) -> list[str]:
@@ -1948,7 +2000,30 @@ def _decide(command: str, cwd: str | os.PathLike[str] | None) -> str | None:
         exported = False
         allexport = False
         changed = None
-        for words in _simple_commands(tokens):
+        # A `cd` into the checkout adds the directory it moves to, and every
+        # later command is checked from each directory the shell may be in;
+        # one that may leave the checkout is `left` (#472).
+        cdpath = "CDPATH" in command or "CDPATH" in os.environ
+        directories = [cwd_path]
+        left = None
+        # Taken from the end; an `eval` puts the commands of its string next.
+        pending = _simple_commands(tokens)[::-1]
+        while pending:
+            _spend()
+            words = pending.pop()
+            if left is not None and _GUARDED_WORD_RE.search(" ".join(words)):
+                raise Denied(
+                    f"`{left}` may move the shell out of this checkout before "
+                    "the guarded command after it runs, and every path check "
+                    "here resolves against the checkout: `cd /tmp && git diff "
+                    "-- x .env` passed as two in-tree operands, then git ran "
+                    "outside any repository, fell back to --no-index by itself "
+                    "and printed /tmp/.env. It is the shell's spelling of "
+                    "`git -C /tmp`, which is refused for the same reason. A cd "
+                    "into a literal path inside the checkout (`cd tests`) is "
+                    "not refused; otherwise run the command from the checkout "
+                    "and name the paths"
+                )
             if exported and _GUARDED_WORD_RE.search(" ".join(words)):
                 raise Denied(
                     "an export-family name exported earlier in this string "
@@ -1986,7 +2061,31 @@ def _decide(command: str, cwd: str | os.PathLike[str] | None) -> str | None:
             if _turns_on_allexport(head):
                 allexport = True
             changed = changed or _changes_the_environment(head)
-            _check_command(words, cwd_path)
+            for directory in directories:
+                _check_command(words, directory)
+            for directory in list(directories):
+                moved = _directory_change(head, directory, cdpath)
+                if isinstance(moved, Path):
+                    if moved not in directories:
+                        directories.append(moved)
+                    # Each change multiplies the directories to check from.
+                    if len(directories) > _MAX_DIRECTORIES:
+                        left = left or " ".join(head)
+                elif moved is not None:
+                    left = left or moved
+            # `eval 'unset GIT_CONFIG_COUNT'; git log -p` runs the string as
+            # commands of this shell, so what they change reaches the git
+            # command after it as though typed in place (#472).
+            if head[:1] == ["eval"]:
+                text = " ".join(head[2:] if head[1:2] == ["--"] else head[1:])
+                try:
+                    pending.extend(_simple_commands(_tokenise(text))[::-1])
+                except ValueError:
+                    if _GUARDED_WORD_RE.search(text):
+                        raise Denied(
+                            "the guard could not parse the string handed to "
+                            "`eval`; rephrase it"
+                        ) from None
     except Denied as exc:
         return str(exc)
     return None
