@@ -63,3 +63,9 @@ line: 1618
 was: return next((word for word in words[1:] if word.startswith("GIT_CONFIG")), None)
 now: return next((word for word in words[0:] if word.startswith("GIT_CONFIG")), None)
 why: words[0] is "unset" on this line, which never starts with GIT_CONFIG, so including it finds the same name
+
+file: .claude/hooks/guard-bash.py
+line: 2074
+was: elif moved is not None:
+now: elif True:
+why: when moved is None the body sets left to `left or None`, which is left unchanged
