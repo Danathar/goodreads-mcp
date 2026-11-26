@@ -409,6 +409,16 @@ _DENIED = [
     ("eval -- 'HOME=planted'; git log -1", "assigned or unset earlier"),
     ("eval 'export HOME=planted'; git log -1", "export-family"),
     ("eval \"eval 'unset GIT_CONFIG_COUNT'\"; git log -p", "assigned or unset earlier"),
+    # An assignment in front of the change, and every `popd`, leave whatever
+    # the operand; CDPATH named anywhere in the string makes a bare relative
+    # name leave; every command of an `eval` string is read, not every other
+    # one; and an `eval` string the guard cannot parse is refused when it
+    # names a guarded command (#472)
+    ("TZ=UTC cd tests && git log -1", "may move the shell out"),
+    ("popd tests; git log -1", "may move the shell out"),
+    ("CDPATH=/; cd tests && git log -1", "may move the shell out"),
+    ("eval 'unset GIT_CONFIG_COUNT; true'; git log -p", "assigned or unset earlier"),
+    ("eval \"git log 'x\"", "could not parse the string handed to `eval`"),
     # and its value is shell text like any other word
     ("FOO=$(cat /tmp/x) pytest -q", "cannot see"),
     ("FOO=`cat /tmp/x` pytest -q", "cannot see"),
@@ -1040,6 +1050,11 @@ _PERMITTED = [
     "eval 'TZ=UTC'; git log -1",
     "eval 'unset FOO'; git status",
     "command -p unset FOO; git log -1",
+    # `command` with only an option after it runs nothing, and an `eval`
+    # string the guard cannot parse is left to bash when it names no guarded
+    # command (#472)
+    "command -p; git log -1",
+    "eval \"echo 'x\"; git log -1",
     "git -C tests log -1",
     "git -C tests diff -- ../README.md",
     "git -C . status",
@@ -1099,6 +1114,48 @@ def test_too_many_directory_changes_count_as_leaving(guard):
     past = "cd ./a && " * guard._MAX_DIRECTORIES + "git log -1"
     assert guard.decide(within, _ROOT) is None
     reason = guard.decide(past, _ROOT)
+    assert reason is not None and "may move the shell out" in reason
+
+
+def test_the_directory_cap_is_eight(guard):
+    """Seven changes inside give eight directories, which is allowed; eight give
+    nine, which is not. Read from the count of commands, not from the constant,
+    so moving the cap is a visible change (#472)."""
+    assert guard.decide("cd ./a && " * 7 + "git log -1", _ROOT) is None
+    reason = guard.decide("cd ./a && " * 8 + "git log -1", _ROOT)
+    assert reason is not None and "`cd ./a` may move the shell out" in reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd /tmp && cd /var && git log -1",
+        "cd /tmp && " + "cd ./a && " * 8 + "git log -1",
+    ],
+)
+def test_the_refusal_names_the_first_change_that_leaves(guard, command):
+    """A later change, or the cap filling up later, does not replace the
+    command the refusal names (#472)."""
+    reason = guard.decide(command, _ROOT)
+    assert reason is not None and reason.startswith("`cd /tmp` may move the shell out")
+
+
+def test_cdpath_in_the_environment_makes_a_bare_name_leave(guard, monkeypatch):
+    """With CDPATH exported, bash searches it for `cd tests` but not for
+    `cd ./tests` or an absolute path (#472)."""
+    monkeypatch.setenv("CDPATH", "/")
+    reason = guard.decide("cd tests && git log -1", _ROOT)
+    assert reason is not None and "may move the shell out" in reason
+    assert guard.decide("cd ./tests && git log -1", _ROOT) is None
+    reason = guard.decide("cd /tmp && git log -1", _ROOT)
+    assert reason is not None and "may move the shell out" in reason
+
+
+def test_cdpath_named_only_in_the_string_makes_a_bare_name_leave(guard, monkeypatch):
+    """CDPATH assigned earlier in the string counts with none exported (#472)."""
+    monkeypatch.delenv("CDPATH", raising=False)
+    assert guard.decide("cd tests && git log -1", _ROOT) is None
+    reason = guard.decide("CDPATH=/; cd tests && git log -1", _ROOT)
     assert reason is not None and "may move the shell out" in reason
 
 
