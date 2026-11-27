@@ -790,6 +790,22 @@ _DENIED = [
     ('echo "a\\"b"; /usr/bin\\timeout 5 pytest -q', "backslash"),
     ("true ; >out /usr/bin\\timeout 5 pytest -q", "backslash"),
     ("true; >>out /usr/bin\\timeout 5 pytest -q", "backslash"),
+    # pytest's other names. Every pytest wheel installs `py.test` beside
+    # `pytest`, and distributions add `pytest-3`, `py.test-3` and `pytest-3.N`;
+    # the guard read none of them, so each row below was let through.
+    ("py.test -p evil", "plugin"),
+    ("/usr/bin/py.test /tmp/proof/notatest.py", "outside tests/"),
+    ("pytest-3 -p evil", "plugin"),
+    ("py.test-3 /tmp/proof/notatest.py", "outside tests/"),
+    ("pytest-3.13 -q /tmp/proof/notatest.py", "outside tests/"),
+    ("PYTHONPATH=/tmp py.test -q", "safe list"),
+    ("py.test -q >out", "redirection"),
+    ("timeout 5 py.test -p evil", "as a command of its own"),
+    ("watch py.test -p evil", "where this guard cannot check it"),
+    ("uname -- py.test -p evil", "as a command of its own"),
+    ("export PYTHONPATH=/tmp; py.test -q", "export-family"),
+    ("cd /tmp && py.test -q", "may move the shell out"),
+    ("echo $(id) && py.test -q", "command substitution"),
 ]
 
 # Ordinary invocations the guard must not touch. The first line is the exact
@@ -942,6 +958,8 @@ _PERMITTED = [
     "git log --grep=#60 --oneline -5",  # `#` mid-word is not a comment
     "python -m pytest -q",
     "python3 -m pytest tests/test_parsers.py",
+    "py.test -q",
+    "pytest-3 tests/test_parsers.py",
     "git status",
     "git status --porcelain",
     "git diff",

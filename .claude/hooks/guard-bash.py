@@ -170,6 +170,13 @@ GUARDED = {"pytest", *(f"git {verb}" for verb in _GIT_VERBS)}
 # Interpreter spellings for `python -m pytest`.
 _PYTHON_RE = re.compile(r"^python(3(\.\d+)?)?$")
 
+# The names pytest itself runs under. Every pytest wheel installs a `py.test`
+# console script beside `pytest`, with the same entry point, and distributions
+# add `pytest-3`, `py.test-3` and `pytest-3.N`. The guard used to read only
+# `pytest`, so `py.test -p evil` was never checked at all: no allow row matches
+# it, but bypass and auto modes prompt for nothing.
+_PYTEST_NAME_RE = re.compile(r"^py\.?test(-3(\.\d+)?)?$")
+
 # An assignment as bash's grammar spells it, which is wider than `NAME=value`.
 # `NAME+=value` appends and *creates* the variable when it is unset, so
 # `GIT_EXTERNAL_DIFF+=prog git diff HEAD~1 HEAD` is the same environment as the
@@ -315,7 +322,7 @@ _OPAQUE_WRAPPERS = frozenset(
 # command string (`watch 'git diff ...'`). Narrower than `_GUARDED_WORD_RE` in
 # one place: a `.` in front does not count, so `find . -path ./.git -prune`,
 # which runs nothing, is not read as naming git.
-_OPAQUE_GUARDED_RE = re.compile(r"(?<![\w.])(pytest|git)\b")
+_OPAQUE_GUARDED_RE = re.compile(r"(?<![\w.])(py\.?test|git)\b")
 
 # No list of programs that run a command is complete: `setarch x86_64 git diff
 # --no-index /dev/null .env`, `prlimit`, `setpriv`, `sudo` and `strace -o log`
@@ -617,7 +624,7 @@ _OPAQUE = ("$", "`", "{", "}")
 # `pytest -q`. So the whole string is checked for one, whenever a guarded verb
 # is anywhere in it.
 _SUBSTITUTION_RE = re.compile(r"\$\(|`")
-_GUARDED_WORD_RE = re.compile(r"\b(pytest|git)\b")
+_GUARDED_WORD_RE = re.compile(r"\b(py\.?test|git)\b")
 
 # A guarded name the shell builds before it looks it up. Bash takes quotes,
 # backslashes and an empty `$""` out of a word and expands its braces, and in a
@@ -1348,6 +1355,7 @@ def _starts_guarded(words: list[str]) -> bool:
     name = words[0].rpartition("/")[2]
     return (
         name in ("git", "pytest")
+        or bool(_PYTEST_NAME_RE.match(name))
         or bool(_PYTHON_RE.match(name) and words[1:3] == ["-m", "pytest"])
         # A bare glob with nothing after it is an argument (`ls g*`): it can
         # make the command only from the names of files it matches.
@@ -1548,7 +1556,7 @@ def _check_command(words: list[str], cwd: Path, inherited: list[str] | None = No
 
     if _PYTHON_RE.match(name) and words[1:3] == ["-m", "pytest"]:
         verb, args = "pytest", words[3:]
-    elif name == "pytest":
+    elif _PYTEST_NAME_RE.match(name):
         verb, args = "pytest", words[1:]
     elif name == "git":
         # `git --no-pager diff` and the like: the verb is the first word that
